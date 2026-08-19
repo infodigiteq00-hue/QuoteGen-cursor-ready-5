@@ -1,0 +1,209 @@
+{
+  "templates": [
+    {
+      "id": "tpl_98dc61db5e4e",
+      "name": "Test DNA",
+      "columns": [
+        {
+          "id": "description",
+          "label": "Description"
+        },
+        {
+          "id": "quantity",
+          "label": "Qty"
+        },
+        {
+          "id": "rate",
+          "label": "Rate"
+        }
+      ],
+      "company": {
+        "name": "Test Co",
+        "address": "Pune",
+        "phone": "+91 00000 00000",
+        "email": "sales@yourcompany.com"
+      },
+      "layout": {
+        "lookFamily": "classic-print",
+        "pageBg": "#edf1ed",
+        "paperBg": "#ffffff",
+        "textColor": "#17231f",
+        "mutedColor": "#64748b",
+        "accent": "#235c4f",
+        "accentSoft": "#eef6f3",
+        "fontFamily": "Inter, ui-sans-serif, system-ui, sans-serif",
+        "titleLabel": "QUOTATION",
+        "header": {
+          "variant": "split",
+          "bg": "#ffffff",
+          "textColor": "#17231f",
+          "borderBottom": "2px solid #235c4f",
+          "showLogoMark": true,
+          "titleAlign": "right"
+        },
+        "customer": {
+          "variant": "two-column-soft",
+          "bg": "#f7f9f7",
+          "border": "none",
+          "radius": "12px"
+        },
+        "table": {
+          "variant": "horizontal",
+          "headerBg": "#f7f9f7",
+          "headerColor": "#64748b",
+          "headerUppercase": true,
+          "borderColor": "#e8ede8",
+          "density": "comfortable"
+        },
+        "totals": {
+          "variant": "right-simple",
+          "show": true
+        },
+        "notes": {
+          "variant": "two-col",
+          "show": true,
+          "showClarifications": true
+        },
+        "terms": {
+          "variant": "dashed-rows",
+          "show": true
+        },
+        "signatory": {
+          "align": "right",
+          "show": true,
+          "label": "Authorized Signatory"
+        },
+        "showSrNo": true,
+        "quotedToTitle": "Quoted to",
+        "customerDetailsTitle": "Customer details",
+        "notesTitle": "Notes",
+        "clarificationsTitle": "Clarifications required",
+        "termsTitle": "Commercial terms",
+        "headerStyle": "classic",
+        "tableDensity": "comfortable",
+        "showNotes": true,
+        "showClarifications": true,
+        "showTerms": true,
+        "showTotal": true,
+        "footerSignatory": "Authorized Signatory",
+        "customerFields": [
+          "name",
+          "company",
+          "gst",
+          "location"
+        ],
+        "visual": {
+          "lookFamily": "classic-print",
+          "pageBg": "#edf1ed",
+          "paperBg": "#ffffff",
+          "textColor": "#17231f",
+          "mutedColor": "#64748b",
+          "accent": "#235c4f",
+          "accentSoft": "#eef6f3",
+          "fontFamily": "Inter, ui-sans-serif, system-ui, sans-serif",
+          "header": {
+            "variant": "split",
+            "bg": "#ffffff",
+            "textColor": "#17231f",
+            "borderBottom": "2px solid #235c4f",
+            "showLogoMark": true,
+            "titleAlign": "right"
+          },
+          "customer": {
+            "variant": "two-column-soft",
+            "bg": "#f7f9f7",
+            "border": "none",
+            "radius": "12px"
+          },
+          "table": {
+            "variant": "horizontal",
+            "headerBg": "#f7f9f7",
+            "headerColor": "#64748b",
+            "headerUppercase": true,
+            "borderColor": "#e8ede8",
+            "density": "comfortable"
+          },
+          "totals": {
+            "variant": "right-simple",
+            "show": true
+          },
+          "notes": {
+            "variant": "two-col",
+            "show": true,
+            "showClarifications": true
+          },
+          "terms": {
+            "variant": "dashed-rows",
+            "show": true
+          },
+          "signatory": {
+            "align": "right",
+            "show": true,
+            "label": "Authorized Signatory"
+          }
+        }
+      },
+      "replica": null,
+      "doc": {
+        "accent": "#c41e3a",
+        "fontFamily": "Arial, Helvetica, sans-serif",
+        "logoText": "TC",
+        "permanent": {
+          "companyName": "Test Co",
+          "companyDetails": "Pune",
+          "phone": "+91 00000 00000",
+          "email": "sales@yourcompany.com",
+          "docTitle": "QUOTATION",
+          "notes": "",
+          "terms": "Net 30",
+          "bank": "HDFC",
+          "footer": ""
+        },
+        "dynamic": {
+          "quoteNumberPlaceholder": "QG-XXXX",
+          "datePlaceholder": "DD/MM/YYYY",
+          "customerPlaceholder": "Customer company name",
+          "subjectPlaceholder": "Quotation for …"
+        },
+        "table": {
+          "showSrNo": true,
+          "columns": [
+            {
+              "id": "description",
+              "label": "Description"
+            },
+            {
+              "id": "quantity",
+              "label": "Qty"
+            },
+            {
+              "id": "rate",
+              "label": "Rate"
+            }
+          ]
+        }
+      },
+      "termKeys": [
+        "validity",
+        "delivery",
+        "payment",
+        "taxes",
+        "freight"
+      ],
+      "defaultTerms": {
+        "validity": "",
+        "delivery": "",
+        "payment": "",
+        "taxes": "",
+        "freight": ""
+      },
+      "notes": [],
+      "layoutMode": "editable-doc",
+      "lookSummary": "",
+      "confirmed": true,
+      "sourceHint": "",
+      "createdAt": "2026-08-09T18:36:14.570Z",
+      "updatedAt": "2026-08-09T18:36:14.570Z"
+    }
+  ]
+}
