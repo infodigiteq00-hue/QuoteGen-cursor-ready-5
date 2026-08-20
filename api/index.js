@@ -1,9 +1,8 @@
 /**
- * Vercel serverless entry. Local `npm run dev` still runs `node server/index.js`
- * and never imports this file.
+ * Vercel Node function at /api. Rewrites send /api/* here.
+ * Local `npm run dev` still runs `node server/index.js` and never imports this file.
  *
  * bodyParser is off so Express + multer see the raw body (uploads / JSON).
- * Catch-all keeps every /api/* route on one function without changing paths.
  */
 import app from '../server/index.js'
 
@@ -22,7 +21,11 @@ export default function handler(req, res) {
   return app(req, res)
 }
 
+export const runtime = 'nodejs'
+export const maxDuration = 60
+
 export const config = {
+  runtime: 'nodejs',
   api: {
     bodyParser: false
   },
