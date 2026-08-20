@@ -1,4 +1,7 @@
 import 'dotenv/config'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import express from 'express'
 import cors from 'cors'
 import OpenAI from 'openai'
@@ -16,7 +19,7 @@ import { catalogItemCountHint, catalogItemsToQuoteRows, extractCatalogLineItems 
 import { ensureSuggestedColumn } from '../shared/productKeywords.js'
 
 const app = express()
-if (process.env.VERCEL) app.set('trust proxy', 1)
+if (process.env.VERCEL || process.env.RAILWAY_ENVIRONMENT) app.set('trust proxy', 1)
 app.use(cors())
 app.use(express.json({ limit: '30mb' }))
 
@@ -407,11 +410,27 @@ const envPort = Number(process.env.PORT)
 const PORT = Number(process.env.API_PORT)
   || (Number.isFinite(envPort) && envPort > 0 && envPort !== VITE_DEV_PORT ? envPort : 3001)
 
+const PROJECT_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
+const DIST_DIR = path.join(PROJECT_ROOT, 'dist')
+
+function serveBuiltClient() {
+  if (!fs.existsSync(path.join(DIST_DIR, 'index.html'))) return false
+  app.use(express.static(DIST_DIR))
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next()
+    res.sendFile(path.join(DIST_DIR, 'index.html'))
+  })
+  return true
+}
+
+const servingClient = serveBuiltClient()
+
 export default app
 
 if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`QuoteGen API listening on http://localhost:${PORT}`)
     console.log(`Persistence: ${isSupabaseConfigured() ? 'Supabase configured' : 'Supabase not configured (APIs return 503; app still works)'}`)
+    console.log(`Web UI: ${servingClient ? `serving ${DIST_DIR}` : 'not serving dist (run npm run build, or use Vite on 5173)'}`)
   })
 }
