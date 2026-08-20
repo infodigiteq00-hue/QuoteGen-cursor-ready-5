@@ -306,6 +306,13 @@ export function QuoteStudioCanvas({
   const pageCount = Math.max(1, pages.length)
   const width = Math.max(840, Math.round(Number(paperWidthPx) || 840))
   const pageWidthMm = pxToMm(width)
+  const pageHeightMm = 297
+  /* Named size only — never add the `landscape` keyword. Chrome's print
+     path treats that keyword as "rotate the sheet", which is what made
+     quotation PDFs come out on their side. `page-orientation: upright`
+     stops Linux Chromium from applying the same rotation when the sheet
+     is wider than it is tall. */
+  const pageSize = `${pageWidthMm}mm ${pageHeightMm}mm`
   const themeTokens = {
     '--qg-accent': theme.accent,
     '--qg-accent-soft': theme.accentSoft,
@@ -329,11 +336,11 @@ export function QuoteStudioCanvas({
 
   return (
     <div className="qg-studio-canvas" style={{ background: theme.pageBg, '--qg-paper-width': `${width}px`, ...themeTokens }}>
-      <style>{`@page { size: ${pageWidthMm}mm 297mm; margin: 0; }
-@page qg-studio { size: ${pageWidthMm}mm 297mm; margin: 0; }
+      <style>{`@page { size: ${pageSize}; margin: 0; page-orientation: upright; }
+@page qg-studio { size: ${pageSize}; margin: 0; page-orientation: upright; }
 @media print {
-  @page { size: ${pageWidthMm}mm 297mm; margin: 0; }
-  @page qg-studio { size: ${pageWidthMm}mm 297mm; margin: 0; }
+  @page { size: ${pageSize}; margin: 0; page-orientation: upright; }
+  @page qg-studio { size: ${pageSize}; margin: 0; page-orientation: upright; }
 }`}</style>
       <div className="qg-print-run-header">
         <span>{runningHeader?.left || ''}</span>

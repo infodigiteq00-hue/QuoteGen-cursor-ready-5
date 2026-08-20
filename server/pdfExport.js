@@ -45,12 +45,18 @@ const CHROME_CANDIDATES = [
 
 const MAX_HTML_CHARS = 28 * 1024 * 1024
 const RENDER_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS) || 45000
+const A4_WIDTH_PX = 794
+const A4_HEIGHT_PX = 1123
 
 function pdfError(message, code, status = 500) {
   const error = new Error(message)
   error.code = code
   error.status = status
   return error
+}
+
+function mmToPx(mm) {
+  return Math.max(1, Math.round(Number(mm) * 96 / 25.4))
 }
 
 /** Path of the first Chrome/Chromium that actually exists on this machine. */
@@ -100,14 +106,99 @@ function runChrome(binary, args, timeoutMs) {
 }
 
 /**
- * Vercel has no system Chrome. Local `npm run dev` still uses findChrome() +
- * spawn --print-to-pdf; this path is only taken when VERCEL is set.
+ * Read the quotation's own @page size so the headless window matches the
+ * sheet. Linux Chromium's default 800×600 window is landscape; pairing that
+ * with a portrait @page writes /Rotate 90 and the PDF comes out on its side.
  */
-async function renderHtmlToPdfWithChromium(html, timeoutMs) {
-  let chromium
+function inferPageSizeMm(html) {
+  const source = String(html || '')
+  const named = source.match(/@page\s+qg-studio\s*\{[^}]*size:\s*([\d.]+)mm\s+([\d.]+)mm/i)
+  const any = source.match(/@page[^{]*\{[^}]*size:\s*([\d.]+)mm\s+([\d.]+)mm/i)
+  const match = named || any
+  if (!match) return null
+  const widthMm = Number(match[1])
+  const heightMm = Number(match[2])
+  if (!Number.isFinite(widthMm) || !Number.isFinite(heightMm) || widthMm < 10 || heightMm < 10) return null
+  return { widthMm, heightMm }
+}
+
+function viewportForPage(size) {
+  if (!size) return { width: A4_WIDTH_PX, height: A4_HEIGHT_PX, deviceScaleFactor: 1 }
+  return {
+    width: Math.max(A4_WIDTH_PX, mmToPx(size.widthMm)),
+    height: Math.max(A4_HEIGHT_PX, mmToPx(size.heightMm)),
+    deviceScaleFactor: 1
+  }
+}
+
+/** Last-wins CSS so `size: auto` cannot beat the studio sheet, and so Linux
+ * Chromium is told not to rotate a wide sheet onto a portrait MediaBox. */
+function withUprightPageCss(html, size) {
+  const sizeDecl = size ? `size: ${size.widthMm}mm ${size.heightMm}mm;` : ''
+  const css = `<style data-qg-pdf-orientation>
+@page { ${sizeDecl} page-orientation: upright; }
+@page qg-studio { ${sizeDecl} page-orientation: upright; }
+@media print {
+  @page { ${sizeDecl} page-orientation: upright; }
+  @page qg-studio { ${sizeDecl} page-orientation: upright; }
+}
+</style>`
+  const source = String(html || '')
+  if (/<\/head>/i.test(source)) return source.replace(/<\/head>/i, `${css}</head>`)
+  return `<!doctype html><head>${css}</head>${source}`
+}
+
+function assertPdf(bytes) {
+  if (!bytes || bytes.length < 1000 || bytes.subarray(0, 5).toString('latin1') !== '%PDF-') {
+    throw pdfError('Chrome produced an unreadable PDF.', 'PDF_INVALID', 502)
+  }
+  return bytes
+}
+
+/**
+ * Linux Chromium --print-to-pdf / page.pdf() sometimes stamps /Rotate 90 on
+ * every page even when layout was portrait. That is a viewer-only flag; the
+ * content stream is already upright, so clearing it restores the sheet.
+ */
+function normalizePdfRotation(pdf) {
+  const latin1 = Buffer.from(pdf).toString('latin1')
+  const next = latin1.replace(/\/Rotate\s+(?:90|180|270)\b/g, '/Rotate 0')
+  if (next === latin1) return Buffer.from(pdf)
+  return Buffer.from(next, 'latin1')
+}
+
+function pdfOptionsFor(timeoutMs) {
+  return {
+    printBackground: true,
+    preferCSSPageSize: true,
+    landscape: false,
+    timeout: timeoutMs
+  }
+}
+
+/**
+ * CDP print (page.pdf) instead of CLI --print-to-pdf. Needed on Linux hosts
+ * (Railway, Vercel, containers) where Chromium treats a landscape viewport as
+ * "rotate the sheet". Local Windows still uses spawn, which already works.
+ */
+async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
+  let chromium = null
   let puppeteer
+  let executablePath = systemBinary || null
+  let args = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--hide-scrollbars',
+    '--font-render-hinting=none',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--force-color-profile=srgb'
+  ]
+  let headless = true
+
   try {
-    chromium = (await import('@sparticuz/chromium')).default
     puppeteer = await import('puppeteer-core')
   } catch {
     throw pdfError(
@@ -117,55 +208,51 @@ async function renderHtmlToPdfWithChromium(html, timeoutMs) {
     )
   }
 
+  if (!executablePath) {
+    try {
+      chromium = (await import('@sparticuz/chromium')).default
+      executablePath = await chromium.executablePath()
+      args = [...chromium.args]
+      headless = chromium.headless
+    } catch {
+      throw pdfError(
+        'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
+        'CHROME_MISSING',
+        503
+      )
+    }
+  }
+
+  const size = inferPageSizeMm(html)
+  const viewport = viewportForPage(size)
   const browser = await puppeteer.default.launch({
-    args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath(),
-    headless: chromium.headless
+    args,
+    defaultViewport: viewport,
+    executablePath,
+    headless
   })
   try {
     const page = await browser.newPage()
     page.setDefaultTimeout(timeoutMs)
+    await page.setViewport(viewport)
     await page.setContent(html, { waitUntil: 'load', timeout: timeoutMs })
-    const pdf = await page.pdf({
-      printBackground: true,
-      preferCSSPageSize: true,
-      timeout: timeoutMs
-    })
-    const bytes = Buffer.from(pdf)
-    if (bytes.length < 1000 || bytes.subarray(0, 5).toString('latin1') !== '%PDF-') {
-      throw pdfError('Chrome produced an unreadable PDF.', 'PDF_INVALID', 502)
-    }
-    return bytes
+    await page.emulateMediaType('print')
+    const pdf = await page.pdf(pdfOptionsFor(timeoutMs))
+    return assertPdf(Buffer.from(pdf))
   } finally {
     await browser.close().catch(() => {})
   }
 }
 
-/**
- * Print a standalone HTML document to PDF bytes.
- * Chrome applies print media itself, so the app's `@media print` rules —
- * including `@page { size: A4; margin: 10mm }` — drive the page geometry.
- */
-export async function renderHtmlToPdf(html, { timeoutMs = RENDER_TIMEOUT_MS } = {}) {
-  const binary = findChrome()
-  if (!binary && process.env.VERCEL) {
-    return renderHtmlToPdfWithChromium(html, timeoutMs)
-  }
-  if (!binary) {
-    throw pdfError(
-      'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
-      'CHROME_MISSING',
-      503
-    )
-  }
-
+async function renderHtmlToPdfWithSpawn(html, timeoutMs, binary) {
+  const size = inferPageSizeMm(html)
+  const viewport = viewportForPage(size)
   const dir = await mkdtemp(join(tmpdir(), 'quotegen-pdf-'))
   const htmlPath = join(dir, 'quotation.html')
   const pdfPath = join(dir, 'quotation.pdf')
   try {
     await writeFile(htmlPath, html, 'utf8')
-    await runChrome(binary, [
+    const args = [
       '--headless',
       '--disable-gpu',
       '--no-first-run',
@@ -175,24 +262,62 @@ export async function renderHtmlToPdf(html, { timeoutMs = RENDER_TIMEOUT_MS } = 
       '--disable-sync',
       '--hide-scrollbars',
       '--force-color-profile=srgb',
+      `--window-size=${viewport.width},${viewport.height}`,
       // A throwaway profile: never attach to the operator's own Chrome session.
       `--user-data-dir=${join(dir, 'profile')}`,
       '--no-pdf-header-footer',
       `--print-to-pdf=${pdfPath}`,
       pathToFileURL(htmlPath).href
-    ], timeoutMs)
+    ]
+    if (process.platform === 'linux') {
+      args.unshift('--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage')
+    }
+    await runChrome(binary, args, timeoutMs)
 
     const pdf = await readFile(pdfPath)
-    if (pdf.length < 1000 || pdf.subarray(0, 5).toString('latin1') !== '%PDF-') {
-      throw pdfError('Chrome produced an unreadable PDF.', 'PDF_INVALID', 502)
-    }
-    return pdf
+    return assertPdf(pdf)
   } catch (error) {
     if (error?.code === 'ENOENT') throw pdfError('Chrome did not write a PDF file.', 'PDF_MISSING', 502)
     throw error
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {})
   }
+}
+
+function usePuppeteerPrint(binary) {
+  if (process.env.VERCEL || process.env.RAILWAY_ENVIRONMENT) return true
+  if (process.platform === 'linux') return true
+  return !binary
+}
+
+/**
+ * Print a standalone HTML document to PDF bytes.
+ * Chrome applies print media itself, so the app's `@media print` rules —
+ * including `@page { size: A4; margin: 10mm }` — drive the page geometry.
+ */
+export async function renderHtmlToPdf(html, { timeoutMs = RENDER_TIMEOUT_MS } = {}) {
+  const binary = findChrome()
+  const size = inferPageSizeMm(html)
+  const prepared = withUprightPageCss(html, size)
+
+  let pdf
+  if (usePuppeteerPrint(binary)) {
+    try {
+      pdf = await renderHtmlToPdfWithPuppeteer(prepared, timeoutMs, binary)
+    } catch (error) {
+      if (!binary || error?.code === 'CHROME_MISSING') throw error
+      pdf = await renderHtmlToPdfWithSpawn(prepared, timeoutMs, binary)
+    }
+  } else if (binary) {
+    pdf = await renderHtmlToPdfWithSpawn(prepared, timeoutMs, binary)
+  } else {
+    throw pdfError(
+      'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
+      'CHROME_MISSING',
+      503
+    )
+  }
+  return normalizePdfRotation(pdf)
 }
 
 export function registerPdfRoutes(app) {
