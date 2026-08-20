@@ -4920,8 +4920,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       await downloadQuotationPdf(quotationFileName(quote, 'pdf'))
     } catch (error) {
       if (kind === 'pdf' || !kind) {
-        setPdfNote(`Could not build the PDF — ${error.message}. Opening the browser print dialog instead; choose "Save as PDF" there.`)
-        window.print()
+        setPdfNote(`Could not build the PDF — ${error.message}`)
       } else {
         setPdfNote(`Could not export ${kind === 'word' ? 'Word' : 'Excel'} — ${error.message}.`)
       }

@@ -1189,11 +1189,13 @@ body, #root {
   max-width: 100%;
 }
 
-.qg-studio-canvas {
-  container-type: inline-size;
-}
-.qg-studio-paper-frame {
-  zoom: clamp(0.25, calc(100cqi / var(--qg-paper-width, 840px)), 1);
+@media screen {
+  .qg-studio-canvas {
+    container-type: inline-size;
+  }
+  .qg-studio-paper-frame {
+    zoom: clamp(0.25, calc(100cqi / var(--qg-paper-width, 840px)), 1);
+  }
 }
 @supports not (width: 1cqi) {
   @media screen and (max-width: 899px) {

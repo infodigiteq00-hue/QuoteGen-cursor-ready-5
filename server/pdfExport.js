@@ -124,23 +124,38 @@ function inferPageSizeMm(html) {
 
 function viewportForPage(size) {
   if (!size) return { width: A4_WIDTH_PX, height: A4_HEIGHT_PX, deviceScaleFactor: 1 }
-  return {
-    width: Math.max(A4_WIDTH_PX, mmToPx(size.widthMm)),
-    height: Math.max(A4_HEIGHT_PX, mmToPx(size.heightMm)),
-    deviceScaleFactor: 1
+  const width = Math.max(A4_WIDTH_PX, mmToPx(size.widthMm))
+  const height = Math.max(A4_HEIGHT_PX, mmToPx(size.heightMm))
+  /* Portrait sheet: keep the window taller than wide. A landscape 800×600
+     default window is what made Chromium stamp /Rotate 90. */
+  if (size.widthMm <= size.heightMm) {
+    return { width, height: Math.max(height, width + 1), deviceScaleFactor: 1 }
   }
+  return { width, height, deviceScaleFactor: 1 }
 }
 
-/** Last-wins CSS so `size: auto` cannot beat the studio sheet, and so Linux
+/** Last-wins CSS so screen-fit zoom cannot leak into print, and Linux
  * Chromium is told not to rotate a wide sheet onto a portrait MediaBox. */
 function withUprightPageCss(html, size) {
-  const sizeDecl = size ? `size: ${size.widthMm}mm ${size.heightMm}mm;` : ''
+  const sizeDecl = size
+    ? `size: ${size.widthMm}mm ${size.heightMm}mm !important;`
+    : 'size: 210mm 297mm !important;'
   const css = `<style data-qg-pdf-orientation>
-@page { ${sizeDecl} page-orientation: upright; }
-@page qg-studio { ${sizeDecl} page-orientation: upright; }
+html, body { zoom: 1 !important; transform: none !important; }
+.qg-studio-canvas { container-type: normal !important; overflow: visible !important; padding: 0 !important; }
+.qg-studio-paper-frame, .qg-studio-paper, .quote-paper, .upload-word-page {
+  zoom: 1 !important;
+  transform: none !important;
+}
+@page { ${sizeDecl} margin: 0 !important; page-orientation: upright !important; }
+@page qg-studio { ${sizeDecl} margin: 0 !important; page-orientation: upright !important; }
 @media print {
-  @page { ${sizeDecl} page-orientation: upright; }
-  @page qg-studio { ${sizeDecl} page-orientation: upright; }
+  @page { ${sizeDecl} margin: 0 !important; page-orientation: upright !important; }
+  @page qg-studio { ${sizeDecl} margin: 0 !important; page-orientation: upright !important; }
+  .qg-studio-paper-frame, .qg-studio-paper, .quote-paper, .upload-word-page {
+    zoom: 1 !important;
+    transform: none !important;
+  }
 }
 </style>`
   const source = String(html || '')
@@ -161,17 +176,37 @@ function assertPdf(bytes) {
  * content stream is already upright, so clearing it restores the sheet.
  */
 function normalizePdfRotation(pdf) {
-  const latin1 = Buffer.from(pdf).toString('latin1')
-  const next = latin1.replace(/\/Rotate\s+(?:90|180|270)\b/g, '/Rotate 0')
-  if (next === latin1) return Buffer.from(pdf)
-  return Buffer.from(next, 'latin1')
+  let latin1 = Buffer.from(pdf).toString('latin1')
+  const original = latin1
+  const hadSideways = /\/Rotate\s+(?:90|270)\b/.test(latin1)
+  latin1 = latin1.replace(/\/Rotate\s+(?:90|180|270)(?:\.\d+)?\b/g, '/Rotate 0')
+  /* Chromium often pairs /Rotate 90 with a portrait MediaBox. After clearing
+     rotate, swap the box so a wide sheet stays a wide sheet, upright. */
+  if (hadSideways) {
+    latin1 = latin1.replace(/\/MediaBox\s*\[\s*([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s*\]/g, (full, x0, y0, x1, y1) => {
+      const left = Number(x0)
+      const bottom = Number(y0)
+      const w = Number(x1) - left
+      const h = Number(y1) - bottom
+      if (!(w > 0 && h > 0) || w >= h) return full
+      return `/MediaBox [ ${x0} ${y0} ${left + h} ${bottom + w} ]`
+    })
+  }
+  if (latin1 === original) return Buffer.from(pdf)
+  return Buffer.from(latin1, 'latin1')
 }
 
-function pdfOptionsFor(timeoutMs) {
+function pdfOptionsFor(timeoutMs, size) {
+  const widthMm = size?.widthMm || 210
+  const heightMm = size?.heightMm || 297
   return {
     printBackground: true,
-    preferCSSPageSize: true,
+    preferCSSPageSize: false,
     landscape: false,
+    width: `${widthMm}mm`,
+    height: `${heightMm}mm`,
+    margin: { top: 0, right: 0, bottom: 0, left: 0 },
+    scale: 1,
     timeout: timeoutMs
   }
 }
@@ -211,9 +246,10 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
   if (!executablePath) {
     try {
       chromium = (await import('@sparticuz/chromium')).default
+      chromium.setGraphicsMode = false
       executablePath = await chromium.executablePath()
       args = [...chromium.args]
-      headless = chromium.headless
+      headless = chromium.headless ?? true
     } catch {
       throw pdfError(
         'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
@@ -225,6 +261,12 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
 
   const size = inferPageSizeMm(html)
   const viewport = viewportForPage(size)
+  args = [
+    ...args,
+    `--window-size=${viewport.width},${viewport.height}`,
+    '--font-render-hinting=none',
+    '--hide-scrollbars'
+  ]
   const browser = await puppeteer.default.launch({
     args,
     defaultViewport: viewport,
@@ -237,7 +279,7 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
     await page.setViewport(viewport)
     await page.setContent(html, { waitUntil: 'load', timeout: timeoutMs })
     await page.emulateMediaType('print')
-    const pdf = await page.pdf(pdfOptionsFor(timeoutMs))
+    const pdf = await page.pdf(pdfOptionsFor(timeoutMs, size))
     return assertPdf(Buffer.from(pdf))
   } finally {
     await browser.close().catch(() => {})

@@ -170,6 +170,10 @@ export async function downloadQuotationPdf(fileName) {
 
   const blob = await response.blob()
   if (!blob.size) throw new Error('the PDF came back empty')
+  const type = (blob.type || response.headers.get('content-type') || '').toLowerCase()
+  if (type && !type.includes('pdf')) {
+    throw new Error('the server did not return a PDF file')
+  }
   saveBlob(blob, fileName)
   return blob.size
 }
