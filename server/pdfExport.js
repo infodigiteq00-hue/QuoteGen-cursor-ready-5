@@ -100,12 +100,58 @@ function runChrome(binary, args, timeoutMs) {
 }
 
 /**
+ * Vercel has no system Chrome. Local `npm run dev` still uses findChrome() +
+ * spawn --print-to-pdf; this path is only taken when VERCEL is set.
+ */
+async function renderHtmlToPdfWithChromium(html, timeoutMs) {
+  let chromium
+  let puppeteer
+  try {
+    chromium = (await import('@sparticuz/chromium')).default
+    puppeteer = await import('puppeteer-core')
+  } catch {
+    throw pdfError(
+      'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
+      'CHROME_MISSING',
+      503
+    )
+  }
+
+  const browser = await puppeteer.default.launch({
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath: await chromium.executablePath(),
+    headless: chromium.headless
+  })
+  try {
+    const page = await browser.newPage()
+    page.setDefaultTimeout(timeoutMs)
+    await page.setContent(html, { waitUntil: 'load', timeout: timeoutMs })
+    const pdf = await page.pdf({
+      printBackground: true,
+      preferCSSPageSize: true,
+      timeout: timeoutMs
+    })
+    const bytes = Buffer.from(pdf)
+    if (bytes.length < 1000 || bytes.subarray(0, 5).toString('latin1') !== '%PDF-') {
+      throw pdfError('Chrome produced an unreadable PDF.', 'PDF_INVALID', 502)
+    }
+    return bytes
+  } finally {
+    await browser.close().catch(() => {})
+  }
+}
+
+/**
  * Print a standalone HTML document to PDF bytes.
  * Chrome applies print media itself, so the app's `@media print` rules —
  * including `@page { size: A4; margin: 10mm }` — drive the page geometry.
  */
 export async function renderHtmlToPdf(html, { timeoutMs = RENDER_TIMEOUT_MS } = {}) {
   const binary = findChrome()
+  if (!binary && process.env.VERCEL) {
+    return renderHtmlToPdfWithChromium(html, timeoutMs)
+  }
   if (!binary) {
     throw pdfError(
       'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',

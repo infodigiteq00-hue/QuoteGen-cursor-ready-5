@@ -16,6 +16,7 @@ import { catalogItemCountHint, catalogItemsToQuoteRows, extractCatalogLineItems 
 import { ensureSuggestedColumn } from '../shared/productKeywords.js'
 
 const app = express()
+if (process.env.VERCEL) app.set('trust proxy', 1)
 app.use(cors())
 app.use(express.json({ limit: '30mb' }))
 
@@ -406,7 +407,11 @@ const envPort = Number(process.env.PORT)
 const PORT = Number(process.env.API_PORT)
   || (Number.isFinite(envPort) && envPort > 0 && envPort !== VITE_DEV_PORT ? envPort : 3001)
 
-app.listen(PORT, () => {
-  console.log(`QuoteGen API listening on http://localhost:${PORT}`)
-  console.log(`Persistence: ${isSupabaseConfigured() ? 'Supabase configured' : 'Supabase not configured (APIs return 503; app still works)'}`)
-})
+export default app
+
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`QuoteGen API listening on http://localhost:${PORT}`)
+    console.log(`Persistence: ${isSupabaseConfigured() ? 'Supabase configured' : 'Supabase not configured (APIs return 503; app still works)'}`)
+  })
+}

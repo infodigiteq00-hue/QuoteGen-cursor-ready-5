@@ -1,6 +1,5 @@
 import fs from 'fs'
 import path from 'path'
-import { fileURLToPath } from 'url'
 import { randomBytes } from 'crypto'
 import {
   scrubTransientWordShell,
@@ -10,10 +9,11 @@ import {
   mapHeaderToField,
   mapHeadersToFields
 } from '../shared/templateMap.js'
+import { getDataDir } from './runtimeFs.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const DATA_DIR = path.join(__dirname, '..', 'data')
-const STORE_PATH = path.join(DATA_DIR, 'upload-templates.json')
+function storePath() {
+  return path.join(getDataDir(), 'upload-templates.json')
+}
 
 const TEMP_ROLES = new Set([
   'quote_number', 'date', 'customer_name', 'customer_company', 'customer_gst',
@@ -123,16 +123,17 @@ function scrubExcelSheets(sheets) {
 }
 
 function ensureStore() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
-  if (!fs.existsSync(STORE_PATH)) {
-    fs.writeFileSync(STORE_PATH, JSON.stringify({ templates: [] }, null, 2))
+  const dir = getDataDir()
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  if (!fs.existsSync(storePath())) {
+    fs.writeFileSync(storePath(), JSON.stringify({ templates: [] }, null, 2))
   }
 }
 
 function readStore() {
   ensureStore()
   try {
-    const raw = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'))
+    const raw = JSON.parse(fs.readFileSync(storePath(), 'utf8'))
     return { templates: Array.isArray(raw.templates) ? raw.templates : [] }
   } catch {
     return { templates: [] }
@@ -141,7 +142,7 @@ function readStore() {
 
 function writeStore(store) {
   ensureStore()
-  fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2))
+  fs.writeFileSync(storePath(), JSON.stringify(store, null, 2))
 }
 
 function newId() {

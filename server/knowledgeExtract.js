@@ -3,14 +3,26 @@
  * Best-effort OCR for images via tesseract.js when eng.traineddata is available.
  */
 import path from 'node:path'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { existsSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import mammoth from 'mammoth'
 import ExcelJS from 'exceljs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.resolve(__dirname, '..')
 const LOCAL_TESS_DATA = path.join(PROJECT_ROOT, 'eng.traineddata')
+
+function tessWorkDir() {
+  if (!process.env.VERCEL) return PROJECT_ROOT
+  const dir = path.join(os.tmpdir(), 'quotegen-tess')
+  mkdirSync(dir, { recursive: true })
+  const dest = path.join(dir, 'eng.traineddata')
+  if (existsSync(LOCAL_TESS_DATA) && !existsSync(dest)) {
+    copyFileSync(LOCAL_TESS_DATA, dest)
+  }
+  return dir
+}
 
 const MAX_TEXT_CHARS = 400_000
 
@@ -160,7 +172,9 @@ function extractCsvOrText(buffer, kind) {
 }
 
 async function extractImageOcr(buffer, mime) {
-  if (!existsSync(LOCAL_TESS_DATA)) {
+  const workDir = tessWorkDir()
+  const trainedData = path.join(workDir, 'eng.traineddata')
+  if (!existsSync(trainedData)) {
     const err = new Error('OCR is unavailable (eng.traineddata missing). Upload PDF/Word/Excel/CSV/text instead.')
     err.code = 'OCR_UNAVAILABLE'
     err.status = 400
@@ -168,8 +182,8 @@ async function extractImageOcr(buffer, mime) {
   }
   const { createWorker } = await import('tesseract.js')
   const worker = await createWorker('eng', 1, {
-    langPath: PROJECT_ROOT,
-    cachePath: PROJECT_ROOT,
+    langPath: workDir,
+    cachePath: workDir,
     gzip: false,
     logger: () => {}
   })

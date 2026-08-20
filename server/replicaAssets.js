@@ -1,11 +1,12 @@
 import fs from 'fs'
 import path from 'path'
-import { fileURLToPath } from 'url'
 import { randomBytes } from 'crypto'
 import { PDFParse } from 'pdf-parse'
+import { getDataDir } from './runtimeFs.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-export const ASSETS_ROOT = path.join(__dirname, '..', 'data', 'template-assets')
+function assetsRoot() {
+  return path.join(getDataDir(), 'template-assets')
+}
 
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
@@ -34,7 +35,7 @@ function extForMime(mime) {
 
 /** Save uploaded image as page-1 and return public page descriptors. */
 export function saveImagePages(assetId, dataBase64, mimeType = 'image/png') {
-  const dir = path.join(ASSETS_ROOT, assetId)
+  const dir = path.join(assetsRoot(), assetId)
   ensureDir(dir)
   const { buffer, mime } = dataUrlToBuffer(dataBase64, mimeType)
   const ext = extForMime(mime || mimeType)
@@ -49,7 +50,7 @@ export function saveImagePages(assetId, dataBase64, mimeType = 'image/png') {
 
 /** Render first pages of a PDF to PNG and save. */
 export async function savePdfPages(assetId, dataBase64, maxPages = 2) {
-  const dir = path.join(ASSETS_ROOT, assetId)
+  const dir = path.join(assetsRoot(), assetId)
   ensureDir(dir)
   const buffer = Buffer.from(dataBase64, 'base64')
   const parser = new PDFParse({ data: buffer })
@@ -94,8 +95,9 @@ export function resolveAssetPath(assetId, fileName) {
   const safeId = String(assetId || '').replace(/[^a-zA-Z0-9_-]/g, '')
   const safeFile = String(fileName || '').replace(/[^a-zA-Z0-9._-]/g, '')
   if (!safeId || !safeFile) return null
-  const full = path.join(ASSETS_ROOT, safeId, safeFile)
-  if (!full.startsWith(ASSETS_ROOT)) return null
+  const root = assetsRoot()
+  const full = path.join(root, safeId, safeFile)
+  if (!full.startsWith(root)) return null
   if (!fs.existsSync(full)) return null
   return full
 }

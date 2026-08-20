@@ -1,0 +1,12 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "functions": {
+    "api/[...path].js": {
+      "maxDuration": 60,
+      "memory": 1024,
+      "includeFiles": "{data/**,eng.traineddata}"
+    }
+  }
+}
