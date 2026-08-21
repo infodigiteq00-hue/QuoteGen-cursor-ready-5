@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
-  mapHeaderToField,
   scrubTransientWordShell,
   scrubTransientExcelShell,
-  inferTemplatePageWidth
+  inferTemplatePageWidth,
+  templatePaperStyle
 } from '../shared/templateMap.js'
 
 async function readApiResponse(response) {
@@ -475,11 +475,8 @@ function WordEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTem
         <article
           className="upload-word-page shadow-soft"
           style={{
-            background: design.paperBg || '#fff',
-            borderTop: `3px solid ${design.accent || '#1A73E8'}`,
-            width: pageWidthPx,
-            maxWidth: 'none',
-            '--upload-page-width': `${pageWidthPx}px`
+            ...templatePaperStyle(design, pageWidthPx),
+            borderTop: `3px solid ${design.accent || '#1A73E8'}`
           }}
         >
           <div
@@ -615,10 +612,10 @@ function ExcelEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTe
               alt=""
               className="upload-excel-float-img pointer-events-none absolute z-[1] object-contain"
               style={{
-                left: 40 + (img.fromCol * 64) + (img.colOff ? img.colOff / 10000 : 0),
-                top: 24 + (img.fromRow * 22) + (img.rowOff ? img.rowOff / 10000 : 0),
-                width: Math.max(40, (img.toCol - img.fromCol + 1) * 64),
-                height: Math.max(24, (img.toRow - img.fromRow + 1) * 22)
+                left: 40 + (img.leftPx ?? ((img.fromCol * 64) + (img.colOff ? img.colOff / 9525 : 0))),
+                top: 24 + (img.topPx ?? ((img.fromRow * 22) + (img.rowOff ? img.rowOff / 9525 : 0))),
+                width: img.widthPx || Math.max(40, (img.toCol - img.fromCol + 1) * 64),
+                height: img.heightPx || Math.max(24, (img.toRow - img.fromRow + 1) * 22)
               }}
             />
           ))}
@@ -656,7 +653,7 @@ function ExcelEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTe
                           minWidth: sheet.columns[cell.col - 1]?.widthPx || 80,
                           height: row.heightPx
                         }}
-                        className="upload-excel-cell"
+                        className={`upload-excel-cell${cell.style?.hasOwnBorder ? '' : ' upload-excel-cell--grid'}`}
                       >
                         <input
                           value={cell.value}

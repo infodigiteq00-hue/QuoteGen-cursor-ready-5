@@ -1,0 +1,7 @@
+# Railway: install a real Chromium so PDF export does not depend on
+# @sparticuz/chromium (that binary is built for AWS Lambda / Amazon Linux).
+[phases.setup]
+nixPkgs = ["chromium", "nss", "dejavu_fonts"]
+
+[variables]
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"

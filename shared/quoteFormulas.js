@@ -8,7 +8,7 @@
 import {
   AMOUNT_AUTO,
   AMOUNT_MANUAL,
-  amountKey,
+  columnMoneyAmount,
   columnType,
   computeRowTotals,
   findFieldColumn,
@@ -141,11 +141,11 @@ export function parsePlainFormula(text, columns = [], forColId = '') {
       tokens.push({ type: 'field', field: 'amount' })
       continue
     }
-    if (lower === 'after discount' || lower === 'amount after discount') {
+    if (lower === 'after discount' || lower === 'amount after discount' || lower === 'amount before tax') {
       tokens.push({ type: 'stage', stage: 'taxable' })
       continue
     }
-    if (lower === 'after tax' || lower === 'amount after tax') {
+    if (lower === 'after tax' || lower === 'amount after tax' || lower === 'final amount') {
       tokens.push({ type: 'stage', stage: 'gross' })
       continue
     }
@@ -164,6 +164,34 @@ export function parsePlainFormula(text, columns = [], forColId = '') {
     }
   }
   return tokens
+}
+
+/**
+ * Formula to attach when a column is added. Only clearly named
+ * Amount-before/after-tax columns get a shortcut without the Formula type —
+ * vague labels like "including" / "exclusive" stay ordinary text cells.
+ * Other columns only get a guess when `guessTokens` is set (the Formula type
+ * or the "this column is a formula" checkbox) — same as before.
+ */
+export function formulaForAddedColumn(col, columns = [], { guessTokens = false } = {}) {
+  if (!canHaveFormula(col, columns)) return null
+  const text = String(col?.label || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const namedBeforeTax = (/before/.test(text) && (/\btax\b/.test(text) || /\bgst\b/.test(text)))
+    || /pre tax/.test(text)
+    || /pretax/.test(text)
+    || (/\btaxable\b/.test(text) && /\bamount\b/.test(text))
+  const namedAfterTax = (/after/.test(text) && (/\btax\b/.test(text) || /\bgst\b/.test(text)))
+    || /final amount/.test(text)
+  if (namedBeforeTax) {
+    return normalizeFormula({ preset: 'before_tax', tokens: tokensForPreset('before_tax') })
+  }
+  if (namedAfterTax) {
+    return normalizeFormula({ preset: 'after_tax', tokens: tokensForPreset('after_tax') })
+  }
+  if (!guessTokens) return null
+  const guessed = defaultFormulaTokens(col, columns)
+  if (!guessed.length) return null
+  return normalizeFormula({ tokens: guessed })
 }
 
 export function inferFormulaPreset(label, columns = [], colIndex = -1) {
@@ -484,7 +512,10 @@ function resolveTokenValue(token, ctx) {
       return toNumber(ctx.item?.[col.id])
     }
     if (token.part === 'amount') {
-      if (isNestedColumn(col)) return toNumber(ctx.item?.[amountKey(col)])
+      if (isNestedColumn(col) || columnType(col) === 'tax' || columnType(col) === 'discount') {
+        const percentBase = columnType(col) === 'tax' ? ctx.taxable : ctx.list
+        return columnMoneyAmount(ctx.item, col, percentBase)
+      }
       return toNumber(ctx.item?.[col.id])
     }
     return toNumber(ctx.item?.[col.id])

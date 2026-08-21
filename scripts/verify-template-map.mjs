@@ -8,9 +8,13 @@ import {
   layoutFieldRole,
   isLineItemStopText,
   fillWordTemplate,
+  fillExcelTemplate,
   expandExcelLineItemRows,
   fillExcelItemRow,
-  cellValueForField
+  cellValueForField,
+  scrubTransientWordShell,
+  collectWordSlots,
+  collectExcelMapping
 } from '../shared/templateMap.js'
 
 let pass = 0
@@ -151,6 +155,47 @@ test('already-slotted shell is not re-scrubbed into temp_value', () => {
   assert.match(second, /MS Plate 8mm/)
 })
 
+test('scrub marks line cells and keeps seller GSTIN in header chrome', () => {
+  const html = `
+    <div data-qg-permanent="header"><p>Phone: +91 98765 43210 | Email: sales@acme.example | GSTIN: 27SELLER1234F1Z5</p></div>
+    ${sampleHtml}
+    <p>Bank Name: HDFC Bank IFSC: HDFC0001234 Account No 123456</p>
+  `
+  const scrubbed = scrubTransientWordShell(html)
+  assert.match(scrubbed, /data-slot="line_cell"/)
+  assert.match(scrubbed, /27SELLER1234F1Z5/)
+  assert.doesNotMatch(scrubbed, /Old Client Ltd/)
+  const slots = collectWordSlots(scrubbed)
+  assert.ok(slots.some(s => s.role === 'customer_gst' && !s.permanent))
+  assert.ok(slots.some(s => s.role === 'line_items' && !s.permanent))
+  assert.ok(slots.some(s => s.role === 'header_footer' && s.permanent))
+  const filled = fillWordTemplate(html, quote, columns, {}, totals)
+  assert.match(filled, /27SELLER1234F1Z5/)
+  assert.match(filled, /HDFC0001234/)
+  assert.match(filled, /Acme Steels Pvt Ltd/)
+})
+
+test('terms validity boilerplate is not a valid_until slot', () => {
+  const html = `<p>Valid: 30 days from the date of delivery</p>${sampleHtml}`
+  const filled = fillWordTemplate(html, quote, columns, {}, totals)
+  assert.match(filled, /30 days from the date of delivery/)
+  const validSlots = [...filled.matchAll(/data-slot="valid_until"/g)]
+  assert.equal(validSlots.length, 0)
+})
+
+test('standalone totals table amounts refresh', () => {
+  const html = `${sampleHtml}<table><tr><td>Grand Total</td><td>₹20.00</td></tr></table>`
+  const filled = fillWordTemplate(html, quote, columns, {}, totals)
+  assert.match(filled, /991\.20/)
+  assert.doesNotMatch(filled, /₹20\.00/)
+})
+
+test('images survive fill', () => {
+  const html = `<p><img src="data:image/png;base64,aaa" width="80"/></p>${sampleHtml}`
+  const filled = fillWordTemplate(html, quote, columns, {}, totals)
+  assert.match(filled, /<img src="data:image\/png;base64,aaa"/)
+})
+
 group('Excel rows')
 
 function excelSheet() {
@@ -197,6 +242,40 @@ test('cellValueForField does not dump description into specification', () => {
   const item = quote.items[0]
   assert.equal(cellValueForField(item, 'description', 0, columns), 'MS Plate 8mm')
   assert.equal(cellValueForField(item, 'specification', 0, columns), 'IS 2062')
+})
+
+test('GST column header is not mapped as customer GSTIN', () => {
+  const sheets = [{
+    name: 'Q',
+    columns: [{ index: 1, widthPx: 80 }, { index: 2, widthPx: 80 }, { index: 3, widthPx: 80 }, { index: 4, widthPx: 80 }],
+    rows: [
+      { index: 1, heightPx: 20, cells: [
+        { col: 1, value: 'GSTIN', formula: null, style: {}, role: 'content' },
+        { col: 2, value: '27AAAAA0000A1Z5', formula: null, style: {}, role: 'content' }
+      ]},
+      { index: 2, heightPx: 20, cells: [
+        { col: 1, value: 'Item', formula: null, style: {}, role: 'content' },
+        { col: 2, value: 'Qty', formula: null, style: {}, role: 'content' },
+        { col: 3, value: 'GST', formula: null, style: {}, role: 'content' },
+        { col: 4, value: 'Amount', formula: null, style: {}, role: 'content' }
+      ]},
+      { index: 3, heightPx: 20, cells: [
+        { col: 1, value: 'Old Item', formula: null, style: {}, role: 'content' },
+        { col: 2, value: '1', formula: null, style: {}, role: 'content' },
+        { col: 3, value: '18', formula: null, style: {}, role: 'content' },
+        { col: 4, value: '10', formula: null, style: {}, role: 'content' }
+      ]}
+    ]
+  }]
+  const filled = fillExcelTemplate(sheets, quote, columns, {}, totals)
+  const gstHeader = filled[0].rows[1].cells.find(c => c.col === 3)
+  assert.notEqual(gstHeader.role, 'customer_gst')
+  const gstinValue = filled[0].rows[0].cells.find(c => c.col === 2)
+  assert.equal(gstinValue.role, 'customer_gst')
+  assert.match(String(gstinValue.value), /27AABCU9603R1ZM/)
+  const mapped = collectExcelMapping(filled)
+  assert.ok(mapped.slots.some(s => s.role === 'customer_gst' && !s.permanent))
+  assert.ok(mapped.dynamicCells.some(c => c.role === 'customer_gst'))
 })
 
 console.log(`\n${pass} passed, ${fail} failed`)

@@ -5,11 +5,12 @@ import {
   isAttachmentColumn,
   isImageColumn,
   isNestedColumn,
-  rateKey
+  rateKey,
+  recalcAllRows
 } from '../shared/quoteColumns.js'
 import { formatIndianAmount } from '../shared/templateMap.js'
 import { normalizeFooterFit } from '../shared/footerFit.js'
-import { quotationFileName } from './pdfExport.js'
+import { quotationFileName, capturePreviewCanvases } from './pdfExport.js'
 
 function money(n) {
   if (n == null || n === '') return ''
@@ -90,12 +91,13 @@ export function downloadQuotationWord({ quote, profile, columns, totals, theme, 
   const headBg = theme?.tableHeadBg || '#061A3D'
   const headText = theme?.tableHeadText || '#ffffff'
   const border = theme?.tableBorder || '#e8edf3'
+  const stripe = theme?.tableStripeBg || '#f7fafd'
   const muted = theme?.muted || '#718096'
   const text = theme?.text || '#2d3748'
   const fontFamily = theme?.fontFamily || 'Inter, Calibri, Arial, sans-serif'
   const titleFont = theme?.titleFont || 'Outfit, Inter, Arial, sans-serif'
   const exportCols = exportTableColumns(columns)
-  const items = quote?.items || []
+  const items = recalcAllRows(quote?.items || [], columns)
   const customer = quote?.customer || {}
   const terms = quote?.terms || {}
   const notes = (quote?.notes || []).filter(Boolean)
@@ -113,10 +115,10 @@ export function downloadQuotationWord({ quote, profile, columns, totals, theme, 
 
   const bodyRows = items.map((item, i) => {
     const values = rowValues(item, columns, i)
-    return `<tr>${exportCols.map(c => {
+    return `<tr>${exportCols.map((c, ci) => {
       const raw = values[c.key] ?? ''
       const shown = c.money && raw !== '' ? money(raw) : raw
-      return `<td style="padding:8px 10px;border:1px solid ${border};vertical-align:top;white-space:pre-wrap;text-align:${c.align || 'left'};">${escapeHtml(shown).replace(/\n/g, '<br/>')}</td>`
+      return `<td style="padding:8px 10px;border:1px solid ${border};vertical-align:top;white-space:pre-wrap;text-align:${c.align || 'left'};${ci % 2 === 1 ? `background:${stripe};` : ''}">${escapeHtml(shown).replace(/\n/g, '<br/>')}</td>`
     }).join('')}</tr>`
   }).join('')
 
@@ -248,6 +250,101 @@ function rasterFromDataUrl(url) {
   }
 }
 
+export async function downloadPreviewAsWord(quote) {
+  const { canvases } = await capturePreviewCanvases()
+  if (!canvases.length) throw new Error('nothing on screen to export')
+  const zipMod = await import('jszip')
+  const JSZip = zipMod.default || zipMod
+  const zip = new JSZip()
+  const A4_CX = 7560310
+  const A4_CY = 10656126
+  const pageTwips = { w: 11906, h: 16838 }
+
+  const mediaRels = canvases.map((_, i) => (
+    `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image${i + 1}.jpeg"/>`
+  )).join('')
+
+  const pageXml = canvases.map((_, i) => {
+    const pageBreak = i < canvases.length - 1 ? '<w:r><w:br w:type="page"/></w:r>' : ''
+    return `<w:p>
+      <w:pPr>
+        <w:spacing w:before="0" w:after="0" w:line="0" w:lineRule="exact"/>
+        <w:ind w:left="0" w:right="0"/>
+        <w:jc w:val="left"/>
+        <w:rPr><w:sz w:val="2"/><w:szCs w:val="2"/></w:rPr>
+      </w:pPr>
+      <w:r>
+        <w:drawing>
+          <wp:inline distT="0" distB="0" distL="0" distR="0">
+            <wp:extent cx="${A4_CX}" cy="${A4_CY}"/>
+            <wp:effectExtent l="0" t="0" r="0" b="0"/>
+            <wp:docPr id="${i + 1}" name="Page ${i + 1}"/>
+            <wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>
+            <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+              <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                  <pic:nvPicPr>
+                    <pic:cNvPr id="${i}" name="image${i + 1}.jpeg"/>
+                    <pic:cNvPicPr/>
+                  </pic:nvPicPr>
+                  <pic:blipFill>
+                    <a:blip r:embed="rId${i + 1}"/>
+                    <a:stretch><a:fillRect/></a:stretch>
+                  </pic:blipFill>
+                  <pic:spPr>
+                    <a:xfrm><a:off x="0" y="0"/><a:ext cx="${A4_CX}" cy="${A4_CY}"/></a:xfrm>
+                    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+                  </pic:spPr>
+                </pic:pic>
+              </a:graphicData>
+            </a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+      ${pageBreak}
+    </w:p>`
+  }).join('')
+
+  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="jpeg" ContentType="image/jpeg"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`)
+  zip.folder('_rels').file('.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`)
+  zip.folder('word').file('document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+  <w:body>
+    ${pageXml}
+    <w:sectPr>
+      <w:pgSz w:w="${pageTwips.w}" w:h="${pageTwips.h}" w:orient="portrait"/>
+      <w:pgMar w:top="0" w:right="0" w:bottom="0" w:left="0" w:header="0" w:footer="0" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`)
+  zip.folder('word').folder('_rels').file('document.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  ${mediaRels}
+</Relationships>`)
+  const media = zip.folder('word').folder('media')
+  canvases.forEach((canvas, i) => {
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.95)
+    const raster = rasterFromDataUrl(dataUrl)
+    if (!raster) return
+    media.file(`image${i + 1}.jpeg`, raster.base64, { base64: true })
+  })
+
+  const blob = await zip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  })
+  saveBlob(blob, quotationFileName(quote, 'docx'))
+}
+
 export function downloadHtmlAsWord(html, fileName) {
   const wrapped = String(html || '').includes('<html')
     ? html
@@ -255,21 +352,59 @@ export function downloadHtmlAsWord(html, fileName) {
   saveBlob(new Blob(['\ufeff', wrapped], { type: 'application/msword' }), fileName)
 }
 
+export async function downloadPreviewAsExcel({ quote, profile, columns, totals, theme, docLabel }) {
+  const { canvases } = await capturePreviewCanvases()
+  const ExcelJS = await loadExcelJS()
+  const wb = new ExcelJS.Workbook()
+  wb.creator = 'QuoteGen'
+  const preview = wb.addWorksheet('Preview', {
+    views: [{ showGridLines: false }],
+    pageSetup: {
+      paperSize: 9,
+      orientation: 'portrait',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 1,
+      horizontalDpi: 96,
+      verticalDpi: 96,
+      margins: { left: 0, right: 0, top: 0, bottom: 0, header: 0, footer: 0 }
+    }
+  })
+  preview.getColumn(1).width = 88
+  const pageRowHeight = 760
+  canvases.forEach((canvas, i) => {
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
+    const raster = rasterFromDataUrl(dataUrl)
+    if (!raster) return
+    const imageId = wb.addImage({ base64: raster.base64, extension: raster.extension })
+    const startRow = i * 52
+    preview.addImage(imageId, {
+      tl: { col: 0, row: startRow },
+      ext: { width: 794, height: 1123 }
+    })
+    preview.getRow(startRow + 1).height = pageRowHeight
+    if (i < canvases.length - 1) {
+      try { preview.addPageBreak(startRow + 50) } catch { /* older exceljs */ }
+    }
+  })
+  fillQuotationDataSheet(wb, { quote, profile, columns, totals, theme, docLabel, sheetName: 'Items' })
+  const buf = await wb.xlsx.writeBuffer()
+  saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), quotationFileName(quote, 'xlsx'))
+}
+
 async function loadExcelJS() {
   const mod = await import('exceljs')
   return mod.default || mod
 }
 
-export async function downloadQuotationExcel({ quote, profile, columns, totals, theme, docLabel }) {
-  const ExcelJS = await loadExcelJS()
+function fillQuotationDataSheet(wb, { quote, profile, columns, totals, theme, docLabel, sheetName }) {
   const accent = (theme?.accent || '#1A73E8').replace('#', '')
   const headBg = (theme?.tableHeadBg || '#061A3D').replace('#', '')
   const headText = (theme?.tableHeadText || '#ffffff').replace('#', '')
-  const wb = new ExcelJS.Workbook()
-  wb.creator = 'QuoteGen'
-  const sheet = wb.addWorksheet(docLabel || 'Quotation', { views: [{ showGridLines: false }] })
+  const stripe = (theme?.tableStripeBg || '#f7fafd').replace('#', '')
+  const sheet = wb.addWorksheet(sheetName || docLabel || 'Quotation', { views: [{ showGridLines: false }] })
   const exportCols = exportTableColumns(columns)
-  const items = quote?.items || []
+  const items = recalcAllRows(quote?.items || [], columns)
   const customer = quote?.customer || {}
 
   sheet.getColumn(1).width = 28
@@ -337,6 +472,7 @@ export async function downloadQuotationExcel({ quote, profile, columns, totals, 
       if (c.money && raw !== '' && Number.isFinite(Number(raw))) cell.value = Number(raw)
       else cell.value = raw
       cell.alignment = { wrapText: true, vertical: 'top', horizontal: c.align === 'right' ? 'right' : 'left' }
+      if (i % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${stripe}` } }
       if (c.money) cell.numFmt = '₹#,##0.00'
     })
     r += 1
@@ -412,7 +548,14 @@ export async function downloadQuotationExcel({ quote, profile, columns, totals, 
       })
     }
   }
+  return sheet
+}
 
+export async function downloadQuotationExcel({ quote, profile, columns, totals, theme, docLabel }) {
+  const ExcelJS = await loadExcelJS()
+  const wb = new ExcelJS.Workbook()
+  wb.creator = 'QuoteGen'
+  fillQuotationDataSheet(wb, { quote, profile, columns, totals, theme, docLabel })
   const buf = await wb.xlsx.writeBuffer()
   saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), quotationFileName(quote, 'xlsx'))
 }

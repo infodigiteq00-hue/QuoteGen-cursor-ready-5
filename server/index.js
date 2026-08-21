@@ -15,6 +15,7 @@ import { registerQuoteAssetRoutes } from './quoteAssets.js'
 import { registerPdfRoutes } from './pdfExport.js'
 import { getSupabase, isSupabaseConfigured } from './db.js'
 import { aiFillableColumns, blankItemFor, normalizeColumnList } from '../shared/quoteColumns.js'
+import { suggestFormulaFromAsk, validateFormulaDraft } from '../shared/formulaAssistant.js'
 import { catalogItemCountHint, catalogItemsToQuoteRows, extractCatalogLineItems } from './enquiryItems.js'
 import { ensureSuggestedColumn } from '../shared/productKeywords.js'
 
@@ -398,6 +399,33 @@ app.post('/api/generate-quotation', async (req, res) => {
     })
   } catch (error) {
     aiError(error, requestId, res)
+  }
+})
+
+app.post('/api/suggest-formula', async (req, res) => {
+  const { ask = '', column = null, columns: existing = [] } = req.body || {}
+  const requestId = `fx-${Date.now()}`
+  const cols = normalizeColumns(existing)
+  const local = suggestFormulaFromAsk(ask, column, cols)
+  if (local.status !== 'unrecognized' || !process.env.OPENAI_API_KEY) {
+    return res.json({ ...local, mode: 'local' })
+  }
+  try {
+    const columnGuide = cols.map(c => `${c.id} (${c.label}, type ${c.type || 'text'})`).join('; ')
+    const { data } = await callAI(
+      `You suggest quotation column formulas. Return ONLY JSON:
+{"title":"","steps":["..."],"preset":"before_tax|after_tax|list_amount|after_discount|rate_after_discount|null","tokens":[{"type":"stage","stage":"list|taxable|gross"}] }
+Tokens may also be {type:field,field:quantity|rate|amount}, {type:op,op:+|-|*|/}, {type:pctOf}, {type:number,value:n}, {type:col,colId,part:amount|percent|value}.
+Use only column ids from this table. Prefer presets. Do not invent columns.`,
+      `Column being edited: ${column?.id || ''} "${column?.label || ''}"\nTable: ${columnGuide}\nAsk: ${ask}`,
+      requestId,
+      { max_tokens: 600, temperature: 0 }
+    )
+    const validated = validateFormulaDraft({ ...data, ask }, column, cols)
+    return res.json({ ...validated, mode: validated.status === 'unrecognized' ? 'local' : 'ai' })
+  } catch (error) {
+    console.warn(`[${requestId}] formula AI skipped`, error?.message || error)
+    return res.json({ ...local, mode: 'local' })
   }
 })
 

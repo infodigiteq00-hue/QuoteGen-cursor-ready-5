@@ -13,7 +13,112 @@ export function protectImages(html) {
 }
 
 export function restoreImages(html, held = []) {
-  return String(html || '').replace(/<!--QGIMG:(\d+)-->/g, (_, i) => held[Number(i)] || '')
+  return String(html || '').replace(/<!--QGIMG:(\d+)-->/g, (full, i) => (
+    Object.prototype.hasOwnProperty.call(held, Number(i)) ? (held[Number(i)] || '') : full
+  ))
+}
+
+function protectPermanent(html) {
+  const held = []
+  const out = String(html || '').replace(/<div[^>]*data-qg-permanent[^>]*>[\s\S]*?<\/div>/gi, (tag) => {
+    held.push(tag)
+    return `<!--QGPERM:${held.length - 1}-->`
+  })
+  return { html: out, held }
+}
+
+function restorePermanent(html, held = []) {
+  return String(html || '').replace(/<!--QGPERM:(\d+)-->/g, (full, i) => (
+    Object.prototype.hasOwnProperty.call(held, Number(i)) ? (held[Number(i)] || '') : full
+  ))
+}
+
+const DYNAMIC_SLOT_ROLES = new Set([
+  'quote_number', 'date', 'valid_until', 'customer_name', 'customer_company',
+  'customer_gst', 'customer_location', 'customer_block', 'subject',
+  'line_items', 'line_cell', 'total', 'notes'
+])
+
+export function collectWordSlots(html) {
+  const found = new Set()
+  for (const m of String(html || '').matchAll(/data-slot="([^"]+)"/gi)) found.add(m[1])
+  const slots = []
+  const seen = new Set()
+  const add = (role, permanent) => {
+    if (!role || seen.has(role) || role === 'temp_value') return
+    seen.add(role)
+    slots.push({ role, permanent: Boolean(permanent) })
+  }
+  for (const role of found) {
+    if (role === 'line_cell') add('line_items', false)
+    else add(role, !DYNAMIC_SLOT_ROLES.has(role))
+  }
+  for (const role of ['company_block', 'bank_details', 'terms', 'images', 'header_footer']) {
+    add(role, true)
+  }
+  return slots
+}
+
+export function collectExcelMapping(sheets) {
+  const dynamicCells = []
+  const roles = new Set()
+  let hasLines = false
+  ;(sheets || []).forEach((sheet, si) => {
+    (sheet.rows || []).forEach((row, ri) => {
+      (row.cells || []).forEach((cell) => {
+        const role = cell.role
+        if (role === 'line_item') hasLines = true
+        if (!role || role === 'content' || role === 'line_item' || role === 'formula') return
+        roles.add(role)
+        if (role !== 'total') {
+          dynamicCells.push({ sheet: si, row: ri, col: cell.col, role, permanent: false })
+        }
+      })
+    })
+  })
+  const slots = []
+  const add = (role, permanent) => {
+    if (!role || slots.some(s => s.role === role)) return
+    slots.push({ role, permanent: Boolean(permanent) })
+  }
+  for (const role of roles) add(role, false)
+  if (hasLines) add('line_items', false)
+  add('formulas', true)
+  add('header_footer', true)
+  add('images', true)
+  return { slots, dynamicCells }
+}
+
+export function sheetsHaveMappedRoles(sheets) {
+  return (sheets || []).some(s =>
+    (s.rows || []).some(r => (r.cells || []).some(c => c.role && c.role !== 'content'))
+  )
+}
+
+export function templatePaperStyle(design = {}, pageWidthPx) {
+  const style = {
+    background: design.paperBg || '#fff',
+    width: pageWidthPx,
+    maxWidth: 'none',
+    '--upload-page-width': `${pageWidthPx}px`
+  }
+  const pads = [
+    ['marginTopPx', 'paddingTop', '--upload-margin-top'],
+    ['marginRightPx', 'paddingRight', '--upload-margin-right'],
+    ['marginBottomPx', 'paddingBottom', '--upload-margin-bottom'],
+    ['marginLeftPx', 'paddingLeft', '--upload-margin-left']
+  ]
+  for (const [key, pad, cssVar] of pads) {
+    const n = Number(design[key])
+    if (Number.isFinite(n) && n > 0) {
+      const px = `${Math.round(n)}px`
+      style[pad] = px
+      style[cssVar] = px
+    }
+  }
+  const h = Number(design.pageHeightPx)
+  if (Number.isFinite(h) && h > 0) style.minHeight = `${Math.round(h)}px`
+  return style
 }
 
 /** Only match real quote-number tokens — never bare QG/QT inside base64. */
@@ -532,6 +637,13 @@ function mapWordLayoutCells(html, onValue) {
   })
 }
 
+function looksLikeDateValue(text) {
+  const t = String(text || '').replace(/<[^>]+>/g, ' ').trim()
+  if (!t) return true
+  if (/days|weeks|months|year|from\s+(?:the\s+)?date|of\s+delivery/i.test(t)) return false
+  return t.length <= 40
+}
+
 function applyWordPrefixedSlots(html, quote, editing) {
   const valueFor = (role) => (quote ? quoteFieldValueHtml(role, quote) : '')
   const wrap = (role) => slotHtml(role, valueFor(role), editing)
@@ -543,15 +655,19 @@ function applyWordPrefixedSlots(html, quote, editing) {
     { re: /\b(Valid(?:\s*(?:till|until|upto))?\s*[:\-–]\s*)(?!<span[^>]*data-slot=)([^<]{0,40})/gi, role: 'valid_until' }
   ]
   for (const rule of rules) {
-    out = out.replace(rule.re, (_, prefix) => `${prefix}${wrap(rule.role)}`)
+    out = out.replace(rule.re, (full, prefix, value) => {
+      if ((rule.role === 'date' || rule.role === 'valid_until') && !looksLikeDateValue(value)) return full
+      return `${prefix}${wrap(rule.role)}`
+    })
   }
   return out
 }
 
 /** Strip sample quote *text* only. Labels, columns, and cells stay. */
 export function scrubTransientWordShell(html) {
-  const { html: protectedHtml, held } = protectImages(html)
-  let out = String(protectedHtml || '').replace(/<span[^>]*data-slot="temp_value"[^>]*>[\s\S]*?<\/span>/gi, '')
+  const images = protectImages(html)
+  const perm = protectPermanent(images.html)
+  let out = String(perm.html || '').replace(/<span[^>]*data-slot="temp_value"[^>]*>[\s\S]*?<\/span>/gi, '')
   out = mapWordLayoutCells(out, (inner, role, mode) => {
     if (cellAlreadySlotted(inner)) return inner
     if (mode === 'value-cell') return slotHtml(role)
@@ -572,14 +688,14 @@ export function scrubTransientWordShell(html) {
       }
       if (/data-slot="(?:line_cell|line_items)/i.test(row) && !stripCellText(row)) return row
       return row.replace(/<t([dh])(\b[^>]*)>([\s\S]*?)<\/t\1>/gi, (_, tag, attrs) => (
-        `<t${tag}${attrs}><br/></t${tag}>`
+        `<t${tag}${attrs} data-slot="line_cell"><br/></t${tag}>`
       ))
     })
     const open = table.match(/^<table\b[^>]*>/i)?.[0] || '<table>'
     out = replaceFirst(out, table, `${open}${nextRows.join('')}</table>`)
   }
 
-  return restoreImages(out, held)
+  return restoreImages(restorePermanent(out, perm.held), images.held)
 }
 
 function looksLikeHeaderRow(cells) {
@@ -601,7 +717,7 @@ export function splitExcelPrefixedValue(text) {
   else if (/^date|^dated/i.test(label)) role = 'date'
   else if (/^valid/i.test(label)) role = 'valid_until'
   else if (/kind\s*attn|^customer(\s*name)?$/i.test(label)) role = 'customer_name'
-  else if (/gstin|^gst(\s*no)?$/i.test(label)) role = 'customer_gst'
+  else if (/gstin|customer\s*gst/i.test(label)) role = 'customer_gst'
   else if (/^company$/i.test(label)) role = 'customer_company'
   else if (/delivery\s*location/i.test(label)) role = 'customer_location'
   return { prefix: m[0], value, role, label }
@@ -621,7 +737,7 @@ function excelLabelRole(label) {
   const l = normalizeHeader(label)
   if (!l) return null
   if (/(?:seller|supplier|our)\s*gst|company gst/.test(l)) return null
-  if (/^(?:customer\s*)?(gstin|gst no|gst number)|^gst$/.test(l)) return 'customer_gst'
+  if (/^(?:customer\s*)?(gstin|gst no|gst number)$/.test(l)) return 'customer_gst'
   if (/delivery location|ship to|^location$/.test(l)) return 'customer_location'
   if (/^(to|bill to|buyer|consignee|m s|m\/s)$/.test(l) || /bill to|consignee/.test(l)) return 'customer_block'
   if (/^customer company|^company$/.test(l)) return 'customer_company'
@@ -999,13 +1115,14 @@ export function patchTrailingTotals(html, totals) {
 }
 
 export function fillWordTemplate(html, quote, columns, design = {}, totals) {
-  const { html: protectedHtml, held } = protectImages(html)
-  const alreadyLineShell = /data-slot="(?:line_cell|line_items)/i.test(protectedHtml)
-  let out = alreadyLineShell ? protectedHtml : scrubTransientWordShell(protectedHtml)
+  const images = protectImages(html)
+  const perm = protectPermanent(images.html)
+  const alreadyLineShell = /data-slot="(?:line_cell|line_items)/i.test(perm.html)
+  let out = alreadyLineShell ? perm.html : scrubTransientWordShell(perm.html)
   out = fillTransientFields(out, quote)
   out = fillWordLineItems(out, quote, columns, totals)
   out = patchTrailingTotals(out, totals)
-  return restoreImages(out, held)
+  return restoreImages(restorePermanent(out, perm.held), images.held)
 }
 
 function isExcelItemStopRow(row) {
@@ -1062,7 +1179,10 @@ export function expandExcelLineItemRows(sheet, itemCount, columns = []) {
     end = i + 1
   }
   const needed = Math.max(0, Number(itemCount) || 0)
-  const template = sheet.rows[start] || blankItemRowFromHeader(sheet.rows[headerRowIndex])
+  const existing = sheet.rows[start]
+  const template = (existing && !isExcelItemStopRow(existing))
+    ? existing
+    : blankItemRowFromHeader(sheet.rows[headerRowIndex])
   let count = Math.max(0, end - start)
   if (count === 0 && needed > 0) {
     sheet.rows.splice(start, 0, cloneExcelItemRow(template))
@@ -1123,7 +1243,9 @@ function applyComputedTotalsToSheet(sheet, totals) {
 }
 
 export function fillExcelTemplate(sheets, quote, columns, design = {}, totals) {
-  const next = scrubTransientExcelShell(sheets || [])
+  const next = sheetsHaveMappedRoles(sheets)
+    ? structuredClone(sheets || [])
+    : scrubTransientExcelShell(sheets || [])
   const items = quote.items || []
   const fields = quote.fields || {}
   const validUntil = fields.validUntil || quote.validUntil || ''

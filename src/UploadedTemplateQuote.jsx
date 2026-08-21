@@ -5,7 +5,8 @@ import {
   fillExcelTemplate,
   splitDescription,
   inferTemplatePageWidth,
-  splitExcelPrefixedValue
+  splitExcelPrefixedValue,
+  templatePaperStyle
 } from '../shared/templateMap.js'
 import { lookupHsnGst, listQuotations, listProducts } from './quotePersistence.js'
 import { downloadQuotationPdf, quotationFileName } from './pdfExport.js'
@@ -590,7 +591,7 @@ export default function UploadedTemplateQuote({
 
   return (
     <main className="min-h-screen text-ink print:bg-white" style={{ background: design.pageBg || '#edf1ed' }}>
-      <nav className="no-print sticky top-0 z-10 border-b border-sand bg-white/90 backdrop-blur">
+      <nav className="no-print sticky top-0 z-30 border-b border-sand bg-white/90 backdrop-blur">
         <div className="mx-auto flex max-w-[1440px] items-center justify-between px-4 py-3 sm:px-7">
           <div className="flex items-center gap-2">
             <button type="button" onClick={onHome} title="Go to Home" className={`flex items-center gap-2 ${onHome ? 'cursor-pointer' : ''}`}>
@@ -620,12 +621,7 @@ export default function UploadedTemplateQuote({
         <section className="mx-auto overflow-x-auto p-3 pb-12 sm:p-7" style={{ width: 'fit-content', maxWidth: '100%' }}>
           <article
             className="upload-word-page shadow-soft print:shadow-none"
-            style={{
-              background: design.paperBg || '#fff',
-              width: pageWidthPx,
-              maxWidth: 'none',
-              '--upload-page-width': `${pageWidthPx}px`
-            }}
+            style={templatePaperStyle(design, pageWidthPx)}
           >
             <div
               ref={editorRef}
@@ -689,7 +685,7 @@ export default function UploadedTemplateQuote({
                             rowSpan={cell.rowSpan > 1 ? cell.rowSpan : undefined}
                             colSpan={cell.colSpan > 1 ? cell.colSpan : undefined}
                             style={{ ...styleToCss(cell.style), minWidth: sheet.columns[cell.col - 1]?.widthPx || 80, height: row.heightPx, verticalAlign: isDesc ? 'top' : undefined }}
-                            className="upload-excel-cell"
+                            className={`upload-excel-cell${cell.style?.hasOwnBorder ? '' : ' upload-excel-cell--grid'}`}
                           >
                             {itemIndex != null && isDesc ? (
                               <div className="no-print px-1 py-0.5">

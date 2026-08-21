@@ -7,7 +7,9 @@ import {
   fillWordTemplate,
   fillExcelTemplate,
   scrubTransientWordShell,
-  cellValueForField
+  cellValueForField,
+  collectWordSlots,
+  lineItemHeaderScore
 } from './templateMap.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -114,6 +116,14 @@ assert(again.includes('LED highbay') && again.includes('Armoured cable'), 're-fi
 
 const scrubbedTwice = scrubTransientWordShell(scrubTransientWordShell(wordShell))
 assert((scrubbedTwice.match(/data-slot="customer_gst"/g) || []).length === 1, 'double scrub keeps a single GSTIN slot')
+assert(/data-slot="line_cell"/.test(scrubbedTwice), 'line body cells are slotted')
+assert(collectWordSlots(scrubbedTwice).some(s => s.role === 'customer_gst' && !s.permanent), 'GSTIN slot is saved as dynamic')
+assert(collectWordSlots(scrubbedTwice).some(s => s.role === 'line_items' && !s.permanent), 'line_items slot is saved')
+
+const withChrome = `<div data-qg-permanent="header"><p>GSTIN: 27AABCT1234F1Z5</p></div>${wordShell}`
+const filledChrome = fillWordTemplate(withChrome, quote, columns, {}, { grandTotal: 70120, subtotal: 70120, taxTotal: 0 })
+assert(filledChrome.includes('27AABCT1234F1Z5'), 'seller GSTIN in header chrome remains')
+assert(filledChrome.includes('<div data-qg-permanent="header">'), 'header wrapper remains')
 
 const excelSheets = [{
   name: 'Quotation',
@@ -178,7 +188,12 @@ if (fs.existsSync(storePath)) {
     assert((out.match(/data-qg-field="description"/g) || []).length === 3, `saved Word ${north.name}: Item column filled 3 times`)
     assert((out.match(/data-qg-field="specification"/g) || []).length === 3, `saved Word ${north.name}: Description column filled 3 times`)
   }
-  const excelTpl = (store.templates || []).find(t => t.type === 'excel')
+  const excelTpl = (store.templates || []).find(t => (
+    t.type === 'excel' &&
+    (t.content?.sheets?.[0]?.rows || []).some(r =>
+      lineItemHeaderScore((r.cells || []).map(c => String(c.value || ''))) >= 0
+    )
+  ))
   if (excelTpl) {
     const sheets = fillExcelTemplate(excelTpl.content.sheets, quote, excelTpl.mapping?.columns || columns, {}, { grandTotal: 70120 })
     const s = sheets[0]

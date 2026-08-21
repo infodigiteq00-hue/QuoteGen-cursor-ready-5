@@ -9,6 +9,7 @@ import {
   normalizeFormula,
   tokensToChain
 } from '../shared/quoteFormulas.js'
+import { suggestFormulaFromAsk } from '../shared/formulaAssistant.js'
 
 const SIGNS = [
   { value: '*', label: '×' },
@@ -75,6 +76,9 @@ export default function FormulaGuide({ col, columns, onSave, onClose }) {
   const options = useMemo(() => formulaOperandOptions(columns, col?.id), [columns, col?.id])
   const [chain, setChain] = useState(() => chainForColumn(col, columns))
   const [pos, setPos] = useState({ top: 0, left: 0, width: 400, maxHeight: 480, ready: false })
+  const [ask, setAsk] = useState('')
+  const [proposal, setProposal] = useState(null)
+  const [asking, setAsking] = useState(false)
   const anchorRef = useRef(null)
   const panelRef = useRef(null)
 
@@ -145,6 +149,49 @@ export default function FormulaGuide({ col, columns, onSave, onClose }) {
     onSave(normalizeFormula({ version: 1, tokens }))
   }
 
+  const applyProposal = (next) => {
+    const formula = next?.formula
+    if (!formula?.tokens?.length) return
+    setChain(tokensToChain(formula.tokens, columns))
+    setProposal({
+      status: 'ready',
+      title: next.title || next.label || 'Suggested formula',
+      steps: next.steps || [],
+      formula,
+      sentence: next.sentence || '',
+      choices: null
+    })
+  }
+
+  const runAsk = async (event) => {
+    event?.preventDefault?.()
+    const q = ask.trim()
+    if (!q) return
+    setAsking(true)
+    const local = suggestFormulaFromAsk(q, col, columns)
+    if (local.status !== 'unrecognized') {
+      setProposal(local)
+      if (local.status === 'ready') applyProposal(local)
+      setAsking(false)
+      return
+    }
+    try {
+      const response = await fetch('/api/suggest-formula', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ask: q, column: { id: col.id, label: col.label }, columns })
+      })
+      const data = await response.json().catch(() => null)
+      const next = data?.status ? data : local
+      setProposal(next)
+      if (next.status === 'ready') applyProposal(next)
+    } catch {
+      setProposal(local)
+    } finally {
+      setAsking(false)
+    }
+  }
+
   const valueCount = chain.filter(item => item.kind === 'value').length
 
   const panel = (
@@ -152,17 +199,18 @@ export default function FormulaGuide({ col, columns, onSave, onClose }) {
       ref={panelRef}
       role="dialog"
       aria-label={`${col.label || 'Column'} formula`}
-      className="qg-formula-pop no-print rounded-xl border border-sand bg-white p-3 text-left font-normal normal-case tracking-normal shadow-lg"
+      className="qg-formula-pop qg-formula-pop--ai no-print rounded-2xl border border-slate-200/80 bg-white p-3.5 text-left font-normal normal-case tracking-normal shadow-[0_18px_50px_-18px_rgba(29,99,237,0.35)]"
       style={{ top: pos.top, left: pos.left, width: pos.width, maxHeight: pos.maxHeight, visibility: pos.ready ? 'visible' : 'hidden' }}
       onMouseDown={e => e.stopPropagation()}
       onClick={e => e.stopPropagation()}
     >
-      <p className="text-[13px] font-semibold text-slate-800">
+      <p className="flex items-center gap-2 text-[13px] font-semibold text-slate-800">
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-moss text-[11px] font-bold text-white">fx</span>
         {col.label || 'This column'} =
       </p>
-      <p className="mt-0.5 text-[11px] text-slate-400">Pick columns and a sign. Add more if you need a longer line.</p>
+      <p className="mt-1 text-[11px] leading-snug text-slate-400">Pick columns and a sign, or skip ahead to AI help.</p>
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg border border-sand bg-[#f7f9f7] p-2">
+      <div className="mt-2.5 flex flex-wrap items-center gap-1.5 rounded-xl border border-slate-100 bg-slate-50/80 p-2.5">
         {chain.map((item, i) => {
           if (item.kind === 'op') {
             if (isPctOfFollowOp(chain, i)) return null
@@ -233,6 +281,58 @@ export default function FormulaGuide({ col, columns, onSave, onClose }) {
           + Add more
         </button>
       </div>
+
+      <form className="qg-ai-help mt-3 rounded-xl p-[1px]" onSubmit={runAsk}>
+        <div className="rounded-[11px] bg-white/90 px-2.5 py-2">
+          <label className="flex items-center gap-1.5">
+            <span className="qg-ai-help__badge inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden>
+                <path d="M6 0.6l.95 3.3H10.5L7.7 6.05l.95 3.35L6 7.4 3.35 9.4l.95-3.35L1.5 3.9h3.55L6 .6z" fill="currentColor" />
+              </svg>
+              AI help
+            </span>
+            <span className="text-[11px] font-medium text-slate-500">Ask in plain English</span>
+          </label>
+          <div className="mt-1.5 flex gap-1.5">
+            <input
+              value={ask}
+              onChange={e => setAsk(e.target.value)}
+              placeholder="e.g. Amount before tax"
+              className="min-w-0 flex-1 rounded-lg border border-violet-100 bg-white px-2.5 py-1.5 text-[12px] text-slate-700 outline-none placeholder:text-slate-400 focus:border-moss focus:ring-2 focus:ring-blue-50"
+            />
+            <button
+              type="submit"
+              disabled={asking || !ask.trim()}
+              className="shrink-0 rounded-lg bg-moss px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm disabled:opacity-50 hover:bg-[#1558b0]"
+            >
+              {asking ? '…' : 'Ask'}
+            </button>
+          </div>
+        </div>
+      </form>
+      {proposal && (
+        <div className="mt-2 space-y-1 rounded-xl border border-violet-100 bg-gradient-to-br from-violet-50/80 to-blue-50/70 px-2.5 py-2 text-[11px] text-slate-600">
+          {proposal.steps.map((step, i) => (
+            <p key={i} className="flex gap-1.5 leading-snug">
+              <span className="mt-px inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white text-[9px] font-bold text-moss shadow-sm">{i + 1}</span>
+              <span>{step}</span>
+            </p>
+          ))}
+          {proposal.sentence && proposal.status === 'ready' && (
+            <p className="mt-1 rounded-md bg-white/80 px-2 py-1 font-semibold text-moss">{proposal.sentence}</p>
+          )}
+          {proposal.status === 'need_choice' && (proposal.choices || []).map(item => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => applyProposal(item)}
+              className="mt-1 mr-1 rounded-full border border-moss/20 bg-white px-2.5 py-0.5 text-[11px] font-semibold text-moss hover:border-moss hover:bg-blue-50"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="mt-3 flex items-center justify-between gap-2">
         <button

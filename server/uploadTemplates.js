@@ -6,8 +6,9 @@ import {
   scrubTransientExcelShell,
   inferTemplatePageWidth,
   pickLineItemsTable,
-  mapHeaderToField,
-  mapHeadersToFields
+  mapHeadersToFields,
+  collectWordSlots,
+  collectExcelMapping
 } from '../shared/templateMap.js'
 import { getDataDir } from './runtimeFs.js'
 
@@ -65,19 +66,7 @@ function scrubWordHtml(html) {
     html: cleaned,
     mapping: {
       columns: columns.length ? columns : defaultColumns(),
-      slots: [
-        { role: 'quote_number', permanent: false },
-        { role: 'date', permanent: false },
-        { role: 'customer_name', permanent: false },
-        { role: 'customer_company', permanent: false },
-        { role: 'subject', permanent: false },
-        { role: 'line_items', permanent: false },
-        { role: 'total', permanent: false },
-        { role: 'company_block', permanent: true },
-        { role: 'bank_details', permanent: true },
-        { role: 'terms', permanent: true },
-        { role: 'images', permanent: true }
-      ]
+      slots: collectWordSlots(cleaned)
     }
   }
 }
@@ -104,20 +93,13 @@ function scrubExcelSheets(sheets) {
       }
     }
   }
+  const detected = collectExcelMapping(cleaned)
   return {
     sheets: cleaned,
     mapping: {
       columns,
-      slots: [
-        { role: 'line_items', permanent: false },
-        { role: 'quote_number', permanent: false },
-        { role: 'date', permanent: false },
-        { role: 'total', permanent: false },
-        { role: 'formulas', permanent: true },
-        { role: 'header_footer', permanent: true },
-        { role: 'images', permanent: true }
-      ],
-      dynamicCells: []
+      slots: detected.slots,
+      dynamicCells: detected.dynamicCells
     }
   }
 }

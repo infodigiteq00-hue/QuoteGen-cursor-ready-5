@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 import UploadDoc from './UploadDoc.jsx'
@@ -6,8 +6,8 @@ import UploadedTemplateQuote from './UploadedTemplateQuote.jsx'
 import KnowledgeBasePanel from './KnowledgeBasePanel.jsx'
 import AuthScreen from './AuthScreen.jsx'
 import { getCurrentSession, installAuthFetch, onAuthChange, signOut } from './apiAuth.js'
-import { downloadQuotationPdf, quotationFileName } from './pdfExport.js'
-import { downloadQuotationExcel, downloadQuotationWord } from './officeExport.js'
+import { downloadQuotationPdf, onQuoteAssetImgError, quotationFileName } from './pdfExport.js'
+import { downloadQuotationExcel, downloadQuotationWord, downloadPreviewAsExcel, downloadPreviewAsWord } from './officeExport.js'
 import { formatIndianAmount } from '../shared/templateMap.js'
 import {
   autofillFromKnowledge,
@@ -57,10 +57,10 @@ import {
   QuoteStudioFooterBar,
   QuoteStudioToolbar,
   QuoteToSubjectBlock,
-  LayoutStyleCards,
-  ExportMenu
+  LayoutStyleCards
 } from './QuoteStudio.jsx'
-import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, extractImagePalette, accentForTableColor } from './quotePaperThemes.js'
+import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor } from './quotePaperThemes.js'
+import { A4_WIDTH_PX, defaultA4Pages, measureA4Blocks, normalizeA4Pages, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
 import { applyProductToItem, clientsFromQuotations, matchProducts, productsFromHistory } from './suggestCatalog.js'
 import FormulaGuide from './FormulaGuide.jsx'
@@ -91,6 +91,7 @@ import {
   isHighlightColumn,
   isImageColumn,
   isNestedColumn,
+  isSuggestedColumn,
   moveColumnInList,
   nestedFieldInfo,
   normalizeColumnList,
@@ -106,9 +107,9 @@ import {
 import {
   canHaveFormula,
   clearFormulaOverride,
-  defaultFormulaTokens,
   formulaCellState,
   formulaEditPatch,
+  formulaForAddedColumn,
   formulaSentence,
   isFormulaColumn,
   normalizeFormula
@@ -269,7 +270,7 @@ const moveColumn = moveColumnInList
 const blankItem = blankItemFor
 
 function stripMarkdownBold(text) {
-  return String(text || '').replace(/\*\*/g, '').trim()
+  return String(text || '').replace(/\*\*/g, '')
 }
 
 function splitDescription(value) {
@@ -597,6 +598,7 @@ function ImageCell({ col, value, edit, onChange, onEditChange, onFitColumn, rowI
             src={value}
             alt={col.label}
             draggable={false}
+            onError={onQuoteAssetImgError}
             onLoad={e => {
               const w = e.currentTarget.naturalWidth || 1
               const h = e.currentTarget.naturalHeight || 1
@@ -742,8 +744,43 @@ function AttachmentCell({ col, item, onChange }) {
   )
 }
 
+function WrapCellTextarea({ value, onChange, onFocus, onBlur, placeholder, ariaLabel, className = '' }) {
+  const ref = useRef(null)
+  const resize = (el) => {
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+  useEffect(() => { resize(ref.current) }, [value])
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      aria-label={ariaLabel}
+      value={value}
+      placeholder={placeholder}
+      autoComplete="off"
+      onChange={e => { onChange(e.target.value); resize(e.target) }}
+      onFocus={onFocus}
+      onBlur={onBlur}
+      className={`no-print min-w-0 w-full resize-none overflow-hidden whitespace-pre-wrap break-words rounded bg-transparent p-2 leading-snug outline-none hover:bg-slate-50/60 focus:bg-blue-50 ${className}`}
+    />
+  )
+}
+
+function shouldWrapTableCell(col) {
+  if (isSuggestedColumn(col)) return true
+  if (isImageColumn(col) || isAttachmentColumn(col) || isNestedColumn(col)) return false
+  const id = String(col?.id || '').toLowerCase()
+  if (['rate', 'amount', 'quantity', 'qty', 'unit'].includes(id)) return false
+  if (columnType(col) === 'hsn') return false
+  if (id === 'description' || /^(description|enquiry|inquiry)$/i.test(String(col.label || '').trim())) return false
+  return true
+}
+
 function QuoteTableCell({ col, columns, item, rowIndex, updateItem, onDescriptionBlur, onImageChange, onAttachmentChange, onFitColumn, onRevertAmount, onAmountBlur, products, onApplyProduct }) {
   const [focused, setFocused] = useState(false)
+  const suggestWrapRef = useRef(null)
   const value = item[col.id] ?? ''
   const fill = item._knowledgeFill
   const hsnFill = item._hsnGstFill
@@ -753,12 +790,12 @@ function QuoteTableCell({ col, columns, item, rowIndex, updateItem, onDescriptio
   const formula = formulaCellState(item, columns, col)
   const derived = amount || formula
   const highlighted = isHighlightColumn(col)
-  const cellStyle = highlighted ? { backgroundColor: highlightColor(col) } : undefined
   const highlightClass = highlighted ? 'qg-highlight' : ''
+  const compactClass = isCompactColumn(col) ? 'qg-cell-compact' : ''
 
   if (isImageColumn(col)) {
     return (
-      <td className={`align-top ${highlightClass}`} style={cellStyle}>
+      <td className={`align-top ${highlightClass} ${compactClass}`}>
         <ImageCell
           col={col}
           value={value}
@@ -774,7 +811,7 @@ function QuoteTableCell({ col, columns, item, rowIndex, updateItem, onDescriptio
 
   if (isAttachmentColumn(col)) {
     return (
-      <td className={`align-top ${highlightClass}`} style={cellStyle}>
+      <td className={`align-top ${highlightClass} ${compactClass}`}>
         <AttachmentCell
           col={col}
           item={item}
@@ -786,7 +823,7 @@ function QuoteTableCell({ col, columns, item, rowIndex, updateItem, onDescriptio
 
   if (col.id === 'description' || /^(description|enquiry|inquiry)$/i.test(String(col.label || '').trim())) {
     return (
-      <td className={`p-1 align-top ${highlightClass}`} style={cellStyle}>
+      <td className={`p-1 align-top ${highlightClass} ${compactClass}`}>
         <div className="flex items-start gap-1">
           <div className="min-w-0 flex-1">
             <DescriptionCell
@@ -810,35 +847,52 @@ function QuoteTableCell({ col, columns, item, rowIndex, updateItem, onDescriptio
     : value
   const canSuggest = col.id !== 'amount' && !derived
   const suggestions = canSuggest ? productSuggestionItems(products, value) : []
+  const wrapText = shouldWrapTableCell(col)
   return (
     <td
-      className={`p-1 align-top ${highlightClass} ${!highlighted ? tint : ''}`}
-      style={cellStyle}
+      className={`p-1 align-top ${highlightClass} ${compactClass} ${!highlighted ? tint : ''}`}
     >
-      <div className={`qg-suggest flex items-center gap-1 ${focused && suggestions.length ? 'qg-suggest--open' : ''}`}>
-        <input
-          aria-label={col.label}
-          value={displayValue}
-          onChange={e => updateItem(rowIndex, col.id, isCurrency ? e.target.value.replace(/,/g, '') : e.target.value)}
-          onFocus={() => setFocused(true)}
-          onBlur={() => {
-            window.setTimeout(() => {
-              setFocused(false)
-              if (derived) onAmountBlur(rowIndex)
-            }, 120)
-          }}
-          className={`no-print w-full rounded bg-transparent p-2 outline-none hover:bg-slate-50/60 focus:bg-blue-50 ${derived || col.id === 'amount' ? 'text-right font-medium' : ''}`}
-          placeholder={derived && !derived.manual ? (amount ? 'Qty × Rate' : 'Auto') : '—'}
-          autoComplete="off"
-        />
+      <div ref={suggestWrapRef} className={`qg-suggest min-w-0 w-full ${wrapText ? '' : 'flex items-center gap-1'} ${focused && suggestions.length ? 'qg-suggest--open' : ''}`}>
+        {wrapText ? (
+          <WrapCellTextarea
+            ariaLabel={col.label}
+            value={displayValue}
+            onChange={v => updateItem(rowIndex, col.id, v)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => {
+              window.setTimeout(() => {
+                setFocused(false)
+                if (derived) onAmountBlur(rowIndex)
+              }, 120)
+            }}
+            placeholder={derived && !derived.manual ? (amount ? 'Qty × Rate' : 'Auto') : '—'}
+          />
+        ) : (
+          <input
+            aria-label={col.label}
+            value={displayValue}
+            onChange={e => updateItem(rowIndex, col.id, isCurrency ? e.target.value.replace(/,/g, '') : e.target.value)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => {
+              window.setTimeout(() => {
+                setFocused(false)
+                if (derived) onAmountBlur(rowIndex)
+              }, 120)
+            }}
+            className={`no-print w-full min-w-0 rounded bg-transparent p-2 outline-none hover:bg-slate-50/60 focus:bg-blue-50 ${derived || col.id === 'amount' ? 'text-right font-medium' : ''}`}
+            placeholder={derived && !derived.manual ? (amount ? 'Qty × Rate' : 'Auto') : '—'}
+            autoComplete="off"
+          />
+        )}
         {focused && suggestions.length ? (
           <SuggestionMenu
             items={suggestions}
             active={0}
             onPick={(item) => onApplyProduct?.(rowIndex, item.product, col.id)}
+            anchorRef={suggestWrapRef}
           />
         ) : null}
-        <span className={`print-only-cell w-full p-2 ${derived || col.id === 'amount' ? 'text-right font-medium' : ''}`}>
+        <span className={`print-only-cell w-full min-w-0 p-2 ${compactClass ? 'whitespace-nowrap' : 'whitespace-pre-wrap break-words'} ${derived || col.id === 'amount' ? 'text-right font-medium' : ''}`}>
           {isCurrency ? printAmountText(value) : (value || (derived && !derived.manual ? (amount ? 'Qty × Rate' : 'Auto') : ''))}
         </span>
         {derived?.overridden && <AmountOverrideBadge computed={derived.computed} onRevert={() => onRevertAmount(rowIndex, col)} />}
@@ -852,10 +906,9 @@ function NestedTableCells({ col, item, rowIndex, updateItem }) {
   const rk = rateKey(col)
   const hsnFill = item._hsnGstFill
   const hsnHere = hsnFill?.fields?.includes(rk)
-  const tint = columnType(col) === 'discount' ? 'bg-rose-50/40' : 'bg-sky-50/40'
   const rateValue = item[rk] ?? ''
   return (
-    <td className={`p-1 align-top ${tint}`}>
+    <td className="qg-cell-compact p-1 align-top">
       <div className="flex items-center gap-1">
         <input
           aria-label={`${col.label} %`}
@@ -1830,6 +1883,7 @@ function CompanyLetterhead({ profile, compact = false, hideLogo = false, showPla
         alt={`${name} header`}
         className="block h-auto w-full object-contain"
         style={{ maxHeight: compact || dense ? 90 : 180 }}
+        onError={onQuoteAssetImgError}
       />
     )
   }
@@ -1842,6 +1896,7 @@ function CompanyLetterhead({ profile, compact = false, hideLogo = false, showPla
             <img
               src={logoUrl}
               alt={`${name} logo`}
+              onError={onQuoteAssetImgError}
               style={{
                 width: '100%',
                 height: height || 'auto',
@@ -2000,6 +2055,7 @@ function CompanyFooter({ profile, className = '', editable = false, onFitChange 
           alt="Quotation footer"
           className="qg-footer-image"
           draggable={false}
+          onError={onQuoteAssetImgError}
         />
         {canEdit && !editing && (
           <button
@@ -2076,6 +2132,7 @@ function CompanyBankDetails({ profile, className = '', showEmpty = false, headin
                 src={qrUrl}
                 alt="Payment QR"
                 className={dense ? 'qg-bank-qr qg-bank-qr-dense' : 'qg-bank-qr'}
+                onError={onQuoteAssetImgError}
               />
               <p className={dense ? 'qg-bank-qr-hint qg-bank-qr-hint-dense' : 'qg-bank-qr-hint'}>Scan with any UPI payment app</p>
             </div>
@@ -3646,10 +3703,8 @@ function ColumnBuilder({ columns, setColumns }) {
     const col = makeTypedColumn(trimmed, resolvedType, columns, options)
     const nextColumns = insertColumnsBeforeUnit(columns, [col])
     const shouldOpen = openFormula || type === 'formula' || wantFormula
-    if (shouldOpen && canHaveFormula(col, nextColumns)) {
-      const guessed = defaultFormulaTokens(col, nextColumns)
-      if (guessed.length) col.formula = normalizeFormula({ tokens: guessed })
-    }
+    const formula = formulaForAddedColumn(col, nextColumns, { guessTokens: shouldOpen })
+    if (formula) col.formula = formula
     setColumns(nextColumns)
     setCustomName('')
     setShowAdd(false)
@@ -4601,23 +4656,20 @@ function QuoteColumnName({ col, editing, draft, onStart, onChange, onCommit, onC
           aria-label={`Rename ${col.label}`}
           className="no-print relative z-10 max-w-[10rem] rounded border border-moss bg-white px-1 py-0.5 text-[11px] font-semibold normal-case tracking-normal text-slate-700 outline-none"
         />
-        <span className="hidden print:inline">{col.label}</span>
+        <span className="qg-col-title qg-col-title--capture">{col.label}</span>
       </>
     )
   }
   return (
-    <>
-      <span
-        onClick={(e) => { e.stopPropagation(); onStart() }}
-        onMouseDown={(e) => e.stopPropagation()}
-        draggable={false}
-        title="Click to rename"
-        className="no-print cursor-text"
-      >
-        {col.label}
-      </span>
-      <span className="hidden print:inline">{col.label}</span>
-    </>
+    <span
+      onClick={(e) => { e.stopPropagation(); onStart() }}
+      onMouseDown={(e) => e.stopPropagation()}
+      draggable={false}
+      title="Click to rename"
+      className="qg-col-title cursor-text"
+    >
+      {col.label}
+    </span>
   )
 }
 
@@ -4632,8 +4684,11 @@ function minWidthForHeaderLabel(label, chromePx = 54) {
   return Math.ceil(text.length * perChar + tracking + chromePx)
 }
 
-function defaultWidthForColumn(col, fontPx = 14) {
-  const s = fontPx / 14
+/** Column and paper geometry stay on this size so preview font changes do not stretch the page. */
+const LAYOUT_FONT_PX = 14
+
+function defaultWidthForColumn(col, fontPx = LAYOUT_FONT_PX) {
+  const s = fontPx / LAYOUT_FONT_PX
   let content = Math.round(118 * s)
   if (col?.id === 'description') content = Math.round(248 * s)
   else if (isImageColumn(col)) content = Math.round(88 * s)
@@ -4645,6 +4700,14 @@ function defaultWidthForColumn(col, fontPx = 14) {
   else if (isNestedColumn(col)) content = Math.round(86 * s)
   else if (columnType(col) === 'tax' || columnType(col) === 'discount') content = Math.round(100 * s)
   return Math.max(content, minWidthForHeaderLabel(col?.label))
+}
+
+function isCompactColumn(col) {
+  if (!col) return false
+  if (col.id === 'unit' || col.id === 'quantity' || col.id === 'rate' || col.id === 'amount') return true
+  if (columnType(col) === 'hsn') return true
+  if (isNestedColumn(col)) return true
+  return false
 }
 
 function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, totals, saveStatus = 'idle', onNew, onHome, onRetry, onRestored, onConvertToInvoice, companyProfile, persistenceConfigured, onColumnsChange, canUndo, canRedo, onUndo, onRedo, onFooterFitChange, seriesSyncedRef }) {
@@ -4673,7 +4736,10 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const [invoiceKindLabel, setInvoiceKindLabel] = useState('Sales Invoice')
   const [gstMissing, setGstMissing] = useState(false)
   const gstFieldRef = useRef(null)
-  const [paperWidthMode, setPaperWidthMode] = useState('wide')
+  const [paperWidthMode, setPaperWidthMode] = useState('a4')
+  const studioRef = useRef(null)
+  const exportReadyRef = useRef(null)
+  const [a4Pages, setA4Pages] = useState(() => defaultA4Pages(0))
   const [paperFontPx, setPaperFontPx] = useState(14)
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -4904,17 +4970,38 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     }
   }
 
-  /** PDF snapshots the live preview; Word/Excel rebuild the same fields, colours, and captions. */
+  /** Capture the live A4 preview as-is for PDF, Word, and Excel. */
   const handleExport = async (kind) => {
     setPdfBusy(true)
     setPdfNote('')
+    document.documentElement.classList.add('qg-a4-export')
+    const ready = new Promise((resolve) => {
+      let settled = false
+      const done = () => {
+        if (settled) return
+        settled = true
+        exportReadyRef.current = null
+        resolve()
+      }
+      exportReadyRef.current = done
+      setTimeout(done, 400)
+    })
     try {
+      await ready
       if (kind === 'word') {
-        downloadQuotationWord({ quote, profile, columns, totals: quoteTotals, theme: paperTheme, docLabel })
+        try {
+          await downloadPreviewAsWord(quote)
+        } catch {
+          downloadQuotationWord({ quote, profile, columns, totals: quoteTotals, theme: paperTheme, docLabel })
+        }
         return
       }
       if (kind === 'excel') {
-        await downloadQuotationExcel({ quote, profile, columns, totals: quoteTotals, theme: paperTheme, docLabel })
+        try {
+          await downloadPreviewAsExcel({ quote, profile, columns, totals: quoteTotals, theme: paperTheme, docLabel })
+        } catch {
+          await downloadQuotationExcel({ quote, profile, columns, totals: quoteTotals, theme: paperTheme, docLabel })
+        }
         return
       }
       await downloadQuotationPdf(quotationFileName(quote, 'pdf'))
@@ -4925,6 +5012,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         setPdfNote(`Could not export ${kind === 'word' ? 'Word' : 'Excel'} — ${error.message}.`)
       }
     } finally {
+      document.documentElement.classList.remove('qg-a4-export')
       setPdfBusy(false)
     }
   }
@@ -5033,7 +5121,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       const result = mutate(currentColumns, currentItems) || {}
       const nextColumns = result.columns || currentColumns
       const baseItems = result.items || currentItems
-      const needsRecalc = nextColumns.some(isNestedColumn) || nextColumns.some(isFormulaColumn)
+      const needsRecalc = nextColumns.some(c => columnType(c) === 'tax' || columnType(c) === 'discount') || nextColumns.some(isFormulaColumn)
       const nextItems = needsRecalc ? recalcAllRows(baseItems, nextColumns) : baseItems
       latestColumns = nextColumns
       const next = structuredClone(q)
@@ -5056,10 +5144,9 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       if (resolvedType === 'tax' || resolvedType === 'discount') options.mode = taxMode
       if (resolvedType === 'hsn') options.digits = hsnLen
       const col = makeTypedColumn(trimmed, resolvedType, cols, options)
-      if (openFormula || type === 'formula') {
-        const guessed = defaultFormulaTokens(col, [...cols, col])
-        if (guessed.length) col.formula = normalizeFormula({ tokens: guessed })
-      }
+      const shouldGuess = openFormula || type === 'formula'
+      const formula = formulaForAddedColumn(col, [...cols, col], { guessTokens: shouldGuess })
+      if (formula) col.formula = formula
       added = col
       return { columns: [...cols, col], items: its.map(item => withColumnKeys(item, col)) }
     })
@@ -5099,7 +5186,6 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
    * good enough to warn before export, not to promise pixel-perfect fit.
    */
   const A4_PRINTABLE_PX = 718
-  const A4_PAPER_WIDTH_PX = 794
 
   const runAutofill = async () => {
     if (!persistenceConfigured) {
@@ -5314,22 +5400,22 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
 
   // Drag a column's right edge to resize it, like a spreadsheet. Widths are
   // per-column (nested tax/discount columns get separate rate/amount widths)
-  // and only override the default once the user actually drags — untouched
-  // columns keep sizing themselves off the font size as before.
+  // and only override the default once the user actually drags. Geometry stays
+  // on LAYOUT_FONT_PX so changing preview font size does not stretch the page.
   const [columnWidths, setColumnWidths] = useState({})
   const resizeStateRef = useRef(null)
   const imageFitRef = useRef({})
   const defaultColWidthForKey = (key) => {
     const col = columns.find(c => c.id === key || `${c.id}__rate` === key)
-    return col ? defaultWidthForColumn(col, paperFontPx) : Math.max(60, Math.round(110 * (paperFontPx / 14)))
+    return col ? defaultWidthForColumn(col, LAYOUT_FONT_PX) : Math.max(60, Math.round(110 * (LAYOUT_FONT_PX / 14)))
   }
-  const getColWidth = (key) => columnWidths[key] || defaultColWidthForKey(key)
+  const getColWidthRaw = (key) => columnWidths[key] || defaultColWidthForKey(key)
   const fitImageColumn = (colId, rowIndex, contentWidth) => {
     const slot = `${colId}:${rowIndex}`
     if (contentWidth > 0) imageFitRef.current[slot] = contentWidth
     else delete imageFitRef.current[slot]
     const col = columns.find(c => c.id === colId)
-    const floor = col ? defaultWidthForColumn(col, paperFontPx) : 80
+    const floor = col ? defaultWidthForColumn(col, LAYOUT_FONT_PX) : 80
     let max = 0
     for (const [key, w] of Object.entries(imageFitRef.current)) {
       if (key.startsWith(`${colId}:`)) max = Math.max(max, Number(w) || 0)
@@ -5340,7 +5426,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const beginColumnResize = (e, key) => {
     e.preventDefault()
     e.stopPropagation()
-    resizeStateRef.current = { key, startX: e.clientX, startWidth: getColWidth(key) }
+    resizeStateRef.current = { key, startX: e.clientX, startWidth: getColWidthRaw(key) }
     const onMove = (ev) => {
       const state = resizeStateRef.current
       if (!state) return
@@ -5357,13 +5443,12 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   }
   const SR_NO_COL_WIDTH = minWidthForHeaderLabel('Sr. No.', 22)
   const ROW_ACTIONS_COL_WIDTH = 40
+  const getColWidth = (key) => getColWidthRaw(key)
   const tableTotalWidthPx = SR_NO_COL_WIDTH + ROW_ACTIONS_COL_WIDTH + columns.reduce((sum, col) => (
     sum + getColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id)
   ), 0)
-  const paperWidthPx = Math.max(
-    paperWidthMode === 'a4' ? A4_PAPER_WIDTH_PX : 860,
-    tableTotalWidthPx + 96
-  )
+  const paperWidthPx = A4_WIDTH_PX
+  const tableFitZoom = Math.min(1, A4_PRINTABLE_PX / Math.max(1, tableTotalWidthPx - ROW_ACTIONS_COL_WIDTH))
   const tableFitsPaper = tableTotalWidthPx + 24 <= paperWidthPx
   // "Shrink font" only helps columns still at their default (font-scaled)
   // width — a column the user has manually dragged to a fixed pixel width no
@@ -5393,6 +5478,45 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       className="qg-col-resizer no-print"
     />
   )
+
+  const pagePlan = normalizeA4Pages(a4Pages, items.length)
+  const pageSignature = [
+    items.length,
+    items.map(it => `${String(it.description || '').length}:${Object.keys(it).length}`).join(','),
+    columns.map(c => c.id).join('|'),
+    paperFontPx,
+    paperWidthPx,
+    JSON.stringify(columnWidths),
+    extraLines.length,
+    (quote.notes || []).join('\n').length,
+    Object.values(quote.terms || {}).join('|').length,
+    profile?.headerImageUrl ? 'h' : '',
+    profile?.footerImageUrl ? 'f' : '',
+    profile?.standardTerms || '',
+    paperStyle,
+    hasAmount ? 'amt' : '',
+    String(tableFitZoom)
+  ].join('::')
+
+  useLayoutEffect(() => {
+    const root = studioRef.current
+    if (!root) return undefined
+    const measured = measureA4Blocks(root)
+    measured.rowHeights = Array.from({ length: items.length }, (_, i) => measured.rowHeights[i] || 36)
+    const next = packA4Pages({
+      rowCount: items.length,
+      ...measured,
+      totalsHeight: hasAmount ? measured.totalsHeight : 0
+    })
+    if (!pagesEqual(next, normalizeA4Pages(a4Pages, items.length))) {
+      setA4Pages(next)
+      return undefined
+    }
+    const frame = requestAnimationFrame(() => {
+      requestAnimationFrame(() => exportReadyRef.current?.())
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [pageSignature, items.length, hasAmount, a4Pages])
 
   const flashSave = (msg) => {
     setSaveFlash(msg)
@@ -5464,14 +5588,21 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   }
 
   return <main className="min-h-screen bg-[#F4F6FA] text-ink print:bg-white">
-    <nav className="no-print sticky top-0 z-20 border-b border-sand bg-white/95 backdrop-blur">
-      <div className="mx-auto flex max-w-[900px] items-center justify-between px-4 py-3 sm:px-6">
-        <Brand onClick={onHome} />
-        <div className="flex items-center gap-2">
-          <span className="hidden rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-moss sm:inline">
-            {quote.mode === 'demo' ? 'Draft' : quote.mode === 'saved' ? 'From history' : 'AI draft'}
-          </span>
-          <ExportMenu onExport={handleExport} busy={pdfBusy} label="Export" variant="header" />
+    <nav className="no-print sticky top-0 z-50 border-b border-sand bg-white/95 backdrop-blur">
+      <div className="flex w-full items-center justify-between px-4 py-3 sm:px-6">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onHome}
+            title="Back to home"
+            className="flex items-center gap-1.5 rounded-lg border border-sand px-2.5 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+            <span className="hidden sm:inline">Back</span>
+          </button>
+          <Brand onClick={onHome} />
         </div>
       </div>
     </nav>
@@ -5493,8 +5624,8 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       saveFlash={saveFlash}
       saveStatusLabel={saveStatusLabel(saveStatus)}
       onSaveFlash={() => flashSave(saveStatusLabel(saveStatus))}
-      advancedOpen={advancedOpen}
-      onToggleAdvanced={() => setAdvancedOpen(o => !o)}
+      onExport={handleExport}
+      pdfBusy={pdfBusy}
     />
 
     {advancedOpen && (
@@ -5551,11 +5682,13 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     )}
   </div>
 
+    <div ref={studioRef}>
     <QuoteStudioCanvas
       themeId={paperStyle}
       tableAccent={chosenAccent}
       fontSizePx={paperFontPx}
       paperWidthPx={paperWidthPx}
+      lockA4={true}
       runningHeader={{
         left: profile?.companyName?.trim() || 'Quotation',
         right: [quote.number, quote.date].filter(Boolean).join(' · ')
@@ -5565,7 +5698,10 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         right: quote.number ? `Quotation ${quote.number}` : 'Continued'
       }}
     >
-      <section className="qg-page-section">
+      {pagePlan.map((page, pageIndex) => (
+      <section key={pageIndex} className="qg-page-section">
+        {page.showHeader ? (
+        <div data-qg-block="header">
         <QuotePaperHeader
         theme={paperTheme}
         profile={profile}
@@ -5575,6 +5711,10 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         isInvoice={isInvoice}
         onNumberCommit={commitQuoteNumberSeries}
       />
+        </div>
+        ) : null}
+        {page.showMeta ? (
+        <div data-qg-block="meta">
       <QuoteToSubjectBlock
         theme={paperTheme}
         quote={quote}
@@ -5586,21 +5726,26 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         clients={suggestClients}
         onPickClient={pickClient}
       />
+        </div>
+        ) : null}
+      {(page.showHeader || page.rows.length > 0 || page.showTotals) ? (
       <div className="qg-paper-body">
-        {invoiceNote && !invoicePromptOpen && <p className={`no-print mb-4 rounded-lg px-3 py-2 text-sm ${gstMissing || /already|Enter the/i.test(invoiceNote) ? 'bg-rose-50 text-rose-700' : 'bg-blue-50 text-moss'}`}>{invoiceNote}</p>}
+        {page.showHeader && invoiceNote && !invoicePromptOpen && <p className={`no-print mb-4 rounded-lg px-3 py-2 text-sm ${gstMissing || /already|Enter the/i.test(invoiceNote) ? 'bg-rose-50 text-rose-700' : 'bg-blue-50 text-moss'}`}>{invoiceNote}</p>}
 
-        <div className="quote-items-scroll overflow-x-auto">
-          <table className="quote-items-table qg-studio-table text-left" style={{ tableLayout: 'fixed', width: tableTotalWidthPx, minWidth: tableTotalWidthPx, fontSize: `${paperFontPx}px` }}>
+        {(page.showHeader || page.rows.length > 0) ? (
+        <div className="quote-items-scroll overflow-x-auto" style={{ overflow: 'hidden' }}>
+          <div data-qg-table-zoom={tableFitZoom} style={tableFitZoom < 1 ? { zoom: tableFitZoom, width: tableTotalWidthPx } : undefined}>
+          <table className="quote-items-table qg-studio-table text-left" style={{ tableLayout: 'fixed', width: `${tableTotalWidthPx}px`, minWidth: `${tableTotalWidthPx}px`, maxWidth: 'none', fontSize: `${paperFontPx}px` }}>
             <colgroup>
-              <col style={{ width: SR_NO_COL_WIDTH }} />
+              <col style={{ width: `${SR_NO_COL_WIDTH}px` }} />
               {columns.map(col => (
-                    <col key={col.id} style={{ width: getColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id) }} />
+                    <col key={col.id} style={{ width: `${getColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id)}px` }} />
                   ))}
-              <col style={{ width: ROW_ACTIONS_COL_WIDTH }} />
+              <col style={{ width: `${ROW_ACTIONS_COL_WIDTH}px` }} />
             </colgroup>
-            <thead>
+            <thead data-qg-block="thead">
               <tr className="border-y uppercase tracking-wide" style={{ borderColor: 'var(--qg-table-border, #d2e3fc)' }}>
-                <th className="p-3">Sr. No.</th>
+                <th className="qg-cell-compact p-3">Sr. No.</th>
                 {columns.map(col => (
                     <th
                       key={col.id}
@@ -5611,8 +5756,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                       onDrop={(e) => { e.preventDefault(); swapColumns(dragColId, col.id); setDragColId(null); setDropColId(null) }}
                       onDragEnd={() => { setDragColId(null); setDropColId(null) }}
                       title={`${col.label} — click to rename, drag to swap`}
-                      style={isHighlightColumn(col) ? { backgroundColor: highlightColor(col) } : undefined}
-                      className={`group relative cursor-grab p-3 active:cursor-grabbing ${isHighlightColumn(col) ? 'qg-highlight' : ''} ${col.id === 'amount' || isNestedColumn(col) || isFormulaColumn(col) ? 'text-right' : ''} ${dragColId === col.id ? 'opacity-40' : ''} ${dropColId === col.id && dragColId !== col.id ? 'bg-blue-50 ring-2 ring-inset ring-moss' : ''} ${formulaColId === col.id ? 'z-20' : ''}`}
+                      className={`group relative cursor-grab p-3 active:cursor-grabbing ${isCompactColumn(col) ? 'qg-cell-compact' : ''} ${isHighlightColumn(col) ? 'qg-highlight' : ''} ${col.id === 'amount' || isNestedColumn(col) || isFormulaColumn(col) ? 'text-right' : ''} ${dragColId === col.id ? 'opacity-40' : ''} ${dropColId === col.id && dragColId !== col.id ? 'bg-blue-50 ring-2 ring-inset ring-moss' : ''} ${formulaColId === col.id ? 'z-20' : ''}`}
                     >
                       <span className="inline-flex max-w-full flex-wrap items-center gap-0.5">
                       <span className="no-print mr-1 text-slate-300">⠿</span>
@@ -5649,7 +5793,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                       >
                         ×
                       </button>
-                      {formulaColId === col.id && (
+                      {formulaColId === col.id && page.showHeader && (
                         <FormulaGuide
                           col={col}
                           columns={columns}
@@ -5661,6 +5805,8 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                     </th>
                   ))}
                 <th className="no-print relative w-10 p-1 text-center">
+                  {page.showHeader ? (
+                  <>
                   <button
                     ref={addColBtnRef}
                     type="button"
@@ -5828,13 +5974,19 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                         )}
                       </div>
                   </FloatingPop>
+                  </>
+                  ) : null}
                 </th>
               </tr>
             </thead>
             <tbody>
-              {items.map((item, i) => (
+              {page.rows.map((i) => {
+                const item = items[i]
+                if (!item) return null
+                return (
                 <tr
                   key={i}
+                  data-qg-row={i}
                   className={`group/row border-b border-sand align-top ${dragRowIndex === i ? 'opacity-40' : ''} ${dropRowIndex === i && dragRowIndex !== i ? 'bg-blue-50' : ''}`}
                 >
                   <td
@@ -5845,7 +5997,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                     onDrop={(e) => { e.preventDefault(); moveItem(dragRowIndex, i); setDragRowIndex(null); setDropRowIndex(null) }}
                     onDragEnd={() => { setDragRowIndex(null); setDropRowIndex(null) }}
                     title="Drag to reorder this row"
-                    className="relative cursor-grab p-3 text-slate-400 active:cursor-grabbing"
+                    className={`qg-cell-compact relative cursor-grab p-3 text-slate-400 active:cursor-grabbing`}
                   >
                     <span className="no-print mr-1 text-slate-300">⠿</span>
                     {i + 1}
@@ -5882,13 +6034,18 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                     ))}
                   <td className="no-print p-1 align-top" />
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
+          </div>
         </div>
+        ) : null}
+        {page.rows.length > 0 && !pagePlan.slice(pageIndex + 1).some(p => p.rows.length) ? (
         <button onClick={addItem} className="no-print mt-3 text-sm font-semibold text-moss">+ Add line item</button>
-        {hasAmount && (
-          <div className="qg-totals-card">
+        ) : null}
+        {page.showTotals && hasAmount && (
+          <div className="qg-totals-card" data-qg-block="totals">
             <div className="flex justify-between text-sm text-slate-500"><span>Subtotal</span><span>{money(quoteTotals.subtotal)}</span></div>
             {quoteTotals.perColumn.filter(entry => entry.type === 'discount').map(entry => (
               <div key={entry.id} className="mt-1 flex justify-between text-sm text-rose-600">
@@ -5919,8 +6076,9 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
           </div>
         )}
       </div>
-      </section>
-      <section className="qg-page-section">
+      ) : null}
+      {page.showClosing ? (
+      <div data-qg-block="closing">
       <div className={`qg-paper-body${profile?.footerImageUrl ? ' qg-paper-body--flush-footer' : ''}`}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
           <section>
@@ -5979,8 +6137,12 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
           onFitChange={onFooterFitChange}
         />
       ) : null}
+      </div>
+      ) : null}
       </section>
+      ))}
     </QuoteStudioCanvas>
+    </div>
 
     <QuoteStudioFooterBar onExport={handleExport} pdfBusy={pdfBusy} onHome={onHome} />
 
@@ -6347,59 +6509,53 @@ function WsHome({ greetingWord, greetingName, stats, recent, topClients, onOpen,
   )
 }
 
-function LayoutCardColumnsPreview({ columns, tone = 'default' }) {
-  const cols = Array.isArray(columns) ? columns.filter(c => c && (c.label || c.id)) : []
-  const headers = ['Sr.', ...cols.map(c => String(c.label || c.id || 'Column').trim() || 'Column')]
-  const bg = tone === 'upload' ? '#f1f5f9' : '#edf2fb'
-  return (
-    <div style={{ background: bg, padding: '16px 16px 10px', borderBottom: '1px solid #e2e8f0' }}>
-      <div style={{
-        background: '#fff',
-        borderRadius: 8,
-        height: 100,
-        boxShadow: tone === 'upload' ? '0 2px 8px rgba(0,0,0,0.08)' : '0 2px 8px rgba(0,0,0,0.10)',
-        overflow: 'hidden',
-        padding: 8,
-        pointerEvents: 'none'
-      }}>
+function LayoutChoicePreview({ kind = 'default' }) {
+  if (kind === 'upload') {
+    return (
+      <div style={{ background: '#f8fafc', padding: '14px 14px 8px', borderBottom: '1px solid #e2e8f0' }}>
         <div style={{
+          background: '#fff',
+          borderRadius: 8,
+          height: 108,
+          boxShadow: '0 1px 6px rgba(0,0,0,0.08)',
           display: 'flex',
-          border: '1px solid #e8edf3',
-          borderRadius: 6,
-          overflow: 'hidden',
-          height: '100%',
-          background: '#fff'
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 6
         }}>
-          {headers.map((label, i) => (
-            <div
-              key={`${label}-${i}`}
-              style={{
-                flex: i === 0 ? '0 0 28px' : '1 1 0',
-                minWidth: 0,
-                borderRight: i < headers.length - 1 ? '1px solid #e8edf3' : 'none',
-                background: '#f7f9fc'
-              }}
-            >
-              <div style={{
-                fontSize: 8,
-                fontWeight: 700,
-                letterSpacing: '0.02em',
-                textTransform: 'uppercase',
-                color: '#64748b',
-                padding: '6px 4px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                borderBottom: '1px solid #e8edf3'
-              }}>
-                {label}
-              </div>
-              <div style={{ padding: '8px 4px', fontSize: 8, color: '#cbd5e1', background: '#fff' }}>
-                {i === 0 ? '1' : '—'}
-              </div>
-            </div>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="8" y1="13" x2="16" y2="13" />
+            <line x1="8" y1="17" x2="12" y2="17" />
+          </svg>
+          <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700, letterSpacing: '0.08em' }}>WORD / EXCEL</div>
+        </div>
+      </div>
+    )
+  }
+
+  const t = PAPER_THEMES.corporate
+  return (
+    <div style={{ background: t.pageBg, padding: '14px 14px 8px', borderBottom: `1px solid ${t.tableBorder}` }}>
+      <div style={{
+        background: t.paperBg,
+        borderRadius: 8,
+        overflow: 'hidden',
+        height: 108,
+        position: 'relative',
+        boxShadow: '0 1px 6px rgba(0,0,0,0.10)'
+      }}>
+        <div style={{ background: t.accent, height: 22 }} />
+        <div style={{ margin: '10px 10px 0', height: 5, borderRadius: 3, background: t.accent, width: '55%', opacity: 0.75 }} />
+        <div style={{ margin: '5px 10px 0', height: 3, borderRadius: 3, background: t.tableBorder, width: '40%' }} />
+        <div style={{ margin: '12px 10px 0', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {[0.92, 0.74, 0.84, 0.62].map((w, i) => (
+            <div key={i} style={{ height: 3, borderRadius: 2, background: t.tableBorder, width: `${w * 100}%`, opacity: 0.85 }} />
           ))}
         </div>
+        <div style={{ position: 'absolute', bottom: 10, right: 10, height: 4, borderRadius: 2, background: t.accent, width: 40, opacity: 0.65 }} />
       </div>
     </div>
   )
@@ -6537,8 +6693,7 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onAttach, onUploadLa
               transition: 'all .15s',
             }}
           >
-            {/* Mini paper preview — live columns from the QuoteGen layout */}
-            <LayoutCardColumnsPreview columns={columns} />
+            <LayoutChoicePreview kind="default" />
             <div style={{ padding: '14px 18px 18px' }}>
               <div style={{ fontWeight: 800, fontSize: 15, color: '#1a202c' }}>QuoteGen layout</div>
               <div style={{ fontSize: 13, color: '#718096', marginTop: 4, lineHeight: 1.5 }}>Clean, professional design. Choose which columns to include.</div>
@@ -6561,10 +6716,7 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onAttach, onUploadLa
               transition: 'all .15s',
             }}
           >
-            <LayoutCardColumnsPreview
-              tone="upload"
-              columns={(uploadTemplates || []).find(t => t.id === selectedTemplateId)?.columns || []}
-            />
+            <LayoutChoicePreview kind="upload" />
             <div style={{ padding: '14px 18px 18px' }}>
               <div style={{ fontWeight: 800, fontSize: 15, color: '#1a202c' }}>Your own file</div>
               <div style={{ fontSize: 13, color: '#718096', marginTop: 4, lineHeight: 1.5 }}>Upload a Word or Excel template — we fill it in with your enquiry data.</div>

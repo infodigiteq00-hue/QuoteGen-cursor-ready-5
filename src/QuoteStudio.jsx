@@ -1,15 +1,70 @@
 import React from 'react'
+import { onQuoteAssetImgError } from './pdfExport.js'
 import { resolvePaperTheme, PAPER_THEMES, tableColorSwatches } from './quotePaperThemes.js'
 import { SuggestField } from './SuggestField.jsx'
 import { matchClients } from './suggestCatalog.js'
-
-const A4_PAGE_HEIGHT_PX = 1123
+import { A4_HEIGHT_MM, A4_HEIGHT_PX, A4_WIDTH_MM, A4_WIDTH_PX } from './a4Pagination.js'
 
 function pxToMm(px) {
-  return Math.round((Number(px) || 840) * 25.4 / 96)
+  return Math.round((Number(px) || A4_WIDTH_PX) * 25.4 / 96)
 }
 
 /* ─── Minimal editable inline field ─────────────────────────────────────── */
+function formatDdMmYyyy(raw) {
+  const digits = String(raw || '').replace(/\D/g, '').slice(0, 8)
+  if (digits.length <= 2) return digits
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`
+}
+
+function DateField({ value, onChange, placeholder = 'DD/MM/YYYY', right, style }) {
+  const ref = React.useRef(null)
+  const className = [
+    'qg-inline-field',
+    right ? 'qg-inline-field--right' : '',
+    'qg-inline-field--mono'
+  ].filter(Boolean).join(' ')
+
+  const handleChange = (e) => {
+    const el = e.target
+    const caret = el.selectionStart ?? el.value.length
+    const digitsBefore = el.value.slice(0, caret).replace(/\D/g, '').length
+    const formatted = formatDdMmYyyy(el.value)
+    onChange(formatted)
+    requestAnimationFrame(() => {
+      const input = ref.current
+      if (!input) return
+      let seen = 0
+      let pos = formatted.length
+      for (let i = 0; i < formatted.length; i++) {
+        if (/\d/.test(formatted[i])) seen++
+        if (seen >= digitsBefore) {
+          pos = i + 1
+          break
+        }
+      }
+      if (digitsBefore === 0) pos = 0
+      input.setSelectionRange(pos, pos)
+    })
+  }
+
+  return (
+    <input
+      ref={ref}
+      type="text"
+      inputMode="numeric"
+      autoComplete="off"
+      maxLength={10}
+      value={value || ''}
+      onChange={handleChange}
+      placeholder={placeholder}
+      className={className}
+      style={style}
+      aria-label="Valid till date"
+    />
+  )
+}
+
 function InlineField({ value, onChange, onBlur, placeholder, bold, large, right, mono, multiline, style }) {
   const base = [
     'qg-inline-field',
@@ -63,6 +118,7 @@ function CompanyLetterheadBlock({ profile, theme }) {
           <img
             src={logoUrl}
             alt={`${name} logo`}
+            onError={onQuoteAssetImgError}
             style={{ width: '100%', height: height || 'auto', maxHeight: height || 80, objectFit: 'contain', display: 'block' }}
           />
         ) : (
@@ -141,6 +197,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
             src={profile.headerImageUrl}
             alt={`${profile?.companyName || 'Company'} header`}
             className="qg-header-image"
+            onError={onQuoteAssetImgError}
           />
         </div>
         {/* Title + meta strip beneath the image, inside the paper */}
@@ -154,7 +211,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
               <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} right placeholder="DD MMM YYYY" />
             </MetaRow>
             <MetaRow label="Valid till" theme={theme}>
-              <InlineField
+              <DateField
                 value={validUntil}
                 onChange={v => update(['fields'], { ...fields, validUntil: v })}
                 right
@@ -182,7 +239,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
               <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} right placeholder="DD MMM YYYY" />
             </MetaRow>
             <MetaRow label="Valid till" theme={theme}>
-              <InlineField
+              <DateField
                 value={validUntil}
                 onChange={v => update(['fields'], { ...fields, validUntil: v })}
                 right
@@ -299,14 +356,17 @@ export function QuoteStudioCanvas({
   fontSizePx,
   paperWidthPx = 840,
   runningHeader,
-  runningFooter
+  runningFooter,
+  lockA4 = false
 }) {
   const theme = resolvePaperTheme(themeId, tableAccent)
   const pages = React.Children.toArray(children).filter(Boolean)
   const pageCount = Math.max(1, pages.length)
-  const width = Math.max(840, Math.round(Number(paperWidthPx) || 840))
-  const pageWidthMm = pxToMm(width)
-  const pageHeightMm = 297
+  const width = lockA4
+    ? A4_WIDTH_PX
+    : Math.max(840, Math.round(Number(paperWidthPx) || 840))
+  const pageWidthMm = lockA4 ? A4_WIDTH_MM : pxToMm(width)
+  const pageHeightMm = A4_HEIGHT_MM
   /* Named size only — never add the `landscape` keyword. Chrome's print
      path treats that keyword as "rotate the sheet", which is what made
      quotation PDFs come out on their side. `page-orientation: upright`
@@ -319,6 +379,7 @@ export function QuoteStudioCanvas({
     '--qg-muted': theme.muted,
     '--qg-table-head-bg': theme.tableHeadBg,
     '--qg-table-head-text': theme.tableHeadText,
+    '--qg-table-stripe': theme.tableStripeBg,
     '--qg-table-border': theme.tableBorder,
     '--qg-table-accent': theme.tableAccent || theme.tableHeadText,
     '--qg-drop-border': theme.dropBorder,
@@ -330,7 +391,12 @@ export function QuoteStudioCanvas({
     color: theme.text,
     fontFamily: theme.fontFamily,
     fontSize: `${fontSizePx}px`,
-    minHeight: A4_PAGE_HEIGHT_PX,
+    minHeight: A4_HEIGHT_PX,
+    ...(lockA4 ? {
+      width,
+      height: A4_HEIGHT_PX,
+      maxHeight: A4_HEIGHT_PX
+    } : {}),
     ...themeTokens
   }
 
@@ -391,9 +457,9 @@ export function ExportMenu({ onExport, busy, label = 'Export', variant = 'primar
   }, [])
 
   const formats = [
-    { id: 'pdf', name: 'PDF', hint: 'Same as the live preview' },
-    { id: 'word', name: 'Word', hint: '.doc — matches the quotation layout' },
-    { id: 'excel', name: 'Excel', hint: '.xlsx — items, totals, terms' }
+    { id: 'pdf', name: 'PDF', hint: 'A4 pages — same layout as the preview' },
+    { id: 'word', name: 'Word', hint: '.doc — A4, same layout as the preview' },
+    { id: 'excel', name: 'Excel', hint: '.xlsx — A4, same layout as the preview' }
   ]
 
   const buttonClass = variant === 'footer'
@@ -431,6 +497,15 @@ export function ExportMenu({ onExport, busy, label = 'Export', variant = 'primar
   )
 }
 
+const FONT_SIZE_MIN = 11
+const FONT_SIZE_MAX = 18
+
+function clampFontSize(value, fallback) {
+  const n = parseInt(String(value).trim(), 10)
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(FONT_SIZE_MIN, Math.min(FONT_SIZE_MAX, n))
+}
+
 export function QuoteStudioToolbar({
   paperStyle, onPaperStyleChange,
   paperFontPx, onFontChange,
@@ -438,9 +513,17 @@ export function QuoteStudioToolbar({
   onTableColorChange, onDetectFromLogo,
   saveFlash, saveStatusLabel,
   onSaveFlash,
-  advancedOpen, onToggleAdvanced
+  onExport, pdfBusy
 }) {
   const swatches = tableColorSwatches(logoPalette)
+  const [fontDraft, setFontDraft] = React.useState(String(paperFontPx))
+  React.useEffect(() => { setFontDraft(String(paperFontPx)) }, [paperFontPx])
+
+  const commitFontSize = (raw) => {
+    const next = clampFontSize(raw, paperFontPx)
+    onFontChange(next)
+    setFontDraft(String(next))
+  }
   return (
     <div className="qg-studio-toolbar no-print">
       <div className="flex flex-wrap items-center gap-3">
@@ -490,9 +573,20 @@ export function QuoteStudioToolbar({
         <div className="flex items-center gap-1.5 text-xs text-slate-500">
           <span>Font</span>
           <input
-            type="number" min={11} max={18}
-            value={paperFontPx}
-            onChange={e => onFontChange(Math.max(11, Math.min(18, Number(e.target.value) || 14)))}
+            type="number"
+            min={FONT_SIZE_MIN}
+            max={FONT_SIZE_MAX}
+            step={1}
+            value={fontDraft}
+            onChange={e => {
+              const raw = e.target.value
+              setFontDraft(raw)
+              if (raw === '') return
+              const n = Number(raw)
+              if (Number.isFinite(n) && n >= FONT_SIZE_MIN && n <= FONT_SIZE_MAX) onFontChange(n)
+            }}
+            onBlur={() => commitFontSize(fontDraft)}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
             className="w-12 rounded-lg border border-slate-200 px-2 py-1 text-center text-xs outline-none focus:border-[#1A73E8]"
             aria-label="Paper font size"
           />
@@ -500,14 +594,11 @@ export function QuoteStudioToolbar({
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <button type="button" onClick={onToggleAdvanced}
-          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
-          {advancedOpen ? 'Hide tools' : 'More tools'}
-        </button>
         <button type="button" onClick={onSaveFlash}
           className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
           Save
         </button>
+        <ExportMenu onExport={onExport} busy={pdfBusy} label="Export" variant="header" />
       </div>
     </div>
   )
