@@ -8,6 +8,7 @@ import {
   verifyEmailCode
 } from './apiAuth.js'
 import { emailLinkError, supabaseConfigured } from './supabaseClient.js'
+import BrandMark from './BrandMark.jsx'
 
 function Field({ label, hint, ...props }) {
   return (
@@ -374,9 +375,9 @@ export default function AuthScreen({ recovery = false, onPasswordUpdated }) {
         <div className="auth-blob bottom-[-12%] left-[18%] h-80 w-80 bg-indigo-200" style={{ animationDelay: '6s' }} />
       </div>
       <div className="relative w-full max-w-md">
-        <div className="auth-logo-in mb-6 flex items-center justify-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-moss font-bold text-white shadow-lg shadow-blue-500/30">Q</div>
-          <span className="font-semibold tracking-tight">QuoteGen</span>
+        <div className="auth-logo-in mb-6 flex items-center justify-center gap-2.5">
+          <BrandMark size={40} />
+          <span className="text-lg font-semibold tracking-tight">QuoteGen</span>
         </div>
         <div className="auth-card-in rounded-3xl bg-white p-6 shadow-soft ring-1 ring-black/[.03] sm:p-8">
           <h1 className="mb-1 text-xl font-semibold">{COPY[mode].title}</h1>

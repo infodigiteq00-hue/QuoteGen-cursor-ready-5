@@ -1,10 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
-  mapHeaderToField,
-  scrubTransientWordShell,
-  scrubTransientExcelShell,
-  inferTemplatePageWidth
+  inferTemplatePageWidth,
+  templatePaperStyle,
+  contrastTextForBackground
 } from '../shared/templateMap.js'
+import {
+  joinWordHtmlPages,
+  splitWordHtmlPages
+} from '../shared/uploadWordPages.js'
+import NativeDocumentEditor from './NativeDocumentEditor.jsx'
+import BrandMark from './BrandMark.jsx'
 
 async function readApiResponse(response) {
   const text = await response.text()
@@ -32,13 +37,14 @@ function styleToCss(style = {}) {
   if (style.borderRight) css.borderRight = style.borderRight
   if (style.borderBottom) css.borderBottom = style.borderBottom
   if (style.borderLeft) css.borderLeft = style.borderLeft
+  if (css.backgroundColor) css.color = contrastTextForBackground(css.backgroundColor)
   return css
 }
 
 function Brand() {
   return (
     <div className="flex items-center gap-2">
-      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-moss font-bold text-white">Q</div>
+      <BrandMark size={32} />
       <span className="font-semibold tracking-tight">QuoteGen</span>
       <span className="hidden rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500 sm:inline">Upload Doc</span>
     </div>
@@ -137,30 +143,33 @@ function recalculateSheet(sheet) {
   return next
 }
 
-function DesignBar({ design, onChange, onSaveTemplate, saving }) {
+const EXCEL_CHROME_BG = '#f3f4f3'
+const LAYOUT_DESIGN_KEYS = ['pageWidthPx', 'pageHeightPx', 'marginTopPx', 'marginRightPx', 'marginBottomPx', 'marginLeftPx']
+
+function layoutDesignOnly(design = {}) {
+  const out = {}
+  for (const k of LAYOUT_DESIGN_KEYS) {
+    if (design[k] != null && design[k] !== '') out[k] = design[k]
+  }
+  return out
+}
+
+function formatMappingHint(mapping) {
+  const summary = mapping?.summary
+  if (!summary?.length) return ''
+  const skip = new Set(['formulas', 'header_footer', 'images', 'total'])
+  const fields = summary.filter(s => s.kind === 'field' && !skip.has(s.role)).map(s => s.label)
+  const cols = summary.filter(s => s.kind === 'column')
+  const parts = []
+  if (fields.length) parts.push(fields.join(', '))
+  if (cols.length) parts.push(`${cols.length} priced line columns`)
+  return parts.length ? `Auto-mapped for future quotes: ${parts.join(' · ')}` : ''
+}
+
+function SaveTemplateBar({ onSaveTemplate, saving, hint = '' }) {
   return (
     <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-3 border-t border-sand px-4 py-2 sm:px-6">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Design</span>
-      <label className="flex items-center gap-1.5 text-xs text-slate-600">
-        Accent (headers)
-        <input type="color" value={design.accent || '#1A73E8'} onChange={e => onChange({ ...design, accent: e.target.value })} className="h-7 w-8 cursor-pointer rounded border border-sand bg-white" />
-      </label>
-      <label className="flex items-center gap-1.5 text-xs text-slate-600">
-        Paper
-        <input type="color" value={design.paperBg || '#ffffff'} onChange={e => onChange({ ...design, paperBg: e.target.value })} className="h-7 w-8 cursor-pointer rounded border border-sand bg-white" />
-      </label>
-      {design.pageBg != null && (
-        <label className="flex items-center gap-1.5 text-xs text-slate-600">
-          Canvas
-          <input type="color" value={design.pageBg || '#e8ece8'} onChange={e => onChange({ ...design, pageBg: e.target.value })} className="h-7 w-8 cursor-pointer rounded border border-sand bg-white" />
-        </label>
-      )}
-      {design.headerBg !== undefined && (
-        <label className="flex items-center gap-1.5 text-xs text-slate-600">
-          Header tint
-          <input type="color" value={design.headerBg || '#f7f9f7'} onChange={e => onChange({ ...design, headerBg: e.target.value })} className="h-7 w-8 cursor-pointer rounded border border-sand bg-white" />
-        </label>
-      )}
+      {hint ? <span className="max-w-3xl text-[11px] leading-relaxed text-slate-500">{hint}</span> : null}
       <button
         type="button"
         disabled={saving}
@@ -182,8 +191,7 @@ function SaveTemplateModal({ open, defaultName, onClose, onConfirm, saving, erro
       <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-soft">
         <h3 className="text-lg font-semibold">Save as quotation template</h3>
         <p className="mt-2 text-sm leading-6 text-slate-600">
-          We keep the permanent shell (logo, letterhead, terms, formulas, layout) and clear temporary sample data
-          (line items, quote number, dates) so future enquiries can fill this layout.
+          Saves this file as you see it — same layout, same text — so you can reuse it for the next quotation.
         </p>
         <label className="mt-4 block text-sm font-medium">Template name</label>
         <input
@@ -243,11 +251,6 @@ export default function UploadDoc({ onBack, suggestedName = '' }) {
       const response = await fetch('/api/upload-doc', { method: 'POST', body: form })
       const data = await readApiResponse(response)
       if (!response.ok) throw new Error(data.error || 'Upload failed')
-      if (data.type === 'word') {
-        data.html = scrubTransientWordShell(data.html || '')
-      } else if (data.type === 'excel') {
-        data.sheets = scrubTransientExcelShell(data.sheets || [])
-      }
       setDoc(data)
     } catch (e) {
       setError(
@@ -276,6 +279,20 @@ export default function UploadDoc({ onBack, suggestedName = '' }) {
     if (!response.ok) throw new Error(data.error || 'Save failed')
     await loadTemplates()
     return data
+  }
+
+  if (doc?.fileId) {
+    return (
+      <NativeFileEditor
+        doc={doc}
+        suggestedName={suggestedName}
+        onBack={() => setDoc(null)}
+        onHome={onBack}
+        onChange={(next) => setDoc(next)}
+        onSaved={async (tpl) => { await loadTemplates(); setDoc(null); onBack(tpl) }}
+        saveTemplate={sharedSave}
+      />
+    )
   }
 
   if (doc?.type === 'word') {
@@ -321,7 +338,7 @@ export default function UploadDoc({ onBack, suggestedName = '' }) {
             <span className="text-moss">Edit it here.</span>
           </h1>
           <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-slate-600">
-            Upload Word or Excel. Layout stays yours — then save it as a template for future quotations.
+            Upload Word or Excel. What you upload is what you edit — same layout, just typeable.
           </p>
         </div>
 
@@ -332,7 +349,7 @@ export default function UploadDoc({ onBack, suggestedName = '' }) {
           className={`rounded-3xl border-2 border-dashed bg-white p-10 text-center shadow-soft transition ${dragging ? 'border-moss bg-blue-50/40' : 'border-sand'}`}
         >
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#f7f9f7] text-2xl text-moss">↑</div>
-          <p className="font-semibold">{loading ? 'Converting…' : 'Drop your file here'}</p>
+          <p className="font-semibold">{loading ? 'Opening…' : 'Drop your file here'}</p>
           <p className="mt-1 text-sm text-slate-500">.docx or .xlsx · up to 25 MB</p>
           <button
             type="button"
@@ -397,48 +414,158 @@ function useSaveFlow(doc, saveTemplate, buildPayload, onSaved) {
   return { modal, setModal, saving, error, confirm }
 }
 
-function WordEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTemplate, onSaved }) {
-  const editorRef = useRef(null)
-  const design = doc.design || { accent: '#1A73E8', paperBg: '#ffffff', pageBg: '#e8ece8' }
-  const pageWidthPx = inferTemplatePageWidth('word', doc.html, design)
+function NativeFileEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTemplate, onSaved }) {
+  const defaultName = (doc.fileName || `${doc.type} layout`).replace(/\.(docx|xlsx|xlsm)$/i, '')
+
   const save = useSaveFlow(
     doc,
     saveTemplate,
     () => ({
-      type: 'word',
+      type: doc.type,
       sourceFileName: doc.fileName,
-      html: editorRef.current?.innerHTML || doc.html,
-      design
+      fileId: doc.fileId,
+      mapping: doc.mapping,
+      html: doc.html,
+      pages: doc.pages?.length > 1 ? doc.pages : undefined,
+      sheets: doc.sheets,
+      activeSheet: doc.activeSheet,
+      design: layoutDesignOnly(doc.design)
     }),
     onSaved
   )
 
+  const excelFallback = doc.type === 'excel' ? (
+    <ExcelEditor
+      embedded
+      doc={doc}
+      onChange={onChange}
+    />
+  ) : null
+
+  return (
+    <main className="min-h-screen bg-[#e8ece8] text-ink">
+      <nav className="sticky top-0 z-10 border-b border-sand bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-6">
+          <Brand />
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={onBack} className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100">Upload another</button>
+            <button onClick={onHome} className="rounded-lg border border-sand px-3 py-2 text-sm font-medium text-moss">Quotations</button>
+          </div>
+        </div>
+        <SaveTemplateBar
+          onSaveTemplate={() => save.setModal(true)}
+          saving={save.saving}
+          hint={formatMappingHint(doc.mapping)}
+        />
+      </nav>
+
+      <div className="mx-auto max-w-[1600px] px-3 py-5 sm:px-6">
+        {doc.warnings?.length > 0 && (
+          <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Opened with minor conversion notes ({doc.warnings.length}). Layout preview uses your original file.
+          </p>
+        )}
+        <NativeDocumentEditor doc={doc} excelFallback={excelFallback} />
+      </div>
+
+      <SaveTemplateModal
+        open={save.modal}
+        defaultName={suggestedName || defaultName}
+        onClose={() => save.setModal(false)}
+        onConfirm={save.confirm}
+        saving={save.saving}
+        error={save.error}
+      />
+    </main>
+  )
+}
+
+function WordPageStack({
+  pages,
+  design,
+  pageWidthPx,
+  pageHeightPx,
+  pageRefs,
+  editable = true,
+  onInput,
+  onBlur,
+  onClick
+}) {
+  const paperStyle = templatePaperStyle(design, pageWidthPx)
+  if (pageHeightPx) paperStyle.minHeight = `${Math.round(pageHeightPx)}px`
+
+  return (
+    <div className="upload-word-stack">
+      {pages.map((_, pageIndex) => (
+        <div key={pageIndex} className="upload-word-stack-item">
+          {pages.length > 1 && (
+            <div className="upload-word-page-label">Page {pageIndex + 1} of {pages.length}</div>
+          )}
+          <article className="upload-word-page shadow-soft" style={paperStyle}>
+            <div
+              ref={(el) => { pageRefs.current[pageIndex] = el }}
+              className="upload-word-editor outline-none"
+              contentEditable={editable}
+              suppressContentEditableWarning
+              onInput={onInput}
+              onBlur={onBlur}
+              onClick={onClick}
+            />
+          </article>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function WordEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTemplate, onSaved }) {
+  const pageRefs = useRef([])
+  const design = doc.design || {}
+  const pages = doc.pages?.length ? doc.pages : splitWordHtmlPages(doc.html || '')
+  const pageWidthPx = inferTemplatePageWidth('word', doc.html, design)
+  const pageHeightPx = Number(design.pageHeightPx) || null
+  const save = useSaveFlow(
+    doc,
+    saveTemplate,
+    () => {
+      const nextPages = pageRefs.current.map(el => el?.innerHTML || '')
+      const html = joinWordHtmlPages(nextPages)
+      return {
+        type: 'word',
+        sourceFileName: doc.fileName,
+        html,
+        pages: nextPages.length > 1 ? nextPages : undefined,
+        design: layoutDesignOnly(design)
+      }
+    },
+    onSaved
+  )
+
   useEffect(() => {
-    if (editorRef.current) editorRef.current.innerHTML = doc.html
+    pages.forEach((html, i) => {
+      const el = pageRefs.current[i]
+      if (el) el.innerHTML = html
+    })
   }, [doc.fileName])
 
   const sync = () => {
-    if (editorRef.current) onChange({ ...doc, html: editorRef.current.innerHTML })
+    const nextPages = pageRefs.current.map(el => el?.innerHTML || '')
+    onChange({
+      ...doc,
+      pages: nextPages.length > 1 ? nextPages : undefined,
+      html: joinWordHtmlPages(nextPages)
+    })
   }
 
   const exec = (cmd, value = null) => {
     document.execCommand(cmd, false, value)
-    editorRef.current?.focus()
+    pageRefs.current.find(el => el?.contains(document.getSelection()?.anchorNode))?.focus()
+      || pageRefs.current[0]?.focus()
     sync()
-  }
-
-  const applyAccentToSelection = () => {
-    document.execCommand('foreColor', false, design.accent)
-    sync()
-  }
-
-  const updateDesign = (d) => {
-    const html = editorRef.current?.innerHTML || doc.html
-    onChange({ ...doc, html, design: d })
   }
 
   return (
-    <main className="min-h-screen text-ink" style={{ background: design.pageBg || '#e8ece8' }}>
+    <main className="min-h-screen bg-[#e8ece8] text-ink">
       <nav className="sticky top-0 z-10 border-b border-sand bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-[1100px] flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-6">
           <Brand />
@@ -454,16 +581,9 @@ function WordEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTem
           <span className="mx-1 h-5 w-px bg-sand" />
           <ToolbarBtn label="• List" onClick={() => exec('insertUnorderedList')} />
           <ToolbarBtn label="1. List" onClick={() => exec('insertOrderedList')} />
-          <span className="mx-1 h-5 w-px bg-sand" />
-          <ToolbarBtn label="Accent text" onClick={applyAccentToSelection} />
           <span className="ml-auto text-xs text-slate-400">{doc.fileName}</span>
         </div>
-        <DesignBar
-          design={design}
-          onChange={updateDesign}
-          onSaveTemplate={() => save.setModal(true)}
-          saving={save.saving}
-        />
+        <SaveTemplateBar onSaveTemplate={() => save.setModal(true)} saving={save.saving} />
       </nav>
 
       <div className="mx-auto overflow-x-auto px-3 py-6 sm:px-6" style={{ width: 'fit-content', maxWidth: '100%' }}>
@@ -472,25 +592,15 @@ function WordEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTem
             Opened with minor conversion notes ({doc.warnings.length}). Image sizes locked to Word display size.
           </p>
         )}
-        <article
-          className="upload-word-page shadow-soft"
-          style={{
-            background: design.paperBg || '#fff',
-            borderTop: `3px solid ${design.accent || '#1A73E8'}`,
-            width: pageWidthPx,
-            maxWidth: 'none',
-            '--upload-page-width': `${pageWidthPx}px`
-          }}
-        >
-          <div
-            ref={editorRef}
-            className="upload-word-editor outline-none"
-            contentEditable
-            suppressContentEditableWarning
-            onInput={sync}
-            onBlur={sync}
-          />
-        </article>
+        <WordPageStack
+          pages={pages}
+          design={design}
+          pageWidthPx={pageWidthPx}
+          pageHeightPx={pageHeightPx}
+          pageRefs={pageRefs}
+          onInput={sync}
+          onBlur={sync}
+        />
       </div>
 
       <SaveTemplateModal
@@ -519,10 +629,11 @@ function ToolbarBtn({ label, onClick, title, className = '' }) {
   )
 }
 
-function ExcelEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTemplate, onSaved }) {
+function ExcelEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTemplate, onSaved, embedded = false }) {
   const [sheetIndex, setSheetIndex] = useState(0)
-  const design = doc.design || { accent: '#1A73E8', paperBg: '#ffffff', headerBg: '#f7f9f7' }
-  const sheet = doc.sheets[sheetIndex] || doc.sheets[0]
+  const design = doc.design || {}
+  const sheets = Array.isArray(doc.sheets) ? doc.sheets : []
+  const sheet = sheets[sheetIndex] || sheets[0]
 
   const save = useSaveFlow(
     doc,
@@ -530,28 +641,26 @@ function ExcelEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTe
     () => ({
       type: 'excel',
       sourceFileName: doc.fileName,
-      sheets: doc.sheets,
+      fileId: doc.fileId,
+      mapping: doc.mapping,
+      sheets,
       activeSheet: sheetIndex,
-      design
+      design: layoutDesignOnly(design)
     }),
     onSaved
   )
 
-  const updateDesign = (d) => {
-    onChange({ ...doc, design: d })
-  }
-
   const updateCell = (rowIndex, cellIndex, value) => {
-    let sheets = structuredClone(doc.sheets)
-    const cell = sheets[sheetIndex].rows[rowIndex].cells[cellIndex]
+    const nextSheets = structuredClone(sheets)
+    const cell = nextSheets[sheetIndex].rows[rowIndex].cells[cellIndex]
     if (String(value).trim().startsWith('=')) {
       cell.formula = String(value).trim().replace(/^\s*=/, '')
     } else {
       cell.value = value
       cell.formula = null
     }
-    sheets[sheetIndex] = recalculateSheet(sheets[sheetIndex])
-    onChange({ ...doc, sheets })
+    nextSheets[sheetIndex] = recalculateSheet(nextSheets[sheetIndex])
+    onChange({ ...doc, sheets: nextSheets })
   }
 
   if (!sheet) {
@@ -567,47 +676,34 @@ function ExcelEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTe
   const headerText = hf.oddHeader || hf.firstHeader || ''
   const footerText = hf.oddFooter || hf.firstFooter || ''
 
-  return (
-    <main className="min-h-screen text-ink" style={{ background: '#dce3dc' }}>
-      <nav className="sticky top-0 z-10 border-b border-sand bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-6">
-          <Brand />
-          <div className="flex flex-wrap items-center gap-2">
-            <button onClick={onBack} className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100">Upload another</button>
-            <button onClick={onHome} className="rounded-lg border border-sand px-3 py-2 text-sm font-medium text-moss">Quotations</button>
-          </div>
-        </div>
-        <div className="mx-auto flex max-w-[1600px] items-center gap-2 overflow-x-auto border-t border-sand px-4 py-2 sm:px-6">
-          {doc.sheets.map((s, i) => (
-            <button
-              key={`${s.name}-${i}`}
-              type="button"
-              onClick={() => setSheetIndex(i)}
-              className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium ${i === sheetIndex ? 'text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-              style={i === sheetIndex ? { background: design.accent || '#1A73E8' } : undefined}
-            >
-              {s.name}
-            </button>
-          ))}
-          <span className="ml-auto shrink-0 text-xs text-slate-400">{doc.fileName}</span>
-        </div>
-        <DesignBar
-          design={{ ...design, headerBg: design.headerBg || design.accent || '#f7f9f7', pageBg: undefined }}
-          onChange={updateDesign}
-          onSaveTemplate={() => save.setModal(true)}
-          saving={save.saving}
-        />
-      </nav>
+  const sheetTabs = (
+    <div className="flex items-center gap-2 overflow-x-auto border-b border-sand px-4 py-2 sm:px-6">
+      {sheets.map((s, i) => (
+        <button
+          key={`${s.name}-${i}`}
+          type="button"
+          onClick={() => setSheetIndex(i)}
+          className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium ${i === sheetIndex ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+        >
+          {s.name}
+        </button>
+      ))}
+      {!embedded && <span className="ml-auto shrink-0 text-xs text-slate-400">{doc.fileName}</span>}
+    </div>
+  )
 
-      <div className="overflow-auto p-3 sm:p-5">
-        {(headerText || footerText) && (
-          <div className="mb-3 max-w-3xl rounded-lg border border-sand bg-white/80 px-3 py-2 text-xs text-slate-600">
-            {headerText && <p><span className="font-semibold text-slate-500">Header:</span> {headerText}</p>}
-            {footerText && <p className="mt-1"><span className="font-semibold text-slate-500">Footer:</span> {footerText}</p>}
-          </div>
-        )}
+  const gridBody = (
+    <div className={embedded ? '' : 'overflow-auto p-3 sm:p-5'}>
+      {(headerText || footerText) && (
+        <div className="mb-3 max-w-3xl rounded-lg border border-sand bg-white/80 px-3 py-2 text-xs text-slate-600">
+          {headerText && <p><span className="font-semibold text-slate-500">Header:</span> {headerText}</p>}
+          {footerText && <p className="mt-1"><span className="font-semibold text-slate-500">Footer:</span> {footerText}</p>}
+        </div>
+      )}
 
-        <div className="relative inline-block min-w-full rounded-lg shadow-soft" style={{ background: design.paperBg || '#fff' }}>
+      {embedded && sheetTabs}
+
+      <div className="relative inline-block min-w-full rounded-lg shadow-soft bg-white">
           {sheet.images?.map((img) => (
             <img
               key={img.id}
@@ -615,10 +711,10 @@ function ExcelEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTe
               alt=""
               className="upload-excel-float-img pointer-events-none absolute z-[1] object-contain"
               style={{
-                left: 40 + (img.fromCol * 64) + (img.colOff ? img.colOff / 10000 : 0),
-                top: 24 + (img.fromRow * 22) + (img.rowOff ? img.rowOff / 10000 : 0),
-                width: Math.max(40, (img.toCol - img.fromCol + 1) * 64),
-                height: Math.max(24, (img.toRow - img.fromRow + 1) * 22)
+                left: 40 + (img.leftPx ?? ((img.fromCol * 64) + (img.colOff ? img.colOff / 9525 : 0))),
+                top: 24 + (img.topPx ?? ((img.fromRow * 22) + (img.rowOff ? img.rowOff / 9525 : 0))),
+                width: img.widthPx || Math.max(40, (img.toCol - img.fromCol + 1) * 64),
+                height: img.heightPx || Math.max(24, (img.toRow - img.fromRow + 1) * 22)
               }}
             />
           ))}
@@ -631,9 +727,9 @@ function ExcelEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTe
             </colgroup>
             <thead>
               <tr>
-                <th className="upload-excel-corner" style={{ background: design.headerBg || '#f3f4f3' }} />
+                <th className="upload-excel-corner" style={{ background: EXCEL_CHROME_BG }} />
                 {sheet.columns.map((col) => (
-                  <th key={col.index} className="upload-excel-colhead" style={{ background: design.headerBg || '#f3f4f3' }}>
+                  <th key={col.index} className="upload-excel-colhead" style={{ background: EXCEL_CHROME_BG }}>
                     {colLetter(col.index)}
                   </th>
                 ))}
@@ -642,7 +738,7 @@ function ExcelEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTe
             <tbody>
               {sheet.rows.map((row, ri) => (
                 <tr key={row.index} style={{ height: row.heightPx }}>
-                  <th className="upload-excel-rowhead" style={{ background: design.headerBg || '#f3f4f3' }}>{row.index}</th>
+                  <th className="upload-excel-rowhead" style={{ background: EXCEL_CHROME_BG }}>{row.index}</th>
                   {row.cells.map((cell, ci) => {
                     const css = styleToCss(cell.style)
                     return (
@@ -656,21 +752,12 @@ function ExcelEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTe
                           minWidth: sheet.columns[cell.col - 1]?.widthPx || 80,
                           height: row.heightPx
                         }}
-                        className="upload-excel-cell"
+                        className={`upload-excel-cell${cell.style?.hasOwnBorder ? '' : ' upload-excel-cell--grid'}`}
                       >
                         <input
                           value={cell.value}
                           onChange={(e) => updateCell(ri, ci, e.target.value)}
                           className="upload-excel-input"
-                          style={{
-                            fontFamily: css.fontFamily,
-                            fontSize: css.fontSize,
-                            fontWeight: css.fontWeight,
-                            fontStyle: css.fontStyle,
-                            textDecoration: css.textDecoration,
-                            color: css.color,
-                            textAlign: css.textAlign || 'left'
-                          }}
                         />
                       </td>
                     )
@@ -681,7 +768,38 @@ function ExcelEditor({ doc, suggestedName = '', onBack, onHome, onChange, saveTe
           </table>
         </div>
         <p className="mt-2 text-xs text-slate-500">Formulas are preserved (hover a cell to see them). Simple SUM / AVERAGE / PRODUCT recalculate when you edit.</p>
-      </div>
+    </div>
+  )
+
+  if (embedded) return gridBody
+
+  return (
+    <main className="min-h-screen text-ink" style={{ background: '#dce3dc' }}>
+      <nav className="sticky top-0 z-10 border-b border-sand bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-6">
+          <Brand />
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={onBack} className="rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100">Upload another</button>
+            <button onClick={onHome} className="rounded-lg border border-sand px-3 py-2 text-sm font-medium text-moss">Quotations</button>
+          </div>
+        </div>
+        <div className="mx-auto flex max-w-[1600px] items-center gap-2 overflow-x-auto border-t border-sand px-4 py-2 sm:px-6">
+          {sheets.map((s, i) => (
+            <button
+              key={`${s.name}-${i}`}
+              type="button"
+              onClick={() => setSheetIndex(i)}
+              className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium ${i === sheetIndex ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+            >
+              {s.name}
+            </button>
+          ))}
+          <span className="ml-auto shrink-0 text-xs text-slate-400">{doc.fileName}</span>
+        </div>
+        <SaveTemplateBar onSaveTemplate={() => save.setModal(true)} saving={save.saving} />
+      </nav>
+
+      {gridBody}
 
       <SaveTemplateModal
         open={save.modal}

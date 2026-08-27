@@ -82,24 +82,64 @@ function clampText(text) {
   return `${cleaned.slice(0, MAX_TEXT_CHARS)}\n\n…[truncated]`
 }
 
+function extractEmbeddedJpegs(buffer, { maxImages = 8, minBytes = 24000 } = {}) {
+  const bytes = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer)
+  const images = []
+  let i = 0
+  while (i < bytes.length - 1 && images.length < maxImages) {
+    if (bytes[i] !== 0xff || bytes[i + 1] !== 0xd8) {
+      i += 1
+      continue
+    }
+    let j = i + 2
+    while (j < bytes.length - 1 && !(bytes[j] === 0xff && bytes[j + 1] === 0xd9)) j += 1
+    if (j >= bytes.length - 1) break
+    const slice = bytes.subarray(i, j + 2)
+    if (slice.length >= minBytes) images.push(Buffer.from(slice))
+    i = j + 2
+  }
+  return images
+}
+
 async function extractPdf(buffer) {
   const { PDFParse } = await import('pdf-parse')
   const parser = new PDFParse({ data: new Uint8Array(buffer) })
+  let text = ''
+  let pages = null
   try {
     const result = await parser.getText()
-    const text = clampText(result?.text || '')
-    const pages = Array.isArray(result?.pages) ? result.pages.length : null
-    return {
-      text,
-      meta: {
-        extractor: 'pdf-parse',
-        pages: pages ?? result?.total ?? null,
-        charCount: text.length
-      }
-    }
+    text = clampText(result?.text || '')
+    pages = Array.isArray(result?.pages) ? result.pages.length : (result?.total ?? null)
   } finally {
     try { await parser.destroy?.() } catch { /* ignore */ }
   }
+
+  if (text.length >= 40) {
+    return { text, meta: { extractor: 'pdf-parse', pages, charCount: text.length } }
+  }
+
+  const images = extractEmbeddedJpegs(buffer)
+  if (!images.length) {
+    return { text, meta: { extractor: 'pdf-parse', pages, charCount: text.length } }
+  }
+
+  const parts = []
+  for (const image of images) {
+    try {
+      const ocr = await extractImageOcr(image, 'image/jpeg')
+      if (ocr?.text?.trim()) parts.push(ocr.text)
+    } catch (error) {
+      console.warn('[ocr] pdf page image skipped', error?.message || error)
+    }
+  }
+  const ocrText = clampText(parts.join('\n\n'))
+  if (ocrText.length > text.length) {
+    return {
+      text: ocrText,
+      meta: { extractor: 'pdf-embedded-ocr', pages: images.length, charCount: ocrText.length }
+    }
+  }
+  return { text, meta: { extractor: 'pdf-parse', pages, charCount: text.length } }
 }
 
 async function extractWord(buffer) {
@@ -171,15 +211,58 @@ function extractCsvOrText(buffer, kind) {
   }
 }
 
-async function extractImageOcr(buffer, mime) {
+function openaiVisionClient() {
+  if (!process.env.OPENAI_API_KEY) return null
+  return import('openai').then(({ default: OpenAI }) => {
+    const baseURL = process.env.OPENAI_BASE_URL
+    return new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      ...(baseURL ? { baseURL } : {}),
+      ...(baseURL?.includes('openrouter.ai') ? {
+        defaultHeaders: {
+          'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'http://localhost:5173',
+          'X-Title': process.env.OPENROUTER_SITE_NAME || 'QuoteGen'
+        }
+      } : {})
+    })
+  })
+}
+
+async function extractImageVision(buffer, mime) {
+  const client = await openaiVisionClient()
+  if (!client) return null
+  const type = /^image\//i.test(mime || '') ? mime : 'image/jpeg'
+  const model = process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini'
+  const response = await client.chat.completions.create({
+    model,
+    max_tokens: 4000,
+    temperature: 0,
+    messages: [{
+      role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: 'Transcribe every readable word from this enquiry photo, including handwriting, stamps, and table cells. Preserve line breaks, quantities, units, HSN codes, and item lists. Output plain text only — no commentary.'
+        },
+        {
+          type: 'image_url',
+          image_url: { url: `data:${type};base64,${buffer.toString('base64')}` }
+        }
+      ]
+    }]
+  })
+  const text = clampText(response.choices?.[0]?.message?.content || '')
+  if (!text || /^sorry|^i (can'?t|cannot)|^unable/i.test(text)) return null
+  return {
+    text,
+    meta: { extractor: 'openai-vision', mime: type, model, charCount: text.length }
+  }
+}
+
+async function extractImageTesseract(buffer, mime) {
   const workDir = tessWorkDir()
   const trainedData = path.join(workDir, 'eng.traineddata')
-  if (!existsSync(trainedData)) {
-    const err = new Error('OCR is unavailable (eng.traineddata missing). Upload PDF/Word/Excel/CSV/text instead.')
-    err.code = 'OCR_UNAVAILABLE'
-    err.status = 400
-    throw err
-  }
+  if (!existsSync(trainedData)) return null
   const { createWorker } = await import('tesseract.js')
   const worker = await createWorker('eng', 1, {
     langPath: workDir,
@@ -188,8 +271,10 @@ async function extractImageOcr(buffer, mime) {
     logger: () => {}
   })
   try {
+    await worker.setParameters({ tessedit_pageseg_mode: '6' })
     const { data } = await worker.recognize(buffer)
     const text = clampText(data?.text || '')
+    if (!text) return null
     return {
       text,
       meta: {
@@ -202,6 +287,21 @@ async function extractImageOcr(buffer, mime) {
   } finally {
     try { await worker.terminate() } catch { /* ignore */ }
   }
+}
+
+async function extractImageOcr(buffer, mime) {
+  try {
+    const vision = await extractImageVision(buffer, mime)
+    if (vision?.text?.trim()) return vision
+  } catch (error) {
+    console.warn('[ocr] vision skipped', error?.message || error)
+  }
+  const local = await extractImageTesseract(buffer, mime)
+  if (local?.text?.trim()) return local
+  const err = new Error('Could not read text from this image. Try a clearer photo of the enquiry.')
+  err.code = 'EMPTY_EXTRACTION'
+  err.status = 422
+  throw err
 }
 
 /**
@@ -252,7 +352,11 @@ export async function extractKnowledgeText(file) {
   }
 
   if (!extracted.text?.trim()) {
-    const err = new Error('No text could be extracted from this file.')
+    const err = new Error(
+      kind === 'pdf'
+        ? 'This PDF has no selectable text (likely a scan). Photograph the pages or export them as images so OCR can read them.'
+        : 'No text could be extracted from this file.'
+    )
     err.status = 422
     err.code = 'EMPTY_EXTRACTION'
     throw err

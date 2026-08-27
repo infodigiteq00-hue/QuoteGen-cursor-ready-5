@@ -16,7 +16,7 @@
  * than being looked up by id — there is no way to ask this route for somebody
  * else's quotation.
  */
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -59,9 +59,22 @@ function mmToPx(mm) {
   return Math.max(1, Math.round(Number(mm) * 96 / 25.4))
 }
 
+function findChromeOnPath() {
+  if (process.platform === 'win32') return null
+  for (const name of ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable', 'chrome']) {
+    try {
+      const found = execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+      if (found && existsSync(found)) return found
+    } catch {
+      /* not installed under this name */
+    }
+  }
+  return null
+}
+
 /** Path of the first Chrome/Chromium that actually exists on this machine. */
 export function findChrome() {
-  return CHROME_CANDIDATES.find(path => existsSync(path)) || null
+  return CHROME_CANDIDATES.find(path => existsSync(path)) || findChromeOnPath() || null
 }
 
 /** Keep a client-supplied name usable as a download filename. */
@@ -126,35 +139,95 @@ function viewportForPage(size) {
   if (!size) return { width: A4_WIDTH_PX, height: A4_HEIGHT_PX, deviceScaleFactor: 1 }
   const width = Math.max(A4_WIDTH_PX, mmToPx(size.widthMm))
   const height = Math.max(A4_HEIGHT_PX, mmToPx(size.heightMm))
-  /* Portrait sheet: keep the window taller than wide. A landscape 800×600
-     default window is what made Chromium stamp /Rotate 90. */
   if (size.widthMm <= size.heightMm) {
     return { width, height: Math.max(height, width + 1), deviceScaleFactor: 1 }
   }
   return { width, height, deviceScaleFactor: 1 }
 }
 
-/** Last-wins CSS so screen-fit zoom cannot leak into print, and Linux
- * Chromium is told not to rotate a wide sheet onto a portrait MediaBox. */
+/** Last-wins CSS: lock each studio sheet to one A4 page (same as live preview). */
 function withUprightPageCss(html, size) {
   const sizeDecl = size
     ? `size: ${size.widthMm}mm ${size.heightMm}mm !important;`
     : 'size: 210mm 297mm !important;'
   const css = `<style data-qg-pdf-orientation>
-html, body { zoom: 1 !important; transform: none !important; }
-.qg-studio-canvas { container-type: normal !important; overflow: visible !important; padding: 0 !important; }
-.qg-studio-paper-frame, .qg-studio-paper, .quote-paper, .upload-word-page {
+html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; zoom: 1 !important; transform: none !important; }
+.qg-studio-canvas { container-type: normal !important; overflow: visible !important; padding: 0 !important; background: #fff !important; }
+.qg-studio-paper-frame {
   zoom: 1 !important;
   transform: none !important;
+  gap: 0 !important;
+  width: 210mm !important;
+  max-width: 210mm !important;
+}
+.qg-studio-paper {
+  zoom: 1 !important;
+  transform: none !important;
+  width: 210mm !important;
+  height: 297mm !important;
+  min-height: 297mm !important;
+  max-height: 297mm !important;
+  overflow: hidden !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  page-break-after: always !important;
+  break-after: page !important;
+  page-break-inside: avoid !important;
+  break-inside: avoid !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+.qg-studio-paper:last-child {
+  page-break-after: auto !important;
+  break-after: auto !important;
+}
+.qg-paper-plate,
+.qg-page-section,
+[data-qg-block="closing"] {
+  display: flex !important;
+  flex-direction: column !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
+[data-qg-block="closing"] > .qg-footer-image-wrap {
+  margin-top: auto !important;
+  margin-bottom: 0 !important;
+  flex: 0 0 auto !important;
+}
+.qg-footer-image,
+img.qg-footer-image {
+  object-fit: contain !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-height: none !important;
+}
+img {
+  object-fit: contain !important;
+  image-rendering: auto !important;
+}
+input, textarea, select, .qg-inline-field {
+  overflow: visible !important;
+  height: auto !important;
+  min-height: 1.45em !important;
+  line-height: 1.45 !important;
+  -webkit-appearance: none !important;
+  appearance: none !important;
 }
 @page { ${sizeDecl} margin: 0 !important; page-orientation: upright !important; }
 @page qg-studio { ${sizeDecl} margin: 0 !important; page-orientation: upright !important; }
 @media print {
   @page { ${sizeDecl} margin: 0 !important; page-orientation: upright !important; }
   @page qg-studio { ${sizeDecl} margin: 0 !important; page-orientation: upright !important; }
-  .qg-studio-paper-frame, .qg-studio-paper, .quote-paper, .upload-word-page {
-    zoom: 1 !important;
-    transform: none !important;
+  .qg-studio-paper {
+    width: 210mm !important;
+    height: 297mm !important;
+    min-height: 297mm !important;
+    max-height: 297mm !important;
+    overflow: hidden !important;
+  }
+  [data-qg-block="closing"] > .qg-footer-image-wrap {
+    margin-top: auto !important;
   }
 }
 </style>`
@@ -176,37 +249,18 @@ function assertPdf(bytes) {
  * content stream is already upright, so clearing it restores the sheet.
  */
 function normalizePdfRotation(pdf) {
-  let latin1 = Buffer.from(pdf).toString('latin1')
-  const original = latin1
-  const hadSideways = /\/Rotate\s+(?:90|270)\b/.test(latin1)
-  latin1 = latin1.replace(/\/Rotate\s+(?:90|180|270)(?:\.\d+)?\b/g, '/Rotate 0')
-  /* Chromium often pairs /Rotate 90 with a portrait MediaBox. After clearing
-     rotate, swap the box so a wide sheet stays a wide sheet, upright. */
-  if (hadSideways) {
-    latin1 = latin1.replace(/\/MediaBox\s*\[\s*([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s*\]/g, (full, x0, y0, x1, y1) => {
-      const left = Number(x0)
-      const bottom = Number(y0)
-      const w = Number(x1) - left
-      const h = Number(y1) - bottom
-      if (!(w > 0 && h > 0) || w >= h) return full
-      return `/MediaBox [ ${x0} ${y0} ${left + h} ${bottom + w} ]`
-    })
-  }
-  if (latin1 === original) return Buffer.from(pdf)
-  return Buffer.from(latin1, 'latin1')
+  const latin1 = Buffer.from(pdf).toString('latin1')
+  const next = latin1.replace(/\/Rotate\s+(?:90|180|270)(?:\.\d+)?\b/g, '/Rotate 0')
+  if (next === latin1) return Buffer.from(pdf)
+  return Buffer.from(next, 'latin1')
 }
 
-function pdfOptionsFor(timeoutMs, size) {
-  const widthMm = size?.widthMm || 210
-  const heightMm = size?.heightMm || 297
+function pdfOptionsFor(timeoutMs) {
   return {
     printBackground: true,
-    preferCSSPageSize: false,
+    preferCSSPageSize: true,
     landscape: false,
-    width: `${widthMm}mm`,
-    height: `${heightMm}mm`,
     margin: { top: 0, right: 0, bottom: 0, left: 0 },
-    scale: 1,
     timeout: timeoutMs
   }
 }
@@ -246,13 +300,13 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
   if (!executablePath) {
     try {
       chromium = (await import('@sparticuz/chromium')).default
-      chromium.setGraphicsMode = false
+      try { chromium.setGraphicsMode = false } catch { /* older builds */ }
       executablePath = await chromium.executablePath()
       args = [...chromium.args]
-      headless = chromium.headless ?? true
-    } catch {
+      headless = true
+    } catch (error) {
       throw pdfError(
-        'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
+        `No Chrome or Chromium was found on the server (${error?.message || 'CHROME_MISSING'}).`,
         'CHROME_MISSING',
         503
       )
@@ -267,19 +321,25 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
     '--font-render-hinting=none',
     '--hide-scrollbars'
   ]
-  const browser = await puppeteer.default.launch({
-    args,
-    defaultViewport: viewport,
-    executablePath,
-    headless
-  })
+  let browser
+  try {
+    browser = await puppeteer.default.launch({
+      args,
+      defaultViewport: viewport,
+      executablePath,
+      headless: 'shell',
+      protocolTimeout: timeoutMs + 10_000
+    })
+  } catch (error) {
+    throw pdfError(`Could not start Chrome: ${error.message}`, 'CHROME_SPAWN_FAILED', 503)
+  }
   try {
     const page = await browser.newPage()
     page.setDefaultTimeout(timeoutMs)
     await page.setViewport(viewport)
-    await page.setContent(html, { waitUntil: 'load', timeout: timeoutMs })
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: timeoutMs })
     await page.emulateMediaType('print')
-    const pdf = await page.pdf(pdfOptionsFor(timeoutMs, size))
+    const pdf = await page.pdf(pdfOptionsFor(timeoutMs))
     return assertPdf(Buffer.from(pdf))
   } finally {
     await browser.close().catch(() => {})
@@ -327,9 +387,9 @@ async function renderHtmlToPdfWithSpawn(html, timeoutMs, binary) {
 }
 
 function usePuppeteerPrint(binary) {
-  if (process.env.VERCEL || process.env.RAILWAY_ENVIRONMENT) return true
-  if (process.platform === 'linux') return true
-  return !binary
+  // Puppeteer CDP print is reliable on macOS/Linux; CLI --print-to-pdf often hangs.
+  if (process.env.PDF_USE_SPAWN === '1' && binary) return false
+  return true
 }
 
 /**
@@ -343,21 +403,29 @@ export async function renderHtmlToPdf(html, { timeoutMs = RENDER_TIMEOUT_MS } = 
   const prepared = withUprightPageCss(html, size)
 
   let pdf
-  if (usePuppeteerPrint(binary)) {
-    try {
-      pdf = await renderHtmlToPdfWithPuppeteer(prepared, timeoutMs, binary)
-    } catch (error) {
-      if (!binary || error?.code === 'CHROME_MISSING') throw error
+  try {
+    if (usePuppeteerPrint(binary)) {
+      try {
+        pdf = await renderHtmlToPdfWithPuppeteer(prepared, timeoutMs, binary)
+      } catch (error) {
+        if (binary && error?.code !== 'CHROME_MISSING') {
+          pdf = await renderHtmlToPdfWithSpawn(prepared, timeoutMs, binary)
+        } else {
+          throw error
+        }
+      }
+    } else if (binary) {
       pdf = await renderHtmlToPdfWithSpawn(prepared, timeoutMs, binary)
+    } else {
+      throw pdfError(
+        'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
+        'CHROME_MISSING',
+        503
+      )
     }
-  } else if (binary) {
-    pdf = await renderHtmlToPdfWithSpawn(prepared, timeoutMs, binary)
-  } else {
-    throw pdfError(
-      'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
-      'CHROME_MISSING',
-      503
-    )
+  } catch (error) {
+    if (error?.code) throw error
+    throw pdfError(`Could not render PDF: ${error?.message || error}`, 'CHROME_LAUNCH_FAILED', 503)
   }
   return normalizePdfRotation(pdf)
 }

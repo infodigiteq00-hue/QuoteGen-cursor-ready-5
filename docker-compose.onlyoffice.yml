@@ -1,0 +1,11 @@
+# Full-fidelity Word/Excel editing — same engine class as Google Docs / Collabora.
+# After starting: set ONLYOFFICE_URL=http://localhost:8080 and PUBLIC_API_URL=http://host.docker.internal:3001
+services:
+  onlyoffice:
+    image: onlyoffice/documentserver:8.2.2
+    ports:
+      - "8080:80"
+    environment:
+      - JWT_ENABLED=false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

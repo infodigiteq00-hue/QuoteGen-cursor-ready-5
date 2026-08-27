@@ -26,7 +26,7 @@ import {
   withColumnKeys,
   withoutColumnKeys
 } from '../shared/quoteColumns.js'
-import { cellValueForField, fillWordLineItems, mapHeaderToField } from '../shared/templateMap.js'
+import { cellValueForField, fillExcelTemplate, fillWordLineItems, fillWordTemplate, mapHeaderToField } from '../shared/templateMap.js'
 
 let pass = 0
 let fail = 0
@@ -415,6 +415,42 @@ test('CGST + SGST split (two tax columns) both use the same taxable base', () =>
   assert.equal(computeRowTotals(row, cols).total, 1062)
 })
 
+test('stale tax ₹ left over from 10% does not stick after the user types 18%', () => {
+  const row = recalcRow({
+    quantity: '2', rate: '100',
+    [rateKey(disc)]: '10', [sourceKey(disc)]: 'rate', [amountKey(disc)]: '20.00',
+    [rateKey(cgst)]: '18', [sourceKey(cgst)]: 'amount', [amountKey(cgst)]: '18.00'
+  }, bothCols)
+  assert.equal(row.amount, '200.00')
+  assert.equal(row[amountKey(disc)], '20.00')
+  assert.equal(row[rateKey(cgst)], '18')
+  assert.equal(row[amountKey(cgst)], '32.40', '18% of 180, not leftover ₹18')
+  const t = computeRowTotals(row, bothCols)
+  assert.equal(t.taxable, 180)
+  assert.equal(t.tax, 32.4)
+  assert.equal(t.total, 212.4)
+})
+
+test('amount-mode discount rupees reduce the percent-tax base', () => {
+  const discAmt = { id: 'disc', label: 'Discount', type: 'discount', mode: 'amount' }
+  const cols = [...baseCols, discAmt, cgst]
+  const row = recalcRow({
+    quantity: '2', rate: '100',
+    disc: '20',
+    [rateKey(cgst)]: '18', [sourceKey(cgst)]: 'rate'
+  }, cols)
+  assert.equal(row.amount, '200.00')
+  assert.equal(row.disc, '20')
+  assert.equal(row[amountKey(cgst)], '32.40', '18% of 180, not of 200')
+  const t = computeRowTotals(row, cols)
+  assert.equal(t.taxable, 180)
+  assert.equal(t.tax, 32.4)
+  assert.equal(t.total, 212.4)
+  const q = computeQuoteTotals([row], cols)
+  assert.equal(q.perColumn.find(e => e.id === 'disc').amount, 20)
+  assert.equal(q.grandTotal, 212.4)
+})
+
 // ---------------------------------------------------------------------------
 group('Quote totals footer')
 
@@ -482,6 +518,74 @@ test('omitting extra lines leaves existing totals unchanged', () => {
   assert.equal(t.grandTotal, 1000)
   assert.equal(t.extraLess, 0)
   assert.equal(t.extraAdd, 0)
+})
+
+test('grand total is line totals plus extras with no leftover paise', () => {
+  const items = recalcAllRows([
+    { quantity: '2', rate: '100', [rateKey(disc)]: '10', [sourceKey(disc)]: 'rate', [rateKey(cgst)]: '18', [sourceKey(cgst)]: 'rate' },
+    { quantity: '1', rate: '50', [rateKey(disc)]: '10', [sourceKey(disc)]: 'rate', [rateKey(cgst)]: '18', [sourceKey(cgst)]: 'rate' }
+  ], bothCols)
+  const t = computeQuoteTotals(items, bothCols, [
+    { id: 'f1', label: 'Freight', kind: 'add', amount: '75' },
+    { id: 'd1', label: 'Bulk discount', kind: 'less', amount: '25' }
+  ])
+  const lineSum = items.reduce((sum, row) => sum + computeRowTotals(row, bothCols).total, 0)
+  assert.equal(t.extraBase, lineSum)
+  assert.equal(t.freightTotal, 75)
+  assert.equal(t.extraAdd, 75)
+  assert.equal(t.extraLess, 25)
+  assert.equal(t.grandTotal, lineSum + 75 - 25)
+  const discCol = t.perColumn.filter(e => e.type === 'discount').reduce((sum, e) => sum + e.amount, 0)
+  assert.equal(discCol, t.discountTotal)
+})
+
+test('combined row discounts from two columns add into one discount total', () => {
+  const trade = { id: 'trade', label: 'Trade disc', type: 'discount', mode: 'amount' }
+  const cols = [...baseCols, disc, trade, cgst]
+  const row = recalcRow({
+    quantity: '2', rate: '100',
+    [rateKey(disc)]: '10', [sourceKey(disc)]: 'rate',
+    trade: '5',
+    [rateKey(cgst)]: '18', [sourceKey(cgst)]: 'rate'
+  }, cols)
+  const t = computeQuoteTotals([row], cols)
+  assert.equal(t.subtotal, 200)
+  assert.equal(t.discountTotal, 25)
+  assert.equal(t.taxableTotal, 175)
+  assert.equal(t.taxTotal, 31.5)
+  assert.equal(t.grandTotal, 206.5)
+})
+
+test('over-discount on one row does not steal taxable value from the next', () => {
+  const cols = [...baseCols, disc]
+  const items = recalcAllRows([
+    { amount: '100', [amountKey(disc)]: '500', [sourceKey(disc)]: 'amount' },
+    { amount: '100', [rateKey(disc)]: '0', [sourceKey(disc)]: 'rate' }
+  ], cols)
+  const t = computeQuoteTotals(items, cols)
+  assert.equal(t.subtotal, 200)
+  assert.equal(t.taxableTotal, 100)
+  assert.equal(t.grandTotal, 100)
+})
+
+test('lump-sum GST extra line applies at summary when there is no tax column', () => {
+  const t = computeQuoteTotals([{ amount: '1000' }], baseCols, [
+    { id: 'gst', label: 'GST', kind: 'add', amount: '18', unit: 'percent' }
+  ])
+  assert.equal(t.taxTotal, 0)
+  assert.equal(t.extraBase, 1000)
+  assert.equal(t.extraAdd, 180)
+  assert.equal(t.grandTotal, 1180)
+})
+
+test('freight extra is added after line totals', () => {
+  const items = recalcAllRows([{ amount: '1000', [rateKey(cgst)]: '18', [sourceKey(cgst)]: 'rate' }], taxCols)
+  const t = computeQuoteTotals(items, taxCols, [
+    { id: 'f1', label: 'Freight', kind: 'add', amount: '50' }
+  ])
+  assert.equal(t.extraBase, 1180)
+  assert.equal(t.freightTotal, 50)
+  assert.equal(t.grandTotal, 1230)
 })
 
 // ---------------------------------------------------------------------------
@@ -629,6 +733,19 @@ test('image column yields no stray text in a spreadsheet cell', () => {
   assert.equal(cellValueForField({ photo: 'https://cdn/x.png' }, 'photo', 0, richCols), '')
 })
 
+test('uploaded template freight and grand total include extra freight', () => {
+  const html = '<table><tr><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr><tr><td>x</td><td>1</td><td>10</td><td>10</td></tr><tr><td>Sub Total</td><td></td><td></td><td>10</td></tr><tr><td>Freight</td><td></td><td></td><td>1</td></tr><tr><td>Grand Total</td><td></td><td></td><td>11</td></tr></table>'
+  const items = recalcAllRows([{ description: 'Widget', quantity: '4', rate: '250' }], baseCols)
+  const t = computeQuoteTotals(items, baseCols, [{ id: 'f1', label: 'Freight', kind: 'add', amount: '50' }])
+  assert.equal(t.subtotal, 1000)
+  assert.equal(t.freightTotal, 50)
+  assert.equal(t.grandTotal, 1050)
+  const out = fillWordLineItems(html, { items }, baseCols, t)
+  assert.match(out, /1,000\.00/)
+  assert.match(out, /50\.00/)
+  assert.match(out, /1,050\.00/)
+})
+
 test('Word template renders an <img> for an image column and tints a highlight column', () => {
   const html = '<table><tr><th>Description</th><th>Photo</th><th>Urgent</th></tr><tr><td>x</td><td>y</td><td>z</td></tr></table>'
   const out = fillWordLineItems(html, {
@@ -637,6 +754,56 @@ test('Word template renders an <img> for an image column and tints a highlight c
   assert.ok(/<img src="https:\/\/cdn\/x.png"[^>]*width="140"/.test(out), 'image cell renders at the configured width')
   assert.ok(/background-color:#ffe3e3/.test(out), 'highlight colour is applied')
   assert.ok(/print-color-adjust:exact/.test(out), 'highlight prints in colour')
+})
+
+test('Word template fills nested tax amounts and extra freight into totals', () => {
+  const html = '<table><tr><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th><th>CGST</th></tr><tr><td>x</td><td>1</td><td>10</td><td>10</td><td>0</td></tr><tr><td>Sub Total</td><td></td><td></td><td>10</td><td></td></tr><tr><td>Freight</td><td></td><td></td><td>0</td><td></td></tr><tr><td>Grand Total</td><td></td><td></td><td>10</td><td></td></tr></table>'
+  const items = recalcAllRows([{
+    description: 'Widget', quantity: '4', rate: '250',
+    [rateKey(cgst)]: '18', [sourceKey(cgst)]: 'rate'
+  }], taxCols)
+  const t = computeQuoteTotals(items, taxCols, [{ id: 'f1', label: 'Freight', kind: 'add', amount: '50' }])
+  assert.equal(t.subtotal, 1000)
+  assert.equal(t.taxTotal, 180)
+  assert.equal(t.freightTotal, 50)
+  assert.equal(t.grandTotal, 1230)
+  const out = fillWordTemplate(html, { items }, taxCols, {}, t)
+  assert.match(out, /1,000\.00/)
+  assert.match(out, /180\.00/)
+  assert.match(out, /50\.00/)
+  assert.match(out, /1,230\.00/)
+})
+
+test('Excel template tints a highlight column and leaves image cells empty', () => {
+  const sheets = [{
+    name: 'Quote',
+    rows: [
+      {
+        index: 1,
+        cells: [
+          { col: 1, value: 'Description' },
+          { col: 2, value: 'Photo' },
+          { col: 3, value: 'Urgent' }
+        ]
+      },
+      {
+        index: 2,
+        cells: [
+          { col: 1, value: 'x' },
+          { col: 2, value: 'y' },
+          { col: 3, value: 'z' }
+        ]
+      }
+    ]
+  }]
+  const filled = fillExcelTemplate(sheets, {
+    items: [{ description: 'Widget', photo: 'https://cdn/x.png', urgent: 'YES' }]
+  }, richCols)
+  const row = filled[0].rows[1]
+  assert.equal(row.cells[0].value, 'Widget')
+  assert.equal(row.cells[1].value, '')
+  assert.equal(row.cells[2].value, 'YES')
+  assert.equal(row.cells[2].style?.backgroundColor, '#ffe3e3')
 })
 
 // ---------------------------------------------------------------------------

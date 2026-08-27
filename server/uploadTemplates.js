@@ -6,10 +6,15 @@ import {
   scrubTransientExcelShell,
   inferTemplatePageWidth,
   pickLineItemsTable,
-  mapHeaderToField,
-  mapHeadersToFields
+  mapHeadersToFields,
+  lineItemHeaderScore,
+  collectWordSlots,
+  collectExcelMapping,
+  applyPlacementRolesToSheets
 } from '../shared/templateMap.js'
+import { joinWordHtmlPages } from '../shared/uploadWordPages.js'
 import { getDataDir } from './runtimeFs.js'
+import { readUploadFileMeta } from './uploadFileStorage.js'
 
 function storePath() {
   return path.join(getDataDir(), 'upload-templates.json')
@@ -39,15 +44,23 @@ function slugify(label) {
   return base || ''
 }
 
-function looksLikeHeaderRow(cells) {
-  const texts = cells.map(c => String(c.value || '').toLowerCase())
-  const hits = texts.filter(t =>
-    /desc|item|particular|qty|quantity|rate|amount|unit|hsn|price|total/.test(t)
-  ).length
-  return hits >= 2
+function findBestLineItemHeader(sheets) {
+  let bestScore = -1
+  let best = null
+  for (const sheet of sheets || []) {
+    for (let i = 0; i < Math.min(sheet.rows?.length || 0, 80); i++) {
+      const labels = (sheet.rows[i].cells || []).map(c => String(c.value || '').trim())
+      const score = lineItemHeaderScore(labels)
+      if (score > bestScore) {
+        bestScore = score
+        best = { labels, cells: sheet.rows[i].cells }
+      }
+    }
+  }
+  return bestScore >= 0 ? best : null
 }
 
-function scrubWordHtml(html) {
+export function scrubWordHtml(html) {
   if (!html) return { html: '<p></p>', mapping: { columns: defaultColumns(), slots: [] } }
 
   const cleaned = scrubTransientWordShell(html)
@@ -65,59 +78,35 @@ function scrubWordHtml(html) {
     html: cleaned,
     mapping: {
       columns: columns.length ? columns : defaultColumns(),
-      slots: [
-        { role: 'quote_number', permanent: false },
-        { role: 'date', permanent: false },
-        { role: 'customer_name', permanent: false },
-        { role: 'customer_company', permanent: false },
-        { role: 'subject', permanent: false },
-        { role: 'line_items', permanent: false },
-        { role: 'total', permanent: false },
-        { role: 'company_block', permanent: true },
-        { role: 'bank_details', permanent: true },
-        { role: 'terms', permanent: true },
-        { role: 'images', permanent: true }
-      ]
+      slots: collectWordSlots(cleaned)
     }
   }
 }
 
-function scrubExcelSheets(sheets) {
+export function scrubExcelSheets(sheets) {
   const cleaned = scrubTransientExcelShell(sheets)
   let columns = defaultColumns()
-  for (const sheet of cleaned) {
-    for (let i = 0; i < Math.min(sheet.rows.length, 40); i++) {
-      if (looksLikeHeaderRow(sheet.rows[i].cells)) {
-        const labels = sheet.rows[i].cells.map(c => String(c.value || '').trim())
-        const ids = mapHeadersToFields(labels, [])
-        columns = sheet.rows[i].cells
-          .map((c, idx) => {
-            const id = ids[idx]
-            if (id === '__sr__') return null
-            return {
-              id: id || slugify(c.value) || `col${idx + 1}`,
-              label: String(c.value || `Column ${idx + 1}`).trim() || `Column ${idx + 1}`
-            }
-          })
-          .filter(Boolean)
-        break
-      }
-    }
+  const header = findBestLineItemHeader(cleaned)
+  if (header) {
+    const ids = mapHeadersToFields(header.labels, [])
+    columns = header.cells
+      .map((c, idx) => {
+        const id = ids[idx]
+        if (id === '__sr__') return null
+        return {
+          id: id || slugify(c.value) || `col${idx + 1}`,
+          label: String(c.value || `Column ${idx + 1}`).trim() || `Column ${idx + 1}`
+        }
+      })
+      .filter(Boolean)
   }
+  const detected = collectExcelMapping(cleaned)
   return {
     sheets: cleaned,
     mapping: {
       columns,
-      slots: [
-        { role: 'line_items', permanent: false },
-        { role: 'quote_number', permanent: false },
-        { role: 'date', permanent: false },
-        { role: 'total', permanent: false },
-        { role: 'formulas', permanent: true },
-        { role: 'header_footer', permanent: true },
-        { role: 'images', permanent: true }
-      ],
-      dynamicCells: []
+      slots: detected.slots,
+      dynamicCells: detected.dynamicCells
     }
   }
 }
@@ -149,6 +138,41 @@ function newId() {
   return `utpl_${randomBytes(6).toString('hex')}`
 }
 
+/** Emails that may claim pre-tenancy templates (no userId). Comma-separated env override. */
+function legacyOwnerEmails() {
+  const raw = process.env.UPLOAD_TEMPLATE_LEGACY_OWNER_EMAILS || 'infodigteq@gmail.com'
+  return raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+}
+
+/**
+ * Older templates had no owner and were shared with every login.
+ * Claim those orphans once for the original company account so new users stay empty.
+ */
+function claimLegacyTemplates(store, userId, userEmail) {
+  if (!userId) return false
+  const email = String(userEmail || '').toLowerCase()
+  if (!legacyOwnerEmails().includes(email)) return false
+  let changed = false
+  for (const tpl of store.templates) {
+    if (!tpl.userId) {
+      tpl.userId = userId
+      changed = true
+    }
+  }
+  return changed
+}
+
+function templatesForCompany(store, userId) {
+  if (!userId) return []
+  return store.templates.filter(t => t.userId === userId)
+}
+
+function findOwnedTemplate(store, id, userId) {
+  const tpl = store.templates.find(t => t.id === id)
+  if (!tpl || tpl.userId !== userId) return null
+  return tpl
+}
+
 function summarize(template) {
   return {
     id: template.id,
@@ -162,21 +186,30 @@ function summarize(template) {
   }
 }
 
+function loadCompanyStore(req) {
+  const store = readStore()
+  if (claimLegacyTemplates(store, req.userId, req.userEmail)) writeStore(store)
+  return store
+}
+
 export function registerUploadTemplateRoutes(app) {
-  app.get('/api/upload-templates', (_req, res) => {
-    const store = readStore()
-    res.json({ templates: store.templates.map(summarize) })
+  app.get('/api/upload-templates', (req, res) => {
+    const store = loadCompanyStore(req)
+    res.json({ templates: templatesForCompany(store, req.userId).map(summarize) })
   })
 
   app.get('/api/upload-templates/:id', (req, res) => {
-    const store = readStore()
-    const tpl = store.templates.find(t => t.id === req.params.id)
+    const store = loadCompanyStore(req)
+    const tpl = findOwnedTemplate(store, req.params.id, req.userId)
     if (!tpl) return res.status(404).json({ error: 'Template not found.' })
     res.json(tpl)
   })
 
   app.post('/api/upload-templates', (req, res) => {
     try {
+      if (!req.userId) {
+        return res.status(401).json({ error: 'Sign in to continue.', code: 'UNAUTHENTICATED' })
+      }
       const body = req.body || {}
       const name = String(body.name || '').trim()
       if (!name) return res.status(400).json({ error: 'Please give this template a name.' })
@@ -188,19 +221,43 @@ export function registerUploadTemplateRoutes(app) {
       let content
       let mapping
 
-      if (body.type === 'word') {
-        const scrubbed = scrubWordHtml(body.html || '')
-        content = { html: scrubbed.html }
-        mapping = scrubbed.mapping
-        design.pageWidthPx = inferTemplatePageWidth('word', scrubbed.html, design)
+      if (body.fileId) {
+        const meta = readUploadFileMeta(body.fileId)
+        if (!meta) return res.status(400).json({ error: 'Uploaded file not found. Please upload again.' })
+        content = { fileId: body.fileId }
+        if (body.type === 'word') {
+          const asIs = String(body.html || '')
+          const pages = Array.isArray(body.pages) && body.pages.length > 1 ? body.pages : null
+          if (pages) content.pages = pages
+          if (asIs) content.html = pages ? joinWordHtmlPages(pages) : asIs
+          const mapped = scrubWordHtml(asIs || '<p></p>')
+          mapping = body.mapping || mapped.mapping
+          design.pageWidthPx = inferTemplatePageWidth('word', asIs, design)
+        } else {
+          const asIs = body.sheets || []
+          if (asIs.length) content.sheets = asIs
+          const mapped = scrubExcelSheets(asIs.length ? asIs : [{ name: 'Sheet1', columns: [], rows: [] }])
+          mapping = body.mapping || mapped.mapping
+          design.pageWidthPx = inferTemplatePageWidth('excel', asIs, design)
+        }
+      } else if (body.type === 'word') {
+        const asIs = String(body.html || '')
+        const pages = Array.isArray(body.pages) && body.pages.length > 1 ? body.pages : null
+        content = pages
+          ? { html: joinWordHtmlPages(pages), pages }
+          : { html: asIs }
+        const mapped = scrubWordHtml(asIs)
+        mapping = mapped.mapping
+        design.pageWidthPx = inferTemplatePageWidth('word', asIs, design)
       } else {
-        const scrubbed = scrubExcelSheets(body.sheets || [])
+        const asIs = body.sheets || []
+        const mapped = scrubExcelSheets(asIs)
         content = {
-          sheets: scrubbed.sheets,
+          sheets: asIs,
           activeSheet: body.activeSheet || 0
         }
-        mapping = scrubbed.mapping
-        design.pageWidthPx = inferTemplatePageWidth('excel', scrubbed.sheets, design)
+        mapping = mapped.mapping
+        design.pageWidthPx = inferTemplatePageWidth('excel', asIs, design)
       }
 
       // Allow client to override columns if provided
@@ -214,6 +271,7 @@ export function registerUploadTemplateRoutes(app) {
       const now = new Date().toISOString()
       const template = {
         id: newId(),
+        userId: req.userId,
         name,
         type: body.type,
         sourceFileName: body.sourceFileName || '',
@@ -224,7 +282,7 @@ export function registerUploadTemplateRoutes(app) {
         mapping
       }
 
-      const store = readStore()
+      const store = loadCompanyStore(req)
       store.templates.unshift(template)
       writeStore(store)
       res.json({ template: summarize(template), full: template })
@@ -235,12 +293,79 @@ export function registerUploadTemplateRoutes(app) {
   })
 
   app.delete('/api/upload-templates/:id', (req, res) => {
-    const store = readStore()
-    const before = store.templates.length
+    const store = loadCompanyStore(req)
+    const tpl = findOwnedTemplate(store, req.params.id, req.userId)
+    if (!tpl) return res.status(404).json({ error: 'Template not found.' })
     store.templates = store.templates.filter(t => t.id !== req.params.id)
-    if (store.templates.length === before) return res.status(404).json({ error: 'Template not found.' })
     writeStore(store)
     res.json({ ok: true })
+  })
+
+  app.patch('/api/upload-templates/:id', (req, res) => {
+    try {
+      const store = loadCompanyStore(req)
+      const idx = store.templates.findIndex(t => t.id === req.params.id && t.userId === req.userId)
+      if (idx < 0) return res.status(404).json({ error: 'Template not found.' })
+      const body = req.body || {}
+      const tpl = store.templates[idx]
+      const mapping = { ...(tpl.mapping || {}) }
+
+      if (body.mapping?.placements && typeof body.mapping.placements === 'object') {
+        mapping.placements = body.mapping.placements
+      }
+      if (Array.isArray(body.mapping?.dynamicCells)) {
+        mapping.dynamicCells = body.mapping.dynamicCells
+      }
+      if (Array.isArray(body.mapping?.slots)) {
+        mapping.slots = body.mapping.slots
+      }
+
+      if (Array.isArray(body.content?.sheets) && body.content.sheets.length) {
+        const scrubbed = scrubExcelSheets(body.content.sheets)
+        tpl.content = {
+          ...(tpl.content || {}),
+          sheets: scrubbed.sheets || body.content.sheets,
+          activeSheet: body.content.activeSheet ?? tpl.content?.activeSheet ?? 0
+        }
+        if (scrubbed.mapping) {
+          if (Array.isArray(scrubbed.mapping.columns)) mapping.columns = scrubbed.mapping.columns
+          if (Array.isArray(scrubbed.mapping.dynamicCells)) mapping.dynamicCells = scrubbed.mapping.dynamicCells
+          if (Array.isArray(scrubbed.mapping.slots)) mapping.slots = scrubbed.mapping.slots
+        }
+      }
+
+      if (typeof body.content?.html === 'string' && body.content.html.trim()) {
+        const html = body.content.html
+        const pages = Array.isArray(body.content.pages) && body.content.pages.length
+          ? body.content.pages
+          : null
+        tpl.content = {
+          ...(tpl.content || {}),
+          html: pages ? joinWordHtmlPages(pages) : html,
+          ...(pages ? { pages } : {})
+        }
+      }
+
+      if (mapping.placements && Array.isArray(tpl.content?.sheets) && tpl.content.sheets.length) {
+        tpl.content = {
+          ...tpl.content,
+          sheets: applyPlacementRolesToSheets(tpl.content.sheets, mapping.placements)
+        }
+        const detected = collectExcelMapping(tpl.content.sheets)
+        mapping.dynamicCells = detected.dynamicCells
+        mapping.slots = detected.slots
+      }
+
+      tpl.mapping = mapping
+      tpl.userId = tpl.userId || req.userId
+      tpl.updatedAt = new Date().toISOString()
+      store.templates[idx] = tpl
+      writeStore(store)
+      res.json({ template: summarize(tpl), full: tpl })
+    } catch (error) {
+      console.error('[upload-templates] patch failed', error)
+      res.status(500).json({ error: error?.message || 'Could not update template.' })
+    }
   })
 }
 

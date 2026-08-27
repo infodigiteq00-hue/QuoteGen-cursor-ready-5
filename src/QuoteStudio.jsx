@@ -1,16 +1,88 @@
-import React from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { onQuoteAssetImgError } from './pdfExport.js'
 import { resolvePaperTheme, PAPER_THEMES, tableColorSwatches } from './quotePaperThemes.js'
 import { SuggestField } from './SuggestField.jsx'
-import { matchClients } from './suggestCatalog.js'
-
-const A4_PAGE_HEIGHT_PX = 1123
+import { matchClients, shippingAddressesForCustomer } from './suggestCatalog.js'
+import { A4_HEIGHT_MM, A4_HEIGHT_PX, A4_WIDTH_MM, A4_WIDTH_PX } from './a4Pagination.js'
 
 function pxToMm(px) {
-  return Math.round((Number(px) || 840) * 25.4 / 96)
+  return Math.round((Number(px) || A4_WIDTH_PX) * 25.4 / 96)
 }
 
 /* ─── Minimal editable inline field ─────────────────────────────────────── */
-function InlineField({ value, onChange, onBlur, placeholder, bold, large, right, mono, multiline, style }) {
+function formatDdMmYyyy(raw) {
+  const digits = String(raw || '').replace(/\D/g, '').slice(0, 8)
+  if (digits.length <= 2) return digits
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`
+}
+
+function DateField({ value, onChange, placeholder = 'DD/MM/YYYY', right, style }) {
+  const ref = React.useRef(null)
+  const className = [
+    'qg-inline-field',
+    right ? 'qg-inline-field--right' : '',
+    'qg-inline-field--mono'
+  ].filter(Boolean).join(' ')
+
+  const handleChange = (e) => {
+    const el = e.target
+    const caret = el.selectionStart ?? el.value.length
+    const digitsBefore = el.value.slice(0, caret).replace(/\D/g, '').length
+    const formatted = formatDdMmYyyy(el.value)
+    onChange(formatted)
+    requestAnimationFrame(() => {
+      const input = ref.current
+      if (!input) return
+      let seen = 0
+      let pos = formatted.length
+      for (let i = 0; i < formatted.length; i++) {
+        if (/\d/.test(formatted[i])) seen++
+        if (seen >= digitsBefore) {
+          pos = i + 1
+          break
+        }
+      }
+      if (digitsBefore === 0) pos = 0
+      input.setSelectionRange(pos, pos)
+    })
+  }
+
+  return (
+    <input
+      ref={ref}
+      type="text"
+      inputMode="numeric"
+      autoComplete="off"
+      maxLength={10}
+      value={value || ''}
+      onChange={handleChange}
+      placeholder={placeholder}
+      className={className}
+      style={style}
+      aria-label="Valid till date"
+    />
+  )
+}
+
+function autoGrowField(el) {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${Math.max(el.scrollHeight, 24)}px`
+}
+
+function InlineField({ value, onChange, onBlur, placeholder, bold, large, right, mono, multiline, grow, style }) {
+  const focusedRef = React.useRef(false)
+  const areaRef = React.useRef(null)
+  const [draft, setDraft] = React.useState(value || '')
+  React.useEffect(() => {
+    if (!focusedRef.current) setDraft(value || '')
+  }, [value])
+  React.useLayoutEffect(() => {
+    if (multiline || grow) autoGrowField(areaRef.current)
+  }, [draft, multiline, grow])
+
   const base = [
     'qg-inline-field',
     bold ? 'qg-inline-field--bold' : '',
@@ -19,14 +91,27 @@ function InlineField({ value, onChange, onBlur, placeholder, bold, large, right,
     mono ? 'qg-inline-field--mono' : '',
   ].filter(Boolean).join(' ')
 
-  if (multiline) {
+  const commit = (next) => {
+    setDraft(next)
+    onChange(next)
+  }
+
+  if (multiline || grow) {
     return (
       <textarea
-        value={value || ''}
-        onChange={e => onChange(e.target.value)}
-        onBlur={e => onBlur?.(e.target.value)}
+        ref={areaRef}
+        value={draft}
+        onChange={e => {
+          commit(e.target.value)
+          autoGrowField(e.target)
+        }}
+        onFocus={() => { focusedRef.current = true }}
+        onBlur={e => {
+          focusedRef.current = false
+          onBlur?.(e.target.value)
+        }}
         placeholder={placeholder || ''}
-        rows={2}
+        rows={1}
         className={base}
         style={style}
       />
@@ -34,9 +119,13 @@ function InlineField({ value, onChange, onBlur, placeholder, bold, large, right,
   }
   return (
     <input
-      value={value || ''}
-      onChange={e => onChange(e.target.value)}
-      onBlur={e => onBlur?.(e.target.value)}
+      value={draft}
+      onChange={e => commit(e.target.value)}
+      onFocus={() => { focusedRef.current = true }}
+      onBlur={e => {
+        focusedRef.current = false
+        onBlur?.(e.target.value)
+      }}
       placeholder={placeholder || ''}
       className={base}
       style={style}
@@ -63,6 +152,7 @@ function CompanyLetterheadBlock({ profile, theme }) {
           <img
             src={logoUrl}
             alt={`${name} logo`}
+            onError={onQuoteAssetImgError}
             style={{ width: '100%', height: height || 'auto', maxHeight: height || 80, objectFit: 'contain', display: 'block' }}
           />
         ) : (
@@ -141,6 +231,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
             src={profile.headerImageUrl}
             alt={`${profile?.companyName || 'Company'} header`}
             className="qg-header-image"
+            onError={onQuoteAssetImgError}
           />
         </div>
         {/* Title + meta strip beneath the image, inside the paper */}
@@ -154,7 +245,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
               <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} right placeholder="DD MMM YYYY" />
             </MetaRow>
             <MetaRow label="Valid till" theme={theme}>
-              <InlineField
+              <DateField
                 value={validUntil}
                 onChange={v => update(['fields'], { ...fields, validUntil: v })}
                 right
@@ -182,7 +273,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
               <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} right placeholder="DD MMM YYYY" />
             </MetaRow>
             <MetaRow label="Valid till" theme={theme}>
-              <InlineField
+              <DateField
                 value={validUntil}
                 onChange={v => update(['fields'], { ...fields, validUntil: v })}
                 right
@@ -199,72 +290,142 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
 /* ─── TO / SUBJECT section ───────────────────────────────────────────────── */
 export function QuoteToSubjectBlock({ theme, quote, update, gstMissing, gstFieldRef, isInvoice, onGstChange, clients, onPickClient }) {
   const customer = quote.customer || {}
+  const shippingSame = customer.shippingSame !== false
   const clientItems = (field) => matchClients(clients, customer[field], field).map(c => ({
     id: `${c.company}|${c.gst}|${c.name}`,
     title: c.company || c.name || c.gst,
     meta: [c.name && c.company ? c.name : '', c.gst, c.location].filter(Boolean).join(' · '),
     client: c
   }))
+  const shippingItems = shippingAddressesForCustomer(clients, customer, customer.shippingLocation || '').map(addr => ({
+    id: addr,
+    title: addr,
+    meta: 'Saved shipping address',
+    address: addr
+  }))
+
+  const setShippingSame = (same) => {
+    update(['customer', 'shippingSame'], same)
+    if (same) {
+      update(['customer', 'shippingLocation'], '')
+      return
+    }
+    if (!String(customer.shippingLocation || '').trim()) {
+      const remembered = shippingAddressesForCustomer(clients, customer, '')
+      if (remembered[0]) update(['customer', 'shippingLocation'], remembered[0])
+    }
+  }
 
   return (
-    <div className="qg-to-subject-section" style={{ borderBottomColor: theme.tableBorder }}>
-      {/* TO block */}
-      <div className="qg-to-col">
-        <p className="qg-section-chip" style={{ color: theme.accent }}>TO</p>
-        <SuggestField
-          value={customer.company || ''}
-          onChange={v => update(['customer', 'company'], v)}
-          onPick={item => onPickClient?.(item.client)}
-          suggestions={clientItems('company')}
-          placeholder="Customer company name"
-          bold
-          large
-          style={{ color: theme.text }}
-        />
-        <SuggestField
-          value={customer.name || ''}
-          onChange={v => update(['customer', 'name'], v)}
-          onPick={item => onPickClient?.(item.client)}
-          suggestions={clientItems('name')}
-          placeholder="Kind Attn — contact name"
-          style={{ color: theme.muted, marginTop: 4 }}
-        />
-        <SuggestField
-          value={customer.location || ''}
-          onChange={v => update(['customer', 'location'], v)}
-          onPick={item => onPickClient?.(item.client)}
-          suggestions={clientItems('location')}
-          placeholder="Address · City · State"
-          style={{ color: theme.muted, marginTop: 4 }}
-        />
-        <div style={gstMissing ? { marginTop: 4, outline: '2px solid #f87171', borderRadius: 6 } : { marginTop: 4 }}>
+    <div className="qg-to-subject-wrap">
+      <div className="qg-to-subject-section" style={{ borderBottomColor: theme.tableBorder }}>
+        {/* BILLING / TO block */}
+        <div className="qg-to-col">
+          <p className="qg-section-chip" style={{ color: theme.accent }}>TO</p>
+          <p className="qg-address-sublabel" style={{ color: theme.muted }}>
+            {shippingSame ? 'Billing & shipping address' : 'Billing address'}
+          </p>
           <SuggestField
-            inputRef={gstFieldRef}
-            value={customer.gst || ''}
-            onChange={v => { onGstChange?.(); update(['customer', 'gst'], v) }}
+            value={customer.company || ''}
+            onChange={v => update(['customer', 'company'], v)}
             onPick={item => onPickClient?.(item.client)}
-            suggestions={clientItems('gst')}
-            placeholder={isInvoice ? 'GSTIN (required)' : 'GSTIN / Tax ID'}
-            style={{ color: theme.muted }}
+            suggestions={clientItems('company')}
+            placeholder="Customer company name"
+            bold
+            large
+            grow
+            style={{ color: theme.text }}
           />
+          <SuggestField
+            value={customer.name || ''}
+            onChange={v => update(['customer', 'name'], v)}
+            onPick={item => onPickClient?.(item.client)}
+            suggestions={clientItems('name')}
+            placeholder="Kind Attn — contact name"
+            grow
+            style={{ color: theme.muted, marginTop: 4 }}
+          />
+          <SuggestField
+            value={customer.location || ''}
+            onChange={v => update(['customer', 'location'], v)}
+            onPick={item => onPickClient?.(item.client)}
+            suggestions={clientItems('location')}
+            placeholder={shippingSame ? 'Address · City · State' : 'Billing address · City · State'}
+            grow
+            style={{ color: theme.muted, marginTop: 4 }}
+          />
+          <div style={gstMissing ? { marginTop: 4, outline: '2px solid #f87171', borderRadius: 6 } : { marginTop: 4 }}>
+            <SuggestField
+              inputRef={gstFieldRef}
+              value={customer.gst || ''}
+              onChange={v => { onGstChange?.(); update(['customer', 'gst'], v) }}
+              onPick={item => onPickClient?.(item.client)}
+              suggestions={clientItems('gst')}
+              placeholder={isInvoice ? 'GSTIN (required)' : 'GSTIN / Tax ID'}
+              style={{ color: theme.muted }}
+            />
+          </div>
+          <label className="no-print qg-ship-same-check" style={{ color: theme.muted }}>
+            <input
+              type="checkbox"
+              checked={shippingSame}
+              onChange={e => setShippingSame(e.target.checked)}
+            />
+            Shipping same as billing
+          </label>
+        </div>
+
+        <div className="qg-col-divider" style={{ background: theme.tableBorder }} />
+
+        {/* SUBJECT when same · SHIPPING when separate */}
+        <div className="qg-subject-col">
+          {shippingSame ? (
+            <>
+              <p className="qg-section-chip" style={{ color: theme.accent }}>SUBJECT</p>
+              <InlineField
+                value={quote.title || ''}
+                onChange={v => update(['title'], v)}
+                placeholder="Quotation subject — describe what this covers"
+                bold
+                large
+                grow
+                style={{ color: theme.text }}
+              />
+            </>
+          ) : (
+            <>
+              <p className="qg-section-chip" style={{ color: theme.accent }}>SHIP TO</p>
+              <p className="qg-address-sublabel" style={{ color: theme.muted }}>Shipping address</p>
+              <SuggestField
+                value={customer.shippingLocation || ''}
+                onChange={v => update(['customer', 'shippingLocation'], v)}
+                onPick={item => update(['customer', 'shippingLocation'], item.address || item.title || '')}
+                suggestions={shippingItems}
+                placeholder="Shipping address · City · State"
+                bold
+                large
+                grow
+                style={{ color: theme.text }}
+              />
+            </>
+          )}
         </div>
       </div>
 
-      {/* Vertical divider */}
-      <div className="qg-col-divider" style={{ background: theme.tableBorder }} />
-
-      {/* SUBJECT block */}
-      <div className="qg-subject-col">
-        <p className="qg-section-chip" style={{ color: theme.accent }}>SUBJECT</p>
-        <InlineField
-          value={quote.title || ''}
-          onChange={v => update(['title'], v)}
-          placeholder="Quotation subject — describe what this covers"
-          bold
-          large
-          style={{ color: theme.text }}
-        />
-      </div>
+      {!shippingSame ? (
+        <div className="qg-subject-below" style={{ borderBottomColor: theme.tableBorder }}>
+          <p className="qg-section-chip" style={{ color: theme.accent }}>SUBJECT</p>
+          <InlineField
+            value={quote.title || ''}
+            onChange={v => update(['title'], v)}
+            placeholder="Quotation subject — describe what this covers"
+            bold
+            large
+            grow
+            style={{ color: theme.text }}
+          />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -299,14 +460,17 @@ export function QuoteStudioCanvas({
   fontSizePx,
   paperWidthPx = 840,
   runningHeader,
-  runningFooter
+  runningFooter,
+  lockA4 = false
 }) {
   const theme = resolvePaperTheme(themeId, tableAccent)
   const pages = React.Children.toArray(children).filter(Boolean)
   const pageCount = Math.max(1, pages.length)
-  const width = Math.max(840, Math.round(Number(paperWidthPx) || 840))
-  const pageWidthMm = pxToMm(width)
-  const pageHeightMm = 297
+  const width = lockA4
+    ? A4_WIDTH_PX
+    : Math.max(840, Math.round(Number(paperWidthPx) || 840))
+  const pageWidthMm = lockA4 ? A4_WIDTH_MM : pxToMm(width)
+  const pageHeightMm = A4_HEIGHT_MM
   /* Named size only — never add the `landscape` keyword. Chrome's print
      path treats that keyword as "rotate the sheet", which is what made
      quotation PDFs come out on their side. `page-orientation: upright`
@@ -319,6 +483,7 @@ export function QuoteStudioCanvas({
     '--qg-muted': theme.muted,
     '--qg-table-head-bg': theme.tableHeadBg,
     '--qg-table-head-text': theme.tableHeadText,
+    '--qg-table-stripe': theme.tableStripeBg,
     '--qg-table-border': theme.tableBorder,
     '--qg-table-accent': theme.tableAccent || theme.tableHeadText,
     '--qg-drop-border': theme.dropBorder,
@@ -330,7 +495,12 @@ export function QuoteStudioCanvas({
     color: theme.text,
     fontFamily: theme.fontFamily,
     fontSize: `${fontSizePx}px`,
-    minHeight: A4_PAGE_HEIGHT_PX,
+    minHeight: A4_HEIGHT_PX,
+    ...(lockA4 ? {
+      width,
+      height: A4_HEIGHT_PX,
+      maxHeight: A4_HEIGHT_PX
+    } : {}),
     ...themeTokens
   }
 
@@ -379,21 +549,47 @@ export function QuoteStudioCanvas({
 
 /* ─── Studio toolbar ─────────────────────────────────────────────────────── */
 export function ExportMenu({ onExport, busy, label = 'Export', variant = 'primary' }) {
-  const [open, setOpen] = React.useState(false)
-  const wrapRef = React.useRef(null)
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState(null)
+  const wrapRef = useRef(null)
+  const btnRef = useRef(null)
+  const opensUp = variant === 'footer'
 
-  React.useEffect(() => {
+  useEffect(() => {
     const onDoc = (e) => {
-      if (!wrapRef.current?.contains(e.target)) setOpen(false)
+      if (!wrapRef.current?.contains(e.target) && !e.target?.closest?.('.qg-export-list')) setOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
 
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) {
+      setPos(null)
+      return undefined
+    }
+    const place = () => {
+      const r = btnRef.current.getBoundingClientRect()
+      setPos({
+        top: opensUp ? undefined : r.bottom + 6,
+        bottom: opensUp ? window.innerHeight - r.top + 6 : undefined,
+        right: Math.max(8, window.innerWidth - r.right),
+        minWidth: Math.max(220, r.width)
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open, opensUp])
+
   const formats = [
-    { id: 'pdf', name: 'PDF', hint: 'Same as the live preview' },
-    { id: 'word', name: 'Word', hint: '.doc — matches the quotation layout' },
-    { id: 'excel', name: 'Excel', hint: '.xlsx — items, totals, terms' }
+    { id: 'pdf', name: 'PDF', hint: 'A4 pages — same layout as the preview' },
+    { id: 'word', name: 'Word', hint: '.doc — A4, same layout as the preview' },
+    { id: 'excel', name: 'Excel', hint: '.xlsx — A4, same layout as the preview' }
   ]
 
   const buttonClass = variant === 'footer'
@@ -401,9 +597,44 @@ export function ExportMenu({ onExport, busy, label = 'Export', variant = 'primar
     : variant === 'header'
       ? 'rounded-lg bg-[#1A73E8] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[#1558b0] disabled:opacity-60'
       : 'rounded-xl bg-[#1A73E8] px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[#1558b0] disabled:opacity-60'
+
+  const menu = open && pos
+    ? createPortal(
+      <div
+        className="qg-export-list qg-export-list--portal no-print"
+        role="menu"
+        style={{
+          position: 'fixed',
+          top: pos.top,
+          bottom: pos.bottom,
+          right: pos.right,
+          left: 'auto',
+          minWidth: pos.minWidth,
+          zIndex: 6000
+        }}
+      >
+        {formats.map(f => (
+            <button
+              key={f.id}
+              type="button"
+              role="menuitem"
+              className="qg-export-item"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => { setOpen(false); onExport?.(f.id) }}
+            >
+            <span className="qg-export-item-name">{f.name}</span>
+            <span className="qg-export-item-hint">{f.hint}</span>
+          </button>
+        ))}
+      </div>,
+      document.body
+    )
+    : null
+
   return (
     <div className="qg-export" ref={wrapRef}>
       <button
+        ref={btnRef}
         type="button"
         disabled={busy}
         onClick={() => setOpen(o => !o)}
@@ -411,24 +642,18 @@ export function ExportMenu({ onExport, busy, label = 'Export', variant = 'primar
       >
         {busy ? 'Preparing…' : `${label} ▾`}
       </button>
-      {open ? (
-        <div className="qg-export-list no-print" role="menu">
-          {formats.map(f => (
-            <button
-              key={f.id}
-              type="button"
-              role="menuitem"
-              className="qg-export-item"
-              onClick={() => { setOpen(false); onExport?.(f.id) }}
-            >
-              <span className="qg-export-item-name">{f.name}</span>
-              <span className="qg-export-item-hint">{f.hint}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
+      {menu}
     </div>
   )
+}
+
+const FONT_SIZE_MIN = 11
+const FONT_SIZE_MAX = 18
+
+function clampFontSize(value, fallback) {
+  const n = parseInt(String(value).trim(), 10)
+  if (!Number.isFinite(n)) return fallback
+  return Math.max(FONT_SIZE_MIN, Math.min(FONT_SIZE_MAX, n))
 }
 
 export function QuoteStudioToolbar({
@@ -438,9 +663,17 @@ export function QuoteStudioToolbar({
   onTableColorChange, onDetectFromLogo,
   saveFlash, saveStatusLabel,
   onSaveFlash,
-  advancedOpen, onToggleAdvanced
+  onExport, pdfBusy
 }) {
   const swatches = tableColorSwatches(logoPalette)
+  const [fontDraft, setFontDraft] = React.useState(String(paperFontPx))
+  React.useEffect(() => { setFontDraft(String(paperFontPx)) }, [paperFontPx])
+
+  const commitFontSize = (raw) => {
+    const next = clampFontSize(raw, paperFontPx)
+    onFontChange(next)
+    setFontDraft(String(next))
+  }
   return (
     <div className="qg-studio-toolbar no-print">
       <div className="flex flex-wrap items-center gap-3">
@@ -490,9 +723,20 @@ export function QuoteStudioToolbar({
         <div className="flex items-center gap-1.5 text-xs text-slate-500">
           <span>Font</span>
           <input
-            type="number" min={11} max={18}
-            value={paperFontPx}
-            onChange={e => onFontChange(Math.max(11, Math.min(18, Number(e.target.value) || 14)))}
+            type="number"
+            min={FONT_SIZE_MIN}
+            max={FONT_SIZE_MAX}
+            step={1}
+            value={fontDraft}
+            onChange={e => {
+              const raw = e.target.value
+              setFontDraft(raw)
+              if (raw === '') return
+              const n = Number(raw)
+              if (Number.isFinite(n) && n >= FONT_SIZE_MIN && n <= FONT_SIZE_MAX) onFontChange(n)
+            }}
+            onBlur={() => commitFontSize(fontDraft)}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }}
             className="w-12 rounded-lg border border-slate-200 px-2 py-1 text-center text-xs outline-none focus:border-[#1A73E8]"
             aria-label="Paper font size"
           />
@@ -500,14 +744,11 @@ export function QuoteStudioToolbar({
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <button type="button" onClick={onToggleAdvanced}
-          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
-          {advancedOpen ? 'Hide tools' : 'More tools'}
-        </button>
         <button type="button" onClick={onSaveFlash}
           className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
           Save
         </button>
+        <ExportMenu onExport={onExport} busy={pdfBusy} label="Export" variant="header" />
       </div>
     </div>
   )

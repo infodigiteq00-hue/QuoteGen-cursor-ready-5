@@ -7,6 +7,7 @@ import cors from 'cors'
 import OpenAI from 'openai'
 import { registerAuthRoutes, requireAuth } from './auth.js'
 import { registerUploadDocRoutes } from './uploadDoc.js'
+import { registerOnlyOfficeRoutes, registerOnlyOfficeAuthRoutes } from './onlyoffice.js'
 import { registerPersistenceRoutes } from './persistence.js'
 import { registerRevisionRoutes } from './revisions.js'
 import { registerKnowledgeRoutes, autofillItemsFromKnowledge, retrieveKnowledgeContext, formatKnowledgePromptBlock } from './knowledge.js'
@@ -15,18 +16,25 @@ import { registerQuoteAssetRoutes } from './quoteAssets.js'
 import { registerPdfRoutes } from './pdfExport.js'
 import { getSupabase, isSupabaseConfigured } from './db.js'
 import { aiFillableColumns, blankItemFor, normalizeColumnList } from '../shared/quoteColumns.js'
+import { suggestFormulaFromAsk, validateFormulaDraft } from '../shared/formulaAssistant.js'
 import { catalogItemCountHint, catalogItemsToQuoteRows, extractCatalogLineItems } from './enquiryItems.js'
 import { ensureSuggestedColumn } from '../shared/productKeywords.js'
+import { extractKnowledgeText } from './knowledgeExtract.js'
+import multer from 'multer'
 
 const app = express()
 if (process.env.VERCEL || process.env.RAILWAY_ENVIRONMENT) app.set('trust proxy', 1)
 app.use(cors())
 app.use(express.json({ limit: '30mb' }))
 
+// OnlyOffice must reach files/callbacks without a browser session.
+registerOnlyOfficeRoutes(app)
+
 // Auth endpoints are public; everything else under /api requires a session.
 registerAuthRoutes(app)
 app.use('/api', requireAuth)
 
+registerOnlyOfficeAuthRoutes(app)
 registerUploadDocRoutes(app)
 registerRevisionRoutes(app)
 registerPersistenceRoutes(app)
@@ -88,7 +96,12 @@ Do not invent technical information, rates, tax rates, delivery commitments, or 
 
 The quotation table uses these columns (in order): ${columnGuide}
 Each line item MUST be a JSON object with exactly these keys and no others: ${fillable.map(c => c.id).join(', ')}
-Use empty strings when information is unknown. Rate and amount must be empty unless provided in the enquiry. Make descriptions concise and professional.${descriptionRule}
+Map enquiry fields into those columns by *meaning*, not by matching an exact header word. Examples:
+- Purchase Requisition / PR / Indent / Enquiry No / Series No / Reference No → the column that means that identifier (e.g. "Series Number", "PR No.", "Indent No.")
+- Material / Material Code / Item Code / Part No / SAP code → the column that means material/item code
+- Short text + long text / spec → Description (keep customer wording)
+- Qty / Quantity → quantity column; UOM / Unit → unit column
+If the user added a custom column, fill it when the enquiry clearly has a matching value. Leave columns empty when unknown. Do not dump identifiers into Description when a dedicated column exists. Rate and amount must be empty unless provided in the enquiry. Make descriptions concise and professional.${descriptionRule}
 
 Return ONLY valid JSON matching this shape:
 {
@@ -255,6 +268,63 @@ function aiError(error, requestId, res) {
   res.status(error?.status || 502).json({ error: details.message, details, requestId })
 }
 
+const enquiryUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 8 }
+})
+
+app.post('/api/enquiry/from-files', (req, res) => {
+  const requestId = `enq-files-${Date.now()}`
+  enquiryUpload.array('files', 8)(req, res, async (err) => {
+    if (err) {
+      const message = err.code === 'LIMIT_FILE_SIZE'
+        ? 'Each file must be under 20 MB.'
+        : (err.message || 'Upload failed')
+      return res.status(400).json({ error: message, code: 'VALIDATION_ERROR', requestId })
+    }
+    const files = req.files || []
+    if (!files.length) {
+      return res.status(400).json({ error: 'Choose a PDF, Word, Excel, image, or text file.', code: 'VALIDATION_ERROR', requestId })
+    }
+    const extracted = []
+    const failed = []
+    for (const file of files) {
+      try {
+        const result = await extractKnowledgeText(file)
+        extracted.push({
+          name: file.originalname || 'upload',
+          kind: result.kind,
+          chars: result.text.length,
+          extractor: result.meta?.extractor || result.kind,
+          text: result.text
+        })
+      } catch (error) {
+        failed.push({
+          name: file.originalname || 'upload',
+          error: error?.message || 'Could not read this file.'
+        })
+      }
+    }
+    const text = extracted.map((part) => {
+      const heading = `--- ${part.name} ---`
+      return `${heading}\n${part.text}`
+    }).join('\n\n').trim()
+    if (!text) {
+      return res.status(422).json({
+        error: failed[0]?.error || 'No text could be read from the files.',
+        failed,
+        requestId
+      })
+    }
+    res.json({
+      text,
+      files: extracted.map(({ name, kind, chars, extractor }) => ({ name, kind, chars, extractor })),
+      failed,
+      requestId
+    })
+  })
+})
+
 app.post('/api/suggest-columns', async (req, res) => {
   const { enquiry, columns: existing = [] } = req.body || {}
   const requestId = `cols-${Date.now()}`
@@ -398,6 +468,33 @@ app.post('/api/generate-quotation', async (req, res) => {
     })
   } catch (error) {
     aiError(error, requestId, res)
+  }
+})
+
+app.post('/api/suggest-formula', async (req, res) => {
+  const { ask = '', column = null, columns: existing = [] } = req.body || {}
+  const requestId = `fx-${Date.now()}`
+  const cols = normalizeColumns(existing)
+  const local = suggestFormulaFromAsk(ask, column, cols)
+  if (local.status !== 'unrecognized' || !process.env.OPENAI_API_KEY) {
+    return res.json({ ...local, mode: 'local' })
+  }
+  try {
+    const columnGuide = cols.map(c => `${c.id} (${c.label}, type ${c.type || 'text'})`).join('; ')
+    const { data } = await callAI(
+      `You suggest quotation column formulas. Return ONLY JSON:
+{"title":"","steps":["..."],"preset":"before_tax|after_tax|list_amount|after_discount|rate_after_discount|null","tokens":[{"type":"stage","stage":"list|taxable|gross"}] }
+Tokens may also be {type:field,field:quantity|rate|amount}, {type:op,op:+|-|*|/}, {type:pctOf}, {type:number,value:n}, {type:col,colId,part:amount|percent|value}.
+Use only column ids from this table. Prefer presets. Do not invent columns.`,
+      `Column being edited: ${column?.id || ''} "${column?.label || ''}"\nTable: ${columnGuide}\nAsk: ${ask}`,
+      requestId,
+      { max_tokens: 600, temperature: 0 }
+    )
+    const validated = validateFormulaDraft({ ...data, ask }, column, cols)
+    return res.json({ ...validated, mode: validated.status === 'unrecognized' ? 'local' : 'ai' })
+  } catch (error) {
+    console.warn(`[${requestId}] formula AI skipped`, error?.message || error)
+    return res.json({ ...local, mode: 'local' })
   }
 })
 

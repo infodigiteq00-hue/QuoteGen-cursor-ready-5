@@ -1,5 +1,6 @@
 /** Client helpers for quotation series + autosave (talks to Express only). */
-import { normalizeColumnList } from '../shared/quoteColumns.js'
+import { attachmentUrlKey, imagePathKey, isAttachmentColumn, isImageColumn, normalizeColumnList } from '../shared/quoteColumns.js'
+import { quoteAssetSrc, storagePathFromUrl } from './pdfExport.js'
 
 export function formatSeriesPreview({ prefix = 'QG', padding = 4, nextNumber = 1, includeYear = true } = {}) {
   const safePadding = Math.min(12, Math.max(1, Number(padding) || 4))
@@ -460,13 +461,14 @@ export async function updateQuotation(id, body) {
 
 export function quotationToEditorState(quotation) {
   const data = quotation?.data && typeof quotation.data === 'object' ? quotation.data : {}
+  const columns = Array.isArray(data.columns) && data.columns.length ? normalizeColumnList(data.columns) : undefined
   return {
     title: data.title ?? quotation?.title ?? '',
     number: data.number ?? quotation?.number ?? '',
     date: data.date ?? quotation?.date ?? '',
-    columns: Array.isArray(data.columns) && data.columns.length ? normalizeColumnList(data.columns) : undefined,
-    customer: data.customer || { name: '', company: '', gst: '', location: '' },
-    items: Array.isArray(data.items) ? data.items : [],
+    columns,
+    customer: data.customer || { name: '', company: '', gst: '', location: '', shippingSame: true, shippingLocation: '' },
+    items: rewriteSavedAssetUrls(Array.isArray(data.items) ? data.items : [], columns),
     extraLines: Array.isArray(data.extraLines) ? data.extraLines : [],
     notes: Array.isArray(data.notes) ? data.notes : [],
     clarifications: Array.isArray(data.clarifications) ? data.clarifications : [],
@@ -484,6 +486,33 @@ export function quotationToEditorState(quotation) {
     // Authoritative revision lives in the column, not the JSON snapshot.
     revision: quotation?.revision
   }
+}
+
+function rewriteSavedAssetUrls(items, columns) {
+  const cols = columns || []
+  if (!cols.length) return items
+  return items.map((item) => {
+    if (!item || typeof item !== 'object') return item
+    const next = { ...item }
+    for (const col of cols) {
+      if (isImageColumn(col)) {
+        const path = next[imagePathKey(col)] || storagePathFromUrl(next[col.id])
+        if (path) {
+          next[imagePathKey(col)] = path
+          next[col.id] = quoteAssetSrc(next[col.id], path)
+        }
+      }
+      if (isAttachmentColumn(col)) {
+        const urlKey = attachmentUrlKey(col)
+        const path = next[imagePathKey(col)] || storagePathFromUrl(next[urlKey]) || storagePathFromUrl(next[col.id])
+        if (path) {
+          next[imagePathKey(col)] = path
+          next[urlKey] = quoteAssetSrc(next[urlKey], path)
+        }
+      }
+    }
+    return next
+  })
 }
 
 export function cloneQuotationForNew(editorQuote, newNumber) {
@@ -527,6 +556,19 @@ export async function deleteKnowledgeDocument(id) {
   }
   if (!response.ok) throw new Error(data.error || 'Could not delete document')
   return { unavailable: false, ok: true }
+}
+
+export async function ingestEnquiryFiles(fileList) {
+  const form = new FormData()
+  for (const file of fileList) form.append('files', file)
+  const response = await fetch('/api/enquiry/from-files', { method: 'POST', body: form })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error || 'Could not read those files.')
+  return {
+    text: data.text || '',
+    files: data.files || [],
+    failed: data.failed || []
+  }
 }
 
 export async function uploadKnowledgeDocuments(fileList) {
@@ -668,9 +710,19 @@ export async function uploadQuoteImage(file) {
     const response = await fetch('/api/quote-assets/image', { method: 'POST', body: form })
     const data = await response.json().catch(() => ({}))
     if (response.ok && data.url) {
-      return { url: data.url, path: data.path || null, storage: data.storage || 'supabase' }
+      const path = data.path || null
+      return {
+        url: path ? `/api/quote-assets/content?path=${encodeURIComponent(path)}` : data.url,
+        path,
+        storage: data.storage || 'supabase'
+      }
     }
-    if (response.status === 400) throw new Error(data.error || 'Image upload failed')
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      throw new Error(data.error || 'Image upload failed')
+    }
+    if (data.error && response.status >= 500 && file.size > 400 * 1024) {
+      throw new Error(data.error)
+    }
   } catch (error) {
     if (error?.message && !/Failed to fetch/i.test(error.message) && /image/i.test(error.message)) throw error
   }
@@ -701,9 +753,16 @@ export async function uploadQuoteFile(file) {
     const response = await fetch('/api/quote-assets/file', { method: 'POST', body: form })
     const data = await response.json().catch(() => ({}))
     if (response.ok && data.url) {
-      return { url: data.url, path: data.path || null, storage: data.storage || 'supabase' }
+      const path = data.path || null
+      return {
+        url: path ? `/api/quote-assets/content?path=${encodeURIComponent(path)}` : data.url,
+        path,
+        storage: data.storage || 'supabase'
+      }
     }
-    if (response.status === 400) throw new Error(data.error || 'File upload failed')
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      throw new Error(data.error || 'File upload failed')
+    }
     if (data.error) throw new Error(data.error)
   } catch (error) {
     if (error?.message && !/Failed to fetch/i.test(error.message)) throw error
