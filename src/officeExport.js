@@ -11,6 +11,7 @@ import {
 import { formatIndianAmount } from '../shared/templateMap.js'
 import { normalizeFooterFit } from '../shared/footerFit.js'
 import { quotationFileName, capturePreviewCanvases } from './pdfExport.js'
+import { A4_HEIGHT_PX, A4_WIDTH_PX } from './a4Pagination.js'
 
 function money(n) {
   if (n == null || n === '') return ''
@@ -407,11 +408,88 @@ export function downloadHtmlAsWord(html, fileName) {
   saveBlob(new Blob(['\ufeff', wrapped], { type: 'application/msword' }), fileName)
 }
 
+/** 210mm × 297mm in EMUs — same full-bleed A4 as the Word page images. */
+const A4_EMU_CX = Math.round(210 / 25.4 * 914400)
+const A4_EMU_CY = Math.round(297 / 25.4 * 914400)
+const A4_ROW_PT = 297 / 25.4 * 72
+const A4_COL_WIDTH = (A4_WIDTH_PX - 5) / 7
+/** Excel/WPS max row height is 409pt; A4 is ~842pt so one page needs several rows. */
+const EXCEL_MAX_ROW_PT = 409
+const ROWS_PER_PAGE = Math.ceil(A4_ROW_PT / EXCEL_MAX_ROW_PT)
+const PAGE_ROW_PT = A4_ROW_PT / ROWS_PER_PAGE
+
+function rasterizeA4Jpeg(source) {
+  const width = A4_WIDTH_PX * 2
+  const height = A4_HEIGHT_PX * 2
+  const out = document.createElement('canvas')
+  out.width = width
+  out.height = height
+  const ctx = out.getContext('2d')
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, width, height)
+  const sw = Math.max(1, source?.width || 0)
+  const sh = Math.max(1, source?.height || 0)
+  const a4Ratio = width / height
+  const srcRatio = sw / sh
+  const sameAspect = Math.abs(srcRatio - a4Ratio) / a4Ratio < 0.02
+  const scale = sameAspect
+    ? Math.max(width / sw, height / sh)
+    : Math.min(width / sw, height / sh)
+  const dw = sw * scale
+  const dh = sh * scale
+  ctx.imageSmoothingEnabled = true
+  if (ctx.imageSmoothingQuality) ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(source, (width - dw) / 2, (height - dh) / 2, dw, dh)
+  return rasterFromDataUrl(out.toDataURL('image/jpeg', 0.95))
+}
+
+function excelPicXml(i, pageCount) {
+  const name = pageCount === 1 ? 'Quotation' : `Page ${i + 1}`
+  const fromRow = i * ROWS_PER_PAGE
+  return `<xdr:oneCellAnchor>
+      <xdr:from>
+        <xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff>
+        <xdr:row>${fromRow}</xdr:row><xdr:rowOff>0</xdr:rowOff>
+      </xdr:from>
+      <xdr:ext cx="${A4_EMU_CX}" cy="${A4_EMU_CY}"/>
+      <xdr:pic>
+        <xdr:nvPicPr>
+          <xdr:cNvPr id="${i + 2}" name="${name}"/>
+          <xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr>
+        </xdr:nvPicPr>
+        <xdr:blipFill>
+          <a:blip r:embed="rId${i + 1}"/>
+          <a:stretch><a:fillRect/></a:stretch>
+        </xdr:blipFill>
+        <xdr:spPr>
+          <a:xfrm>
+            <a:off x="0" y="0"/>
+            <a:ext cx="${A4_EMU_CX}" cy="${A4_EMU_CY}"/>
+          </a:xfrm>
+          <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+        </xdr:spPr>
+      </xdr:pic>
+      <xdr:clientData/>
+    </xdr:oneCellAnchor>`
+}
+
+function excelPageRowsXml(pageCount) {
+  const rows = []
+  for (let i = 0; i < pageCount * ROWS_PER_PAGE; i += 1) {
+    const r = i + 1
+    rows.push(
+      `<row r="${r}" ht="${PAGE_ROW_PT}" customHeight="1"><c r="A${r}" t="inlineStr"><is><t xml:space="preserve"> </t></is></c></row>`
+    )
+  }
+  return rows.join('')
+}
+
 /**
- * Excel = live A4 preview pages (logos, frame, table as on screen) + editable Items sheet.
- * Matches what you see in the studio; PDF remains the Chrome print path (untouched).
+ * Excel = live A4 preview pages (same layout, spacing, and page count as on screen).
+ * Built like Word page images: exact A4 EMUs, no spreadsheet grid to the right.
+ * PDF remains the Chrome print path (untouched).
  */
-export async function downloadPreviewAsExcel({ quote, profile, columns, totals, theme, docLabel }) {
+export async function downloadPreviewAsExcel({ quote }) {
   document.documentElement.classList.add('qg-a4-export')
   let canvases = []
   try {
@@ -422,42 +500,103 @@ export async function downloadPreviewAsExcel({ quote, profile, columns, totals, 
   }
   if (!canvases.length) throw new Error('nothing on screen to export')
 
-  const ExcelJS = await loadExcelJS()
-  const wb = new ExcelJS.Workbook()
-  wb.creator = 'QuoteGen'
-  const A4_W = 794
-  const A4_H = 1123
+  const zipMod = await import('jszip')
+  const JSZip = zipMod.default || zipMod
+  const zip = new JSZip()
+  const pageCount = canvases.length
+  const rasters = canvases.map(rasterizeA4Jpeg)
+  if (rasters.some(r => !r)) throw new Error('nothing on screen to export')
+  const lastRow = pageCount * ROWS_PER_PAGE
 
-  canvases.forEach((canvas, i) => {
-    const sheet = wb.addWorksheet(canvases.length === 1 ? 'Quotation' : `Page ${i + 1}`, {
-      views: [{ showGridLines: false }],
-      pageSetup: {
-        paperSize: 9,
-        orientation: 'portrait',
-        fitToPage: true,
-        fitToWidth: 1,
-        fitToHeight: 1,
-        horizontalDpi: 96,
-        verticalDpi: 96,
-        margins: { left: 0.25, right: 0.25, top: 0.25, bottom: 0.25, header: 0, footer: 0 }
-      }
-    })
-    sheet.getColumn(1).width = 100
-    sheet.getRow(1).height = 840
-    const dataUrl = canvas.toDataURL('image/png')
-    const raster = rasterFromDataUrl(dataUrl)
-    if (!raster) return
-    const imageId = wb.addImage({ base64: raster.base64, extension: raster.extension })
-    sheet.addImage(imageId, {
-      tl: { col: 0, row: 0 },
-      ext: { width: A4_W, height: A4_H },
-      editAs: 'oneCell'
-    })
+  const rowsXml = excelPageRowsXml(pageCount)
+  const breaksXml = pageCount > 1
+    ? `<rowBreaks count="${pageCount - 1}" manualBreakCount="${pageCount - 1}">${
+      Array.from({ length: pageCount - 1 }, (_, i) => (
+        `<brk id="${(i + 1) * ROWS_PER_PAGE}" max="16383" man="1"/>`
+      )).join('')
+    }</rowBreaks>`
+    : ''
+  const drawingRels = rasters.map((_, i) => (
+    `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${i + 1}.jpeg"/>`
+  )).join('')
+  const picsXml = rasters.map((_, i) => excelPicXml(i, pageCount)).join('')
+
+  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="jpeg" ContentType="image/jpeg"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>`)
+  zip.folder('_rels').file('.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`)
+  zip.folder('xl').file('workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Quotation" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>`)
+  zip.folder('xl').folder('_rels').file('workbook.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`)
+  zip.folder('xl').file('styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="11"/><color theme="1"/><name val="Calibri"/><family val="2"/></font></fonts>
+  <fills count="2">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+  </fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>`)
+  zip.folder('xl').folder('worksheets').file('sheet1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1:A${lastRow}"/>
+  <sheetViews>
+    <sheetView workbookViewId="0" showGridLines="0" showRowColHeaders="0" view="normal" zoomScale="70" zoomScaleNormal="70"/>
+  </sheetViews>
+  <sheetFormatPr defaultRowHeight="15" defaultColWidth="0"/>
+  <cols>
+    <col min="1" max="1" width="${A4_COL_WIDTH}" customWidth="1"/>
+    <col min="2" max="16384" width="0" customWidth="1" hidden="1"/>
+  </cols>
+  <sheetData>${rowsXml}</sheetData>
+  <pageMargins left="0" right="0" top="0" bottom="0" header="0" footer="0"/>
+  <pageSetup paperSize="9" orientation="portrait" scale="100" usePrinterDefaults="0"/>
+  <drawing r:id="rId1"/>
+  ${breaksXml}
+</worksheet>`)
+  zip.folder('xl').folder('worksheets').folder('_rels').file('sheet1.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>
+</Relationships>`)
+  zip.folder('xl').folder('drawings').file('drawing1.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  ${picsXml}
+</xdr:wsDr>`)
+  zip.folder('xl').folder('drawings').folder('_rels').file('drawing1.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  ${drawingRels}
+</Relationships>`)
+  const media = zip.folder('xl').folder('media')
+  rasters.forEach((raster, i) => {
+    media.file(`image${i + 1}.jpeg`, raster.base64, { base64: true })
   })
 
-  await fillQuotationDataSheet(wb, { quote, profile, columns, totals, theme, docLabel, sheetName: 'Items' })
-  const buf = await wb.xlsx.writeBuffer()
-  saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), quotationFileName(quote, 'xlsx'))
+  const blob = await zip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  })
+  saveBlob(blob, quotationFileName(quote, 'xlsx'))
 }
 
 async function loadExcelJS() {
@@ -685,7 +824,7 @@ async function fillQuotationDataSheet(wb, { quote, profile, columns, totals, the
   return sheet
 }
 
-/** Excel export: preview-accurate pages + editable Items (PDF path unchanged). */
+/** Excel export: preview-accurate A4 pages (PDF path unchanged). */
 export async function downloadQuotationExcel(opts) {
   return downloadPreviewAsExcel(opts)
 }
