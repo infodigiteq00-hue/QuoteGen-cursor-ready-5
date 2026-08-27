@@ -5,3 +5,4 @@ nixPkgs = ["chromium", "nss", "dejavu_fonts"]
 
 [variables]
 PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
+CHROME_PATH = "/usr/bin/chromium"

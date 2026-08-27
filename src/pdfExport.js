@@ -9,6 +9,7 @@
 
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
+import { getCurrentSession } from './apiAuth.js'
 import { A4_HEIGHT_MM, A4_HEIGHT_PX, A4_WIDTH_MM, A4_WIDTH_PX } from './a4Pagination.js'
 import { packExportSlices } from './exportSlices.js'
 
@@ -922,9 +923,12 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
   const timer = controller ? setTimeout(() => controller.abort(), 60000) : null
   let response
   try {
+    const session = await getCurrentSession().catch(() => null)
+    const headers = { 'Content-Type': 'application/json' }
+    if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`
     response = await fetch('/api/quotation-pdf', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ html, fileName }),
       signal: controller?.signal
     })
@@ -932,12 +936,17 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
     if (error?.name === 'AbortError') {
       throw new Error('PDF export timed out — try again with fewer images')
     }
-    throw error
+    return downloadFromScreen(fileName)
   } finally {
     if (timer) clearTimeout(timer)
   }
 
   if (!response.ok) {
+    // Chrome on the server is down (503) or the session token was missing —
+    // still save the live preview so export keeps working.
+    if (response.status >= 500 || response.status === 401) {
+      return downloadFromScreen(fileName)
+    }
     let detail = ''
     try {
       const payload = await response.json()

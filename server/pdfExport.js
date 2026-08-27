@@ -29,6 +29,8 @@ const windowsLocalAppData = process.env.LOCALAPPDATA || ''
 
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
+  process.env.PUPPETEER_EXECUTABLE_PATH,
+  process.env.CHROMIUM_PATH,
   '/usr/bin/google-chrome',
   '/usr/bin/google-chrome-stable',
   '/usr/bin/chromium',
@@ -39,8 +41,11 @@ const CHROME_CANDIDATES = [
   join(windowsProgramFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
   join(windowsProgramFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
   windowsLocalAppData && join(windowsLocalAppData, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+  windowsLocalAppData && join(windowsLocalAppData, 'Google', 'Chrome Beta', 'Application', 'chrome.exe'),
+  windowsLocalAppData && join(windowsLocalAppData, 'Google', 'Chrome SxS', 'Application', 'chrome.exe'),
   join(windowsProgramFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-  join(windowsProgramFilesX86, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
+  join(windowsProgramFilesX86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  windowsLocalAppData && join(windowsLocalAppData, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
 ].filter(Boolean)
 
 const MAX_HTML_CHARS = 28 * 1024 * 1024
@@ -60,7 +65,20 @@ function mmToPx(mm) {
 }
 
 function findChromeOnPath() {
-  if (process.platform === 'win32') return null
+  if (process.platform === 'win32') {
+    for (const name of ['chrome', 'msedge', 'chrome.exe', 'msedge.exe']) {
+      try {
+        const found = execFileSync('where', [name], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+          .split(/\r?\n/)
+          .map(line => line.trim())
+          .find(line => line && existsSync(line))
+        if (found) return found
+      } catch {
+        /* not on PATH */
+      }
+    }
+    return null
+  }
   for (const name of ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable', 'chrome']) {
     try {
       const found = execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
@@ -271,7 +289,6 @@ function pdfOptionsFor(timeoutMs) {
  * "rotate the sheet". Local Windows still uses spawn, which already works.
  */
 async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
-  let chromium = null
   let puppeteer
   let executablePath = systemBinary || null
   let args = [
@@ -285,7 +302,6 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
     '--no-default-browser-check',
     '--force-color-profile=srgb'
   ]
-  let headless = true
 
   try {
     puppeteer = await import('puppeteer-core')
@@ -299,11 +315,10 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
 
   if (!executablePath) {
     try {
-      chromium = (await import('@sparticuz/chromium')).default
+      const chromium = (await import('@sparticuz/chromium')).default
       try { chromium.setGraphicsMode = false } catch { /* older builds */ }
       executablePath = await chromium.executablePath()
       args = [...chromium.args]
-      headless = true
     } catch (error) {
       throw pdfError(
         `No Chrome or Chromium was found on the server (${error?.message || 'CHROME_MISSING'}).`,
@@ -323,13 +338,18 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
   ]
   let browser
   try {
-    browser = await puppeteer.default.launch({
+    const launch = (headless) => puppeteer.default.launch({
       args,
       defaultViewport: viewport,
       executablePath,
-      headless: 'shell',
+      headless,
       protocolTimeout: timeoutMs + 10_000
     })
+    try {
+      browser = await launch('shell')
+    } catch {
+      browser = await launch(true)
+    }
   } catch (error) {
     throw pdfError(`Could not start Chrome: ${error.message}`, 'CHROME_SPAWN_FAILED', 503)
   }
@@ -387,8 +407,10 @@ async function renderHtmlToPdfWithSpawn(html, timeoutMs, binary) {
 }
 
 function usePuppeteerPrint(binary) {
-  // Puppeteer CDP print is reliable on macOS/Linux; CLI --print-to-pdf often hangs.
   if (process.env.PDF_USE_SPAWN === '1' && binary) return false
+  if (process.env.PDF_USE_PUPPETEER === '1') return true
+  // Local Windows Chrome CLI print already works; puppeteer "shell" can 503 there.
+  if (process.platform === 'win32' && binary) return false
   return true
 }
 
