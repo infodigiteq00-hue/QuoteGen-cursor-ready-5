@@ -1072,7 +1072,7 @@ function App() {
     setSidebarHidden(hidden)
     try { localStorage.setItem('qg-sidebar-hidden', hidden ? '1' : '0') } catch { /* ignore */ }
   }
-  const [brandingOpen, setBrandingOpen] = useState(true)
+  const [brandingOpen, setBrandingOpen] = useState(false)
   const [bankDetailsOpen, setBankDetailsOpen] = useState(false)
   const [termsOpen, setTermsOpen] = useState(false)
   const [seriesOpen, setSeriesOpen] = useState(false)
@@ -1876,11 +1876,7 @@ function App() {
                 persistenceConfigured={persistenceConfigured}
                 onDraftChange={(partial) => setCompanyDraft(prev => ({ ...prev, ...partial }))}
                 onFooterFitChange={applyFooterFit}
-                onSaved={(profile) => {
-                  setCompanyProfile(profile)
-                  setCompanyDraft(prev => ({ ...prev, ...(profile || {}) }))
-                  setPersistenceConfigured(true)
-                }}
+                onSaved={(profile) => { setCompanyProfile(profile); setPersistenceConfigured(true) }}
                 onUnavailable={() => setPersistenceConfigured(false)}
               />
               <BankDetailsPanel
@@ -1889,11 +1885,7 @@ function App() {
                 profile={companyProfile}
                 persistenceConfigured={persistenceConfigured}
                 onDraftChange={(partial) => setCompanyDraft(prev => ({ ...prev, ...partial }))}
-                onSaved={(profile) => {
-                  setCompanyProfile(profile)
-                  setCompanyDraft(prev => ({ ...prev, ...(profile || {}) }))
-                  setPersistenceConfigured(true)
-                }}
+                onSaved={(profile) => { setCompanyProfile(profile); setPersistenceConfigured(true) }}
                 onUnavailable={() => setPersistenceConfigured(false)}
               />
               <TermsAndConditionsPanel
@@ -1902,11 +1894,7 @@ function App() {
                 profile={companyProfile}
                 persistenceConfigured={persistenceConfigured}
                 onDraftChange={(partial) => setCompanyDraft(prev => ({ ...prev, ...partial }))}
-                onSaved={(profile) => {
-                  setCompanyProfile(profile)
-                  setCompanyDraft(prev => ({ ...prev, ...(profile || {}) }))
-                  setPersistenceConfigured(true)
-                }}
+                onSaved={(profile) => { setCompanyProfile(profile); setPersistenceConfigured(true) }}
                 onUnavailable={() => setPersistenceConfigured(false)}
               />
               <SeriesSettingsPanel
@@ -1915,11 +1903,7 @@ function App() {
                 profile={companyProfile}
                 persistenceConfigured={persistenceConfigured}
                 onDraftChange={(partial) => setCompanyDraft(prev => ({ ...prev, ...partial }))}
-                onSaved={(profile) => {
-                  setCompanyProfile(profile)
-                  setCompanyDraft(prev => ({ ...prev, ...(profile || {}) }))
-                  setPersistenceConfigured(true)
-                }}
+                onSaved={(profile) => { setCompanyProfile(profile); setPersistenceConfigured(true) }}
                 onUnavailable={() => setPersistenceConfigured(false)}
               />
               <CompanyColumnLayoutPanel
@@ -1927,11 +1911,7 @@ function App() {
                 onToggle={() => setColumnLayoutOpen(o => !o)}
                 profile={companyProfile}
                 persistenceConfigured={persistenceConfigured}
-                onSaved={(profile) => {
-                  setCompanyProfile(profile)
-                  setCompanyDraft(prev => ({ ...prev, ...(profile || {}) }))
-                  setPersistenceConfigured(true)
-                }}
+                onSaved={(profile) => { setCompanyProfile(profile); setPersistenceConfigured(true) }}
                 onUnavailable={() => setPersistenceConfigured(false)}
                 templates={uploadTemplates}
                 onPreviewChange={setLayoutPreview}
@@ -2546,22 +2526,6 @@ function CompanyQuotePreview({ profile, layoutPreview = null, uploadTemplates = 
 }
 
 const BRANDING_FIELD_CLASS = 'w-full rounded-xl border border-sand bg-white px-3 py-2.5 text-sm outline-none focus:border-moss focus:ring-4 focus:ring-blue-50 disabled:bg-slate-50'
-const BRANDING_SAVE_BTN_CLASS = 'rounded-xl bg-moss px-4 py-2 text-sm font-semibold text-white hover:bg-[#1558b0] disabled:opacity-50'
-
-function BrandingSaveButton({ saving, disabled, onClick, children }) {
-  return (
-    <div className="flex justify-end">
-      <button
-        type="button"
-        disabled={saving || disabled}
-        onClick={onClick}
-        className={BRANDING_SAVE_BTN_CLASS}
-      >
-        {saving ? 'Saving…' : children}
-      </button>
-    </div>
-  )
-}
 const SELECT_FIELD_CLASS = 'w-full rounded-xl border border-sand bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-moss focus:ring-4 focus:ring-blue-50 disabled:bg-slate-50'
 const PHONE_LINE_RE = /(?:\+91[\s-]*)?(?:\d[\s()-]*){10,}/
 const PIN_LINE_RE = /\b(\d{6})\b/
@@ -2910,7 +2874,7 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
     if (lockAspect && aspect > 0) setLogoWidth(Math.max(24, Math.round(h * aspect)))
   }
 
-  const handleSave = async (okMessage = 'Company branding saved.') => {
+  const handleSave = async () => {
     setSaving(true)
     setError('')
     setMessage('')
@@ -2950,7 +2914,7 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
         return
       }
       onSaved?.(result.profile)
-      setMessage(okMessage)
+      setMessage('Company branding saved.')
     } catch (e) {
       setError(e.message || 'Could not save branding')
     } finally {
@@ -3100,16 +3064,10 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
       )}
       {open && (
         <div className="mt-4 space-y-4">
-          <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-moss">
-            Preview on the right updates as you type. Click Save on a section so new quotations use these details instead of "My Company".
-          </p>
           <label className="block text-sm">
             <span className="mb-1.5 block font-medium text-slate-700">Company name</span>
             <input value={companyName} onChange={e => setCompanyName(e.target.value)} disabled={!persistenceConfigured} className={BRANDING_FIELD_CLASS} />
           </label>
-          <BrandingSaveButton saving={saving} disabled={!persistenceConfigured} onClick={() => handleSave('Company name saved.')}>
-            Save company name
-          </BrandingSaveButton>
 
           <div className="rounded-2xl border border-sand bg-[#f7f9f7] p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3156,11 +3114,6 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
               disabled={!persistenceConfigured}
               className="mt-3 w-full accent-[#1A73E8]"
             />
-            <div className="mt-3">
-              <BrandingSaveButton saving={saving} disabled={!persistenceConfigured} onClick={() => handleSave('Logo size saved.')}>
-                Save logo size
-              </BrandingSaveButton>
-            </div>
           </div>
 
           <div className="rounded-2xl border border-sand bg-[#f7f9f7] p-4 space-y-3">
@@ -3213,9 +3166,6 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
               />
               </div>
             )}
-            <BrandingSaveButton saving={saving} disabled={!persistenceConfigured} onClick={() => handleSave('Header details saved.')}>
-              Save header
-            </BrandingSaveButton>
           </div>
 
           <div className="rounded-2xl border border-sand bg-[#f7f9f7] p-4 space-y-3">
@@ -3263,24 +3213,18 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
               )}
               </div>
             )}
-            <BrandingSaveButton saving={saving} disabled={!persistenceConfigured} onClick={() => handleSave('Footer saved.')}>
-              Save footer
-            </BrandingSaveButton>
           </div>
 
           {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
           {message && <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-moss">{message}</p>}
-          <div className="sticky bottom-0 z-10 -mx-1 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-sand bg-white px-4 py-3 shadow-soft">
-            <p className="text-xs text-slate-500">Preview on the right is a draft until you save.</p>
-            <button
-              type="button"
-              disabled={saving || !persistenceConfigured}
-              onClick={() => handleSave('Company branding saved.')}
-              className={BRANDING_SAVE_BTN_CLASS + ' py-2.5'}
-            >
-              {saving ? 'Saving…' : 'Save branding'}
-            </button>
-          </div>
+          <button
+            type="button"
+            disabled={saving || !persistenceConfigured}
+            onClick={handleSave}
+            className="rounded-xl bg-moss px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#1558b0] disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save branding'}
+          </button>
         </div>
       )}
     </div>
