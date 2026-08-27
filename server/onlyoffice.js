@@ -37,8 +37,8 @@ export function onlyOfficeEnabled() {
   return Boolean(onlyOfficeDocumentServerUrl())
 }
 
-export function buildOnlyOfficeConfig(req, { fileId, fileName, kind, mode = 'edit', keySuffix = '' }) {
-  const meta = readUploadFileMeta(fileId)
+export async function buildOnlyOfficeConfig(req, { fileId, fileName, kind, mode = 'edit', keySuffix = '' }) {
+  const meta = await readUploadFileMeta(fileId)
   if (!meta) return null
   const ext = (fileName || meta.fileName || '').split('.').pop()?.toLowerCase()
   const fileType = kind === 'excel' ? (ext === 'xlsm' ? 'xlsm' : 'xlsx') : 'docx'
@@ -75,17 +75,17 @@ async function downloadOnlyOfficeSavedBody(url) {
 
 /** OnlyOffice routes — registered before session auth so Document Server can fetch/save. */
 export function registerOnlyOfficeRoutes(app) {
-  app.get('/api/office/files/:fileId', (req, res) => {
+  app.get('/api/office/files/:fileId', async (req, res) => {
     const { fileId } = req.params
     const { exp, sig } = req.query
     if (!verifyOfficeFileToken(fileId, exp, sig)) {
       return res.status(403).json({ error: 'Invalid or expired file token.' })
     }
-    const meta = readUploadFileMeta(fileId)
-    const buf = readUploadFileBuffer(fileId)
+    const meta = await readUploadFileMeta(fileId)
+    const buf = await readUploadFileBuffer(fileId)
     if (!meta || !buf) return res.status(404).json({ error: 'File not found.' })
     res.setHeader('Content-Type', meta.mimeType || 'application/octet-stream')
-    res.setHeader('Content-Disposition', `inline; filename="${meta.fileName.replace(/"/g, '')}"`)
+    res.setHeader('Content-Disposition', `inline; filename="${String(meta.fileName || 'file').replace(/"/g, '')}"`)
     res.send(buf)
   })
 
@@ -97,7 +97,7 @@ export function registerOnlyOfficeRoutes(app) {
       // 2 = ready for save, 6 = forcesave
       if ((status === 2 || status === 6) && body.url && fileId) {
         const buf = await downloadOnlyOfficeSavedBody(body.url)
-        updateUploadFile(fileId, buf)
+        await updateUploadFile(fileId, buf)
       }
       res.json({ error: 0 })
     } catch (error) {
@@ -112,13 +112,13 @@ export function registerOnlyOfficeAuthRoutes(app) {
     res.json({ enabled: onlyOfficeEnabled(), url: onlyOfficeDocumentServerUrl() || null })
   })
 
-  app.get('/api/office/config/:fileId', (req, res) => {
+  app.get('/api/office/config/:fileId', async (req, res) => {
     if (!onlyOfficeEnabled()) {
       return res.status(503).json({ error: 'OnlyOffice Document Server is not configured. Set ONLYOFFICE_URL.' })
     }
-    const meta = readUploadFileMeta(req.params.fileId)
+    const meta = await readUploadFileMeta(req.params.fileId)
     if (!meta) return res.status(404).json({ error: 'File not found.' })
-    const config = buildOnlyOfficeConfig(req, {
+    const config = await buildOnlyOfficeConfig(req, {
       fileId: req.params.fileId,
       fileName: meta.fileName,
       kind: meta.kind,
@@ -131,9 +131,9 @@ export function registerOnlyOfficeAuthRoutes(app) {
     })
   })
 
-  app.get('/api/upload-files/:fileId', (req, res) => {
-    const meta = readUploadFileMeta(req.params.fileId)
-    const buf = readUploadFileBuffer(req.params.fileId)
+  app.get('/api/upload-files/:fileId', async (req, res) => {
+    const meta = await readUploadFileMeta(req.params.fileId)
+    const buf = await readUploadFileBuffer(req.params.fileId)
     if (!meta || !buf) return res.status(404).json({ error: 'File not found.' })
     res.setHeader('Content-Type', meta.mimeType || 'application/octet-stream')
     res.send(buf)

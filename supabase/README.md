@@ -7,6 +7,7 @@ Apply migrations in order to your Supabase project before using persistence APIs
 3. `migrations/20260812090000_quote_assets.sql` (quote-assets storage bucket)
 4. `migrations/20260812100000_product_image_memory.sql` (`products.image_url` / `products.image_path`)
 5. `migrations/20260812120000_multi_tenant_auth.sql` (**required** for login/signup — adds `user_id` to every tenant table and makes `allocate_quotation_number` / `search_knowledge_documents` per-user)
+6. `migrations/20260827120000_upload_templates.sql` (shared Word/Excel uploaded layouts — `upload_templates` / `upload_files` tables + private `upload-templates` storage bucket)
 
 **Step 9 (auth) also needs one dashboard setting, not just SQL:** Authentication → Email Templates → "Confirm signup" → make sure the template includes `{{ .Token }}` (the OTP code — this project issues 8 digits, but the length is a project setting under Authentication → Providers → Email → OTP length), not only `{{ .ConfirmationURL }}`. Supabase's default template is link-only; without `{{ .Token }}` in the template, the signup email won't contain a code to type in and OTP verification will fail even though the API call succeeds. Authentication → Providers → Email should have "Confirm email" turned on (the default) so signup actually requires verification.
 

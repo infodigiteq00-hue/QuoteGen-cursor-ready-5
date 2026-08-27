@@ -1018,10 +1018,11 @@ export function registerUploadDocRoutes(app) {
         }
 
         const fileName = req.file.originalname
-        const fileId = saveUploadFile(req.file.buffer, {
+        const fileId = await saveUploadFile(req.file.buffer, {
           fileName,
           mimeType: req.file.mimetype,
-          kind
+          kind,
+          userId: req.userId
         })
 
         let doc
