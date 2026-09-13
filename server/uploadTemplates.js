@@ -119,6 +119,19 @@ export function scrubExcelSheets(sheets) {
   }
 }
 
+function isMissingSchema(error) {
+  return MISSING_SCHEMA.test(String(error?.message || error?.code || ''))
+}
+
+function supabaseOrNull() {
+  if (!isSupabaseConfigured()) return null
+  try {
+    return getSupabase()
+  } catch {
+    return null
+  }
+}
+
 function ensureStore() {
   const dir = getDataDir()
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })

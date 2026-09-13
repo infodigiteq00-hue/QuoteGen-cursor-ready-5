@@ -2627,14 +2627,16 @@ export function fillExcelTemplate(sheets, quote, columns, design = {}, totals, o
       customer.location,
       customer.gst
     ].filter(Boolean)
-    if (blockCells.length <= 1) {
-      blockCells.forEach((cell) => {
-        cell.value = `${cell.labelPrefix || ''}${blockLines.join('\n')}`
-      })
-    } else {
-      blockCells.forEach((cell, i) => {
-        cell.value = `${cell.labelPrefix || ''}${blockLines[i] || ''}`
-      })
+    if (!placedRoles.has('customer_block')) {
+      if (blockCells.length <= 1) {
+        blockCells.forEach((cell) => {
+          cell.value = `${cell.labelPrefix || ''}${blockLines.join('\n')}`
+        })
+      } else {
+        blockCells.forEach((cell, i) => {
+          cell.value = `${cell.labelPrefix || ''}${blockLines[i] || ''}`
+        })
+      }
     }
 
     applyExtraLinesAndTotalsToSheet(sheet, totals)

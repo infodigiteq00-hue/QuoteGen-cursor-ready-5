@@ -2624,6 +2624,20 @@ function CompanyQuotePreview({ profile, layoutPreview = null, uploadTemplates = 
 }
 
 const BRANDING_FIELD_CLASS = 'w-full rounded-xl border border-sand bg-white px-3 py-2.5 text-sm outline-none focus:border-moss focus:ring-4 focus:ring-blue-50 disabled:bg-slate-50'
+const BRANDING_SAVE_BTN_CLASS = 'rounded-xl bg-moss px-4 py-2 text-sm font-semibold text-white hover:bg-[#1558b0] disabled:opacity-50'
+
+function BrandingSaveButton({ saving, disabled, onClick, children }) {
+  return (
+    <button
+      type="button"
+      disabled={saving || disabled}
+      onClick={onClick}
+      className={BRANDING_SAVE_BTN_CLASS}
+    >
+      {saving ? 'Saving…' : children}
+    </button>
+  )
+}
 const SELECT_FIELD_CLASS = 'w-full rounded-xl border border-sand bg-white px-3 py-2.5 text-sm text-slate-700 outline-none focus:border-moss focus:ring-4 focus:ring-blue-50 disabled:bg-slate-50'
 const PHONE_LINE_RE = /(?:\+91[\s-]*)?(?:\d[\s()-]*){10,}/
 const PIN_LINE_RE = /\b(\d{6})\b/
@@ -3310,6 +3324,11 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
                   <span className="mb-1.5 block font-medium text-slate-700">Email</span>
                   <input type="email" value={headerFields.email || ''} onChange={e => patchHeaderField('email', e.target.value)} disabled={!persistenceConfigured} placeholder="sales@yourcompany.com" className={BRANDING_FIELD_CLASS} />
                 </label>
+                <div className="flex justify-end">
+                  <BrandingSaveButton saving={saving} disabled={!persistenceConfigured} onClick={() => handleSave('Header details saved.')}>
+                    Save header
+                  </BrandingSaveButton>
+                </div>
               </div>
             )}
             {headerMode === 'image' && (
@@ -3357,6 +3376,11 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
                 <span className="mb-1.5 block font-medium text-slate-700">Footer note</span>
                 <textarea value={footerFields.note} onChange={e => patchFooterField('note', e.target.value)} disabled={!persistenceConfigured} rows={2} placeholder="Thank you for your business!" className={`resize-y ${BRANDING_FIELD_CLASS}`} />
               </label>
+              <div className="mt-3 flex justify-end">
+                <BrandingSaveButton saving={saving} disabled={!persistenceConfigured} onClick={() => handleSave('Footer saved.')}>
+                  Save footer
+                </BrandingSaveButton>
+              </div>
               </div>
             )}
             {footerMode === 'image' && (

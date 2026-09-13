@@ -29,6 +29,8 @@ const windowsLocalAppData = process.env.LOCALAPPDATA || ''
 
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
+  process.env.PUPPETEER_EXECUTABLE_PATH,
+  process.env.CHROMIUM_PATH,
   '/usr/bin/google-chrome',
   '/usr/bin/google-chrome-stable',
   '/usr/bin/chromium',
@@ -39,8 +41,11 @@ const CHROME_CANDIDATES = [
   join(windowsProgramFiles, 'Google', 'Chrome', 'Application', 'chrome.exe'),
   join(windowsProgramFilesX86, 'Google', 'Chrome', 'Application', 'chrome.exe'),
   windowsLocalAppData && join(windowsLocalAppData, 'Google', 'Chrome', 'Application', 'chrome.exe'),
+  windowsLocalAppData && join(windowsLocalAppData, 'Google', 'Chrome Beta', 'Application', 'chrome.exe'),
+  windowsLocalAppData && join(windowsLocalAppData, 'Google', 'Chrome SxS', 'Application', 'chrome.exe'),
   join(windowsProgramFiles, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-  join(windowsProgramFilesX86, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
+  join(windowsProgramFilesX86, 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+  windowsLocalAppData && join(windowsLocalAppData, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
 ].filter(Boolean)
 
 const MAX_HTML_CHARS = 28 * 1024 * 1024
@@ -271,7 +276,6 @@ function pdfOptionsFor(timeoutMs) {
  * "rotate the sheet". Local Windows still uses spawn, which already works.
  */
 async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
-  let chromium = null
   let puppeteer
   let executablePath = systemBinary || null
   let args = [
@@ -285,7 +289,6 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
     '--no-default-browser-check',
     '--force-color-profile=srgb'
   ]
-  let headless = true
 
   try {
     puppeteer = await import('puppeteer-core')

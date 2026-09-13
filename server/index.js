@@ -37,6 +37,9 @@ app.use((err, req, res, next) => {
 // OnlyOffice must reach files/callbacks without a browser session.
 registerOnlyOfficeRoutes(app)
 
+// OnlyOffice must reach files/callbacks without a browser session.
+registerOnlyOfficeRoutes(app)
+
 // Auth endpoints are public; everything else under /api requires a session.
 registerAuthRoutes(app)
 app.use('/api', requireAuth)
