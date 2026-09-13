@@ -7,7 +7,19 @@ import {
   fillWordTemplate,
   fillExcelTemplate,
   scrubTransientWordShell,
-  cellValueForField
+  markTransientWordShell,
+  markTransientExcelShell,
+  maxTempWave,
+  cellValueForField,
+  collectWordSlots,
+  lineItemHeaderScore,
+  layoutFieldRole,
+  quoteRoleValues,
+  layoutRolesFromMapping,
+  buildExcelCellMap,
+  placementsFromCellMap,
+  applyExcelCellMapRoles,
+  scrubTransientExcelShell
 } from './templateMap.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -57,6 +69,20 @@ assert(cellValueForField(item, 'description', 0, columns, ['description', 'speci
 assert(cellValueForField(item, 'specification', 0, columns, ['description', 'specification']).includes('PG21'), 'Description col gets spec')
 assert(cellValueForField(item, 'description', 0, columns, ['description']).includes('Nylon gland'), 'solo Description keeps full text')
 
+assert(layoutFieldRole('Payment Terms') === 'payment_terms', 'Payment Terms role')
+assert(layoutFieldRole('Delivery Schedule') === 'delivery_terms', 'Delivery Schedule role')
+assert(layoutFieldRole('Validity of Quotation') === 'validity_terms', 'Validity of Quotation role')
+assert(layoutFieldRole('Clarifications') === 'clarifications', 'Clarifications role')
+assert(layoutFieldRole('Valid till') === 'valid_until', 'Valid till stays date field')
+
+const mapping = {
+  columns: [{ id: 'description', label: 'Description' }],
+  slots: [{ role: 'payment_terms', permanent: false }, { role: 'customer_name', permanent: false }],
+  dynamicCells: [{ role: 'delivery_terms' }]
+}
+const detected = layoutRolesFromMapping(mapping)
+assert(detected.includes('payment_terms') && detected.includes('delivery_terms'), 'layoutRolesFromMapping')
+
 const quote = {
   number: 'QG-2026-0042',
   date: '19-Aug-2026',
@@ -73,6 +99,16 @@ const quote = {
     { description: 'Armoured cable\n4 core 2.5 sqmm', quantity: '200', unit: 'Mtr', rate: '95', amount: '19000' }
   ]
 }
+
+const termsQuote = {
+  ...quote,
+  terms: { payment: '30 days', delivery: '4 weeks', validity: '15 days', freight: 'Extra', taxes: 'GST extra' },
+  clarifications: ['Confirm grade', 'Confirm qty']
+}
+const roleValues = quoteRoleValues(termsQuote)
+assert(roleValues.payment_terms === '30 days', 'payment_terms from quote.terms')
+assert(roleValues.delivery_terms === '4 weeks', 'delivery_terms from quote.terms')
+assert(roleValues.clarifications.includes('Confirm grade'), 'clarifications joined')
 
 const wordShell = `
 <table><tr>
@@ -114,6 +150,22 @@ assert(again.includes('LED highbay') && again.includes('Armoured cable'), 're-fi
 
 const scrubbedTwice = scrubTransientWordShell(scrubTransientWordShell(wordShell))
 assert((scrubbedTwice.match(/data-slot="customer_gst"/g) || []).length === 1, 'double scrub keeps a single GSTIN slot')
+assert(/data-slot="line_cell"/.test(scrubbedTwice), 'line body cells are slotted')
+assert(collectWordSlots(scrubbedTwice).some(s => s.role === 'customer_gst' && !s.permanent), 'GSTIN slot is saved as dynamic')
+assert(collectWordSlots(scrubbedTwice).some(s => s.role === 'line_items' && !s.permanent), 'line_items slot is saved')
+
+const markedWord = markTransientWordShell(wordShell)
+assert(markedWord.includes('Sample lamp'), 'upload preview still shows the sample row')
+assert(markedWord.includes('data-qg-temp="1"'), 'sample values are marked for the fade')
+assert(markedWord.includes('Sr. No.'), 'column headers stay visible')
+assert(!/qg-temp-strip[^>]*>Sr\. No\./.test(markedWord), 'column headers are not faded')
+assert(maxTempWave(markedWord) >= 1, 'line-item rows get a later fade wave')
+assert(markTransientWordShell(`<p>Bank Name: HDFC Bank IFSC: HDFC0001234 Account No 123456</p>${wordShell}`).includes('HDFC0001234'), 'bank details stay')
+
+const withChrome = `<div data-qg-permanent="header"><p>GSTIN: 27AABCT1234F1Z5</p></div>${wordShell}`
+const filledChrome = fillWordTemplate(withChrome, quote, columns, {}, { grandTotal: 70120, subtotal: 70120, taxTotal: 0 })
+assert(filledChrome.includes('27AABCT1234F1Z5'), 'seller GSTIN in header chrome remains')
+assert(filledChrome.includes('<div data-qg-permanent="header">'), 'header wrapper remains')
 
 const excelSheets = [{
   name: 'Quotation',
@@ -142,6 +194,14 @@ const excelSheets = [{
   ]
 }]
 
+const markedExcel = markTransientExcelShell(excelSheets)
+const markedItem = markedExcel[0].rows[2].cells.find(c => c.col === 2)
+const markedHeader = markedExcel[0].rows[1].cells.find(c => c.col === 2)
+assert(markedItem.value === 'Sample A', 'Excel preview keeps the sample product')
+assert(Number.isFinite(markedItem.tempWave), 'Excel sample cell is tagged to fade')
+assert(markedHeader.value === 'Item', 'Excel column header stays')
+assert(markedHeader.tempWave == null, 'Excel column header is not faded')
+
 const filledExcel = fillExcelTemplate(excelSheets, quote, slugColumns, {}, { grandTotal: 70120 })
 const sheet = filledExcel[0]
 const gstRow = sheet.rows[0]
@@ -161,6 +221,77 @@ assert(names[1].includes('GST 18mm gland'), 'GST-named product still appears')
 assert(names[2].includes('Armoured cable'), 'third line appears')
 assert(!names.some(n => n.includes('Sample A')), 'sample product is gone')
 
+const customerSheets = [{
+  name: 'Quote',
+  columns: [],
+  rows: [
+    { index: 4, cells: [
+      { col: 1, value: 'CUSTOMER', role: 'content' },
+      { col: 2, value: 'Sample Co', role: 'content' }
+    ]},
+    { index: 8, cells: [
+      { col: 1, value: 'Sr. No.', role: 'content' },
+      { col: 2, value: 'Item', role: 'content' },
+      { col: 3, value: 'Description', role: 'content' },
+      { col: 4, value: 'Qty', role: 'content' }
+    ]},
+    { index: 9, cells: [
+      { col: 1, value: '1', role: 'content' },
+      { col: 2, value: 'Widget', role: 'line_item' },
+      { col: 3, value: 'Spec', role: 'line_item' },
+      { col: 4, value: '1', role: 'line_item' }
+    ]},
+    { index: 10, cells: [
+      { col: 1, value: 'Grand Total', role: 'content' },
+      { col: 4, value: '100', role: 'content' }
+    ]}
+  ]
+}]
+const scrubbedCustomer = scrubTransientExcelShell(customerSheets)
+const cellMap = buildExcelCellMap(scrubbedCustomer, slugColumns)
+assert(cellMap.placements.customer_block?.excelRow === 4, `CUSTOMER value locks row 4, got ${cellMap.placements.customer_block?.excelRow}`)
+assert(cellMap.placements.customer_block?.col === 2, 'CUSTOMER value locks col 2')
+assert(cellMap.lineItems.length === 1, 'line item block detected')
+assert(cellMap.lineItems[0].firstItemExcelRow === 9, `first item row is 9, got ${cellMap.lineItems[0].firstItemExcelRow}`)
+const remapped = applyExcelCellMapRoles(scrubbedCustomer, cellMap)
+const companyCell = remapped[0].rows.find(r => r.index === 4)?.cells.find(c => c.col === 2)
+assert(companyCell?.role === 'customer_block', 'cell map restores customer_block role')
+
+const filledWithPlacements = fillExcelTemplate(
+  remapped,
+  quote,
+  slugColumns,
+  {},
+  { grandTotal: 70120 },
+  { placements: placementsFromCellMap(cellMap) }
+)
+const filledCompany = filledWithPlacements[0].rows.find(r => r.index === 4)?.cells.find(c => c.col === 2)
+assert(String(filledCompany?.value).includes('NorthRock Logistics'), `placement fill hits CUSTOMER cell: ${filledCompany?.value}`)
+
+// CUSTOMER header above an empty box (no sample text) — still locks the cell below.
+const emptyBoxSheets = [{
+  name: 'Quote',
+  columns: [],
+  rows: [
+    { index: 14, cells: [{ col: 2, value: 'CUSTOMER', role: 'content', colSpan: 2 }] },
+    { index: 15, cells: [] },
+    { index: 21, cells: [
+      { col: 2, value: 'Description', role: 'content' },
+      { col: 3, value: 'Qty', role: 'content' },
+      { col: 4, value: 'Rate', role: 'content' }
+    ]},
+    { index: 22, cells: [
+      { col: 2, value: 'Item', role: 'line_item' },
+      { col: 3, value: '1', role: 'line_item' },
+      { col: 4, value: '10', role: 'line_item' }
+    ]}
+  ]
+}]
+const scrubbedEmpty = scrubTransientExcelShell(emptyBoxSheets)
+const emptyMap = buildExcelCellMap(scrubbedEmpty, slugColumns)
+assert(emptyMap.placements.customer_block?.excelRow === 15, `empty CUSTOMER box locks row 15, got ${emptyMap.placements.customer_block?.excelRow}`)
+assert(emptyMap.placements.customer_block?.col === 2, 'empty CUSTOMER box locks col 2')
+
 const storePath = path.join(__dirname, '..', 'data', 'upload-templates.json')
 if (fs.existsSync(storePath)) {
   const store = JSON.parse(fs.readFileSync(storePath, 'utf8'))
@@ -178,7 +309,12 @@ if (fs.existsSync(storePath)) {
     assert((out.match(/data-qg-field="description"/g) || []).length === 3, `saved Word ${north.name}: Item column filled 3 times`)
     assert((out.match(/data-qg-field="specification"/g) || []).length === 3, `saved Word ${north.name}: Description column filled 3 times`)
   }
-  const excelTpl = (store.templates || []).find(t => t.type === 'excel')
+  const excelTpl = (store.templates || []).find(t => (
+    t.type === 'excel' &&
+    (t.content?.sheets?.[0]?.rows || []).some(r =>
+      lineItemHeaderScore((r.cells || []).map(c => String(c.value || ''))) >= 0
+    )
+  ))
   if (excelTpl) {
     const sheets = fillExcelTemplate(excelTpl.content.sheets, quote, excelTpl.mapping?.columns || columns, {}, { grandTotal: 70120 })
     const s = sheets[0]

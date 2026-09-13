@@ -1407,18 +1407,61 @@ If something isn't specified, keep the current value.`
     const requestId = `q-del-${Date.now()}`
     const supabase = requireDb(res, requestId)
     if (!supabase) return
+    const id = String(req.params.id || '').trim()
+    if (!id) {
+      return res.status(400).json({ error: 'Quotation id is required.', code: 'VALIDATION_ERROR', requestId })
+    }
+    const busy = (error) => error?.code === '57014' || /statement timeout/i.test(error?.message || '')
     try {
-      const { data, error } = await supabase
+      // One ownership-scoped delete. Returning the row id is the persistence proof —
+      // extra pre/post selects were timing out under DB load and looking like "fake" deletes.
+      const { error: revError } = await supabase
+        .from('quotation_revisions')
+        .delete()
+        .eq('quotation_id', id)
+        .eq('user_id', req.userId)
+      if (revError && !/schema cache|PGRST20[24]|42703|does not exist/i.test(revError.message || '')) {
+        if (busy(revError)) {
+          return res.status(504).json({
+            error: 'Database is busy right now. Wait a couple of seconds and delete again — the quotation is still saved.',
+            code: 'DB_TIMEOUT',
+            requestId
+          })
+        }
+        throw revError
+      }
+
+      const { data: removed, error } = await supabase
         .from('quotations')
         .delete()
-        .eq('id', req.params.id)
+        .eq('id', id)
         .eq('user_id', req.userId)
         .select('id')
-        .maybeSingle()
-      if (error) throw error
-      if (!data) return res.status(404).json({ error: 'Quotation not found.', code: 'NOT_FOUND', requestId })
-      res.json({ ok: true, id: data.id })
+      if (error) {
+        if (busy(error)) {
+          return res.status(504).json({
+            error: 'Database is busy right now. Wait a couple of seconds and delete again — the quotation is still saved.',
+            code: 'DB_TIMEOUT',
+            requestId
+          })
+        }
+        throw error
+      }
+      if (!removed?.length) {
+        console.warn(`[${requestId}] delete matched no rows`, { id, userId: req.userId })
+        return res.status(404).json({ error: 'Quotation not found.', code: 'NOT_FOUND', requestId })
+      }
+
+      console.log(`[${requestId}] quotation deleted`, { id, userId: req.userId })
+      res.json({ ok: true, id })
     } catch (error) {
+      if (busy(error)) {
+        return res.status(504).json({
+          error: 'Database is busy right now. Wait a couple of seconds and delete again — the quotation is still saved.',
+          code: 'DB_TIMEOUT',
+          requestId
+        })
+      }
       supabaseError(error, res, requestId)
     }
   })

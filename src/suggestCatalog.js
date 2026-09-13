@@ -1,5 +1,5 @@
 import { columnType, isImageColumn, isAttachmentColumn, isNestedColumn, rateKey } from '../shared/quoteColumns.js'
-import { isSuggestedColumn, scoreProductKeywords, standardProductName } from '../shared/productKeywords.js'
+import { isSuggestedColumn, scoreProductKeywords, standardProductName, SUGGESTED_COLUMN_ENABLED } from '../shared/productKeywords.js'
 
 function norm(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ')
@@ -17,9 +17,9 @@ export function scoreMatch(query, ...fields) {
   if (hay === q) return 100
   if (hay.startsWith(q)) return 92
   if (hay.includes(q)) return 74
-  const tokens = q.split(' ').filter(t => t.length >= 2)
+  const tokens = q.split(' ').filter(t => t.length >= 1)
   if (tokens.length && tokens.every(t => hay.includes(t))) return 62
-  if (q.length >= 3 && tokens.some(t => hay.includes(t))) return 40
+  if (q.length >= 2 && tokens.some(t => hay.includes(t))) return 40
   return 0
 }
 
@@ -30,10 +30,26 @@ export function clientsFromQuotations(quotations, extraCustomer) {
     const name = String(c?.name || '').trim()
     const gst = String(c?.gst || '').trim()
     const location = String(c?.location || '').trim()
+    const shippingLocation = String(c?.shippingLocation || '').trim()
+    const shippingSame = c?.shippingSame !== false
     if (!company && !name && !gst) return
     const key = norm(gst || company || name)
-    if (!key || map.has(key)) return
-    map.set(key, { company, name, gst, location, source })
+    if (!key) return
+    const prev = map.get(key)
+    const shippingAddresses = new Set(prev?.shippingAddresses || [])
+    for (const addr of (Array.isArray(c?.shippingAddresses) ? c.shippingAddresses : [])) {
+      const t = String(addr || '').trim()
+      if (t) shippingAddresses.add(t)
+    }
+    if (!shippingSame && shippingLocation) shippingAddresses.add(shippingLocation)
+    map.set(key, {
+      company: prev?.company || company,
+      name: prev?.name || name,
+      gst: prev?.gst || gst,
+      location: prev?.location || location,
+      shippingAddresses: [...shippingAddresses],
+      source: prev?.source || source
+    })
   }
   for (const q of quotations || []) add(q.customer, q.number || 'history')
   if (extraCustomer) add(extraCustomer, 'this quote')
@@ -46,16 +62,53 @@ export function matchClients(clients, query, field = 'company') {
   if (!q) return list.slice(0, 8).map(c => ({ ...c, score: 1 }))
   return list
     .map(c => {
-      const focused = field === 'gst' ? c.gst : field === 'name' ? c.name : field === 'location' ? c.location : c.company
+      const focused = field === 'gst' ? c.gst
+        : field === 'name' ? c.name
+        : field === 'location' ? c.location
+        : field === 'shipping' ? (c.shippingAddresses || []).join(' ')
+        : c.company
       const score = Math.max(
         scoreMatch(q, focused),
-        scoreMatch(q, c.company, c.name, c.gst, c.location) * 0.9
+        scoreMatch(q, c.company, c.name, c.gst, c.location, ...(c.shippingAddresses || [])) * 0.9
       )
       return { ...c, score }
     })
     .filter(c => c.score >= 40)
     .sort((a, b) => b.score - a.score)
     .slice(0, 8)
+}
+
+/** Shipping addresses remembered for the client currently on the quote. */
+export function shippingAddressesForCustomer(clients, customer, query = '') {
+  const company = norm(customer?.company)
+  const gst = norm(customer?.gst)
+  const name = norm(customer?.name)
+  const addrs = new Set()
+  for (const c of clients || []) {
+    const match = (gst && norm(c.gst) === gst)
+      || (company && norm(c.company) === company)
+      || (name && !company && norm(c.name) === name)
+    if (!match) continue
+    for (const addr of c.shippingAddresses || []) {
+      const t = String(addr || '').trim()
+      if (t) addrs.add(t)
+    }
+    if (c.location && c.location !== customer?.location) {
+      // historic billing sometimes used as ship-to elsewhere — skip unless explicit shipping list
+    }
+  }
+  const current = String(customer?.shippingLocation || '').trim()
+  if (current) addrs.add(current)
+  const q = String(query || '').trim()
+  let list = [...addrs]
+  if (q) {
+    list = list
+      .map(addr => ({ addr, score: scoreMatch(q, addr) }))
+      .filter(x => x.score >= 40 || !q)
+      .sort((a, b) => b.score - a.score)
+      .map(x => x.addr)
+  }
+  return list.slice(0, 8)
 }
 
 function productKey(p) {
@@ -138,7 +191,10 @@ export function applyProductToItem(item, columns, product, typedColId) {
     if (id === typedColId || !current) next[id] = String(value)
   }
   const catalogueName = standardProductName(product) || firstLine(product.description)
-  if (suggestedCol && catalogueName) {
+  // When Our suggested is on, catalogue name goes there. When off, apply into
+  // description only if the user typed in that cell (or it's empty) — never
+  // steal keystrokes into a hidden parallel column.
+  if (SUGGESTED_COLUMN_ENABLED && suggestedCol && catalogueName) {
     next[suggestedCol.id] = catalogueName
     next._suggestedAuto = catalogueName
   } else if (descCol && product.description) {

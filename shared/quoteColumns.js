@@ -62,9 +62,13 @@ export function columnType(col) {
   return COLUMN_TYPES.includes(type) ? type : 'text'
 }
 
-export function isNestedColumn(col) {
+export function isTaxOrDiscountColumn(col) {
   const type = columnType(col)
-  return (type === 'tax' || type === 'discount') && columnMode(col) !== 'amount'
+  return type === 'tax' || type === 'discount'
+}
+
+export function isNestedColumn(col) {
+  return isTaxOrDiscountColumn(col) && columnMode(col) !== 'amount'
 }
 
 function columnName(col) {
@@ -297,11 +301,14 @@ function applyRowAmount(item, columns, editingKey) {
  * Taxable base for a row, or null when the row carries no usable amount yet.
  * The null case matters: a base of 0 because a discount consumed the row is a
  * real 0.00 tax, while an unresolvable base should leave derived cells blank.
+ *
+ * A formula on the Amount column is ignored here — that cell may be
+ * "Amount after tax", which must never become the discount/tax base.
  */
 export function resolveRowBase(item, columns) {
   if (!item) return null
   const amountCol = findFieldColumn(columns, 'amount')
-  if (amountCol) {
+  if (amountCol && !isFormulaColumn(amountCol)) {
     const n = toNumber(item[amountCol.id])
     if (n != null) return round2(n)
   }
@@ -326,10 +333,44 @@ export function rowBaseAmount(item, columns) {
  * `editingKey` is never touched, so typing is never fought.
  * `base` is null when the row has no usable amount yet.
  */
+/**
+ * Rupee value of a tax/discount column against `percentBase` (list amount for
+ * discount, taxable amount for tax). Percent columns follow the visible Rate %
+ * whenever it disagrees with a stale ₹ amount — the studio table only shows %.
+ */
+export function columnMoneyAmount(item, col, percentBase) {
+  if (columnMode(col) === 'amount') {
+    const n = toNumber(item?.[col.id])
+    return n == null ? 0 : round2(n)
+  }
+  const rate = toNumber(item?.[rateKey(col)])
+  const amount = toNumber(item?.[amountKey(col)])
+  const src = item?.[sourceKey(col)] === 'amount' ? 'amount' : 'rate'
+  if (src === 'amount') {
+    if (rate != null && percentBase != null && percentBase > 0) {
+      const fromRate = round2((percentBase * rate) / 100)
+      if (amount == null || fromRate !== round2(amount)) return fromRate
+    }
+    return amount == null ? 0 : round2(amount)
+  }
+  if (rate == null || percentBase == null) return amount == null ? 0 : round2(amount)
+  return round2((percentBase * rate) / 100)
+}
+
 function applyNestedPair(item, col, base, editingKey) {
   const rk = rateKey(col)
   const ak = amountKey(col)
-  const src = item[sourceKey(col)] === 'amount' ? 'amount' : 'rate'
+  let src = item[sourceKey(col)] === 'amount' ? 'amount' : 'rate'
+
+  // Hidden ₹ leftover (e.g. 10% → ₹18) must not win after the user types 18%.
+  if (src === 'amount' && ak !== editingKey) {
+    const rate = toNumber(item[rk])
+    const amount = toNumber(item[ak])
+    if (rate != null && base != null && base > 0) {
+      const fromRate = round2((base * rate) / 100)
+      if (amount == null || fromRate !== round2(amount)) src = 'rate'
+    }
+  }
 
   if (src === 'amount') {
     const amount = toNumber(item[ak])
@@ -352,9 +393,29 @@ function applyNestedPair(item, col, base, editingKey) {
   return amount
 }
 
+/** Flat ₹ tax/discount: the typed value in `col.id` is the contribution. */
+function applyAmountModeColumn(item, col, editingKey) {
+  const key = col.id
+  const amount = toNumber(item[key])
+  if (key === editingKey) return amount == null ? 0 : round2(amount)
+  return amount == null ? 0 : round2(amount)
+}
+
 /**
- * Recompute a row: Amount first, then every nested cell from the new base.
+ * One tax or discount column's rupee contribution. Percent columns keep the
+ * Rate % ↔ Amount pair; amount-mode columns stay a single rupee cell.
+ */
+function applyTaxOrDiscount(item, col, base, editingKey) {
+  if (columnMode(col) === 'amount') return applyAmountModeColumn(item, col, editingKey)
+  return applyNestedPair(item, col, base, editingKey)
+}
+
+/**
+ * Recompute a row: Amount first, then every tax/discount cell from the new base.
  * `editingKey` is the cell the user is typing in and is never rewritten.
+ *
+ * Order: Quantity × Rate → minus discounts → Amount before tax → plus taxes
+ * (Amount after tax = before tax × (100 + tax %) / 100, via the tax ₹ cells).
  */
 export function recalcRow(item, columns, { editingKey = null } = {}) {
   const cols = columns || []
@@ -364,20 +425,20 @@ export function recalcRow(item, columns, { editingKey = null } = {}) {
   if (!isFormulaColumn(amountCol)) {
     next = applyRowAmount(next, cols, editingKey)
   }
-  if (cols.some(isNestedColumn)) {
+  if (cols.some(isTaxOrDiscountColumn)) {
     const base = resolveRowBase(next, cols)
 
     let discountTotal = 0
     for (const col of cols) {
       if (columnType(col) !== 'discount') continue
-      discountTotal += applyNestedPair(next, col, base, editingKey)
+      discountTotal += applyTaxOrDiscount(next, col, base, editingKey)
     }
 
     // Discounts come off first; tax is charged on what is left, never below zero.
     const taxable = base == null ? null : round2(Math.max(0, base - discountTotal))
     for (const col of cols) {
       if (columnType(col) !== 'tax') continue
-      applyNestedPair(next, col, taxable, editingKey)
+      applyTaxOrDiscount(next, col, taxable, editingKey)
     }
   }
   return applyFormulaColumns(next, cols, editingKey)
@@ -386,7 +447,7 @@ export function recalcRow(item, columns, { editingKey = null } = {}) {
 export function recalcAllRows(items, columns) {
   if (!Array.isArray(items)) return []
   const cols = columns || []
-  if (!cols.some(isNestedColumn) && !amountFormula({}, cols) && !cols.some(isFormulaColumn)) return items
+  if (!cols.some(isTaxOrDiscountColumn) && !amountFormula({}, cols) && !cols.some(isFormulaColumn)) return items
   return items.map(item => recalcRow(item, cols))
 }
 
@@ -396,26 +457,32 @@ export function computeRowTotals(item, columns) {
   const base = rowBaseAmount(item, cols)
   const perColumn = {}
   let discount = 0
-  let tax = 0
 
   for (const col of cols) {
-    const type = columnType(col)
-    if (type !== 'tax' && type !== 'discount') continue
-    const amount = isNestedColumn(col)
-      ? (toNumber(item?.[amountKey(col)]) || 0)
-      : (toNumber(item?.[col.id]) || 0)
-    perColumn[col.id] = round2(amount)
-    if (type === 'discount') discount += amount
-    else tax += amount
+    if (columnType(col) !== 'discount') continue
+    const amount = columnMoneyAmount(item, col, base)
+    perColumn[col.id] = amount
+    discount += amount
   }
 
   const taxable = round2(Math.max(0, base - discount))
+  let tax = 0
+  for (const col of cols) {
+    if (columnType(col) !== 'tax') continue
+    const amount = columnMoneyAmount(item, col, taxable)
+    perColumn[col.id] = amount
+    tax += amount
+  }
+
+  const taxRounded = round2(tax)
+  // Amount after tax = Amount before tax × (100 + tax %) / 100, which is the
+  // same as taxable + independently rounded tax ₹ (CGST+SGST on the same base).
   return {
     base: round2(base),
     discount: round2(discount),
     taxable,
-    tax: round2(tax),
-    total: round2(taxable + tax),
+    tax: taxRounded,
+    total: round2(taxable + taxRounded),
     perColumn
   }
 }
@@ -429,6 +496,16 @@ export function extraLineResolvedAmount(line, base) {
   const raw = Math.abs(toNumber(line?.amount) || 0)
   if (extraLineUnit(line) === 'percent') return round2(Math.abs(Number(base) || 0) * raw / 100)
   return round2(raw)
+}
+
+function extraLabelText(line) {
+  return String(line?.label || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+/** Freight / packing / cartage extra lines (quote-level add, not a tax column). */
+export function isFreightExtraLabel(label) {
+  const t = extraLabelText({ label })
+  return /freight|packing|cartage|transport|shipping|handling/.test(t)
 }
 
 export function normalizeExtraLines(lines) {
@@ -457,7 +534,7 @@ export function computeQuoteTotals(items, columns, extraLines) {
   const cols = columns || []
   const rows = Array.isArray(items) ? items : []
   const nestedCols = cols.filter(isNestedColumn)
-  const perColumn = nestedCols.map(col => ({
+  const perColumn = cols.filter(isTaxOrDiscountColumn).map(col => ({
     id: col.id,
     label: col.label,
     type: columnType(col),
@@ -467,12 +544,16 @@ export function computeQuoteTotals(items, columns, extraLines) {
   let subtotal = 0
   let discountTotal = 0
   let taxTotal = 0
+  let taxableTotal = 0
+  let lineTotal = 0
 
   for (const item of rows) {
     const totals = computeRowTotals(item, cols)
     subtotal += totals.base
     discountTotal += totals.discount
     taxTotal += totals.tax
+    taxableTotal += totals.taxable
+    lineTotal += totals.total
     for (const entry of perColumn) {
       entry.amount = round2(entry.amount + (totals.perColumn[entry.id] || 0))
     }
@@ -481,17 +562,28 @@ export function computeQuoteTotals(items, columns, extraLines) {
   subtotal = round2(subtotal)
   discountTotal = round2(discountTotal)
   taxTotal = round2(taxTotal)
-  const taxableTotal = round2(Math.max(0, subtotal - discountTotal))
-  const extraBase = round2(taxableTotal + taxTotal)
+  // Sum of per-row taxables (tax is charged per row). Do not recompute as
+  // max(0, subtotal − discounts): an over-discount on one row must not steal
+  // taxable value from another.
+  taxableTotal = round2(taxableTotal)
+  const extraBase = round2(lineTotal)
+  const resolvedExtraLines = normalizeExtraLines(extraLines).map(line => ({
+    ...line,
+    resolved: extraLineResolvedAmount(line, extraBase)
+  }))
   let extraAdd = 0
   let extraLess = 0
-  for (const line of normalizeExtraLines(extraLines)) {
-    const amount = extraLineResolvedAmount(line, extraBase)
-    if (line.kind === 'add') extraAdd += amount
-    else extraLess += amount
+  let freightTotal = 0
+  for (const line of resolvedExtraLines) {
+    const amount = line.resolved
+    if (line.kind === 'add') {
+      extraAdd += amount
+      if (isFreightExtraLabel(line.label)) freightTotal += amount
+    } else extraLess += amount
   }
   extraAdd = round2(extraAdd)
   extraLess = round2(extraLess)
+  freightTotal = round2(freightTotal)
 
   return {
     subtotal,
@@ -501,8 +593,10 @@ export function computeQuoteTotals(items, columns, extraLines) {
     extraBase,
     extraAdd,
     extraLess,
+    freightTotal,
     grandTotal: round2(Math.max(0, extraBase + extraAdd - extraLess)),
     perColumn,
+    resolvedExtraLines,
     hasNested: nestedCols.length > 0
   }
 }
@@ -586,6 +680,7 @@ export function normalizeColumn(col) {
   if (type === 'hsn') normalized.digits = hsnDigits(col)
   const formula = normalizeFormula(col.formula)
   if (formula) normalized.formula = formula
+  if (col.calculated === true) normalized.calculated = true
   return normalized
 }
 
@@ -611,6 +706,79 @@ export function moveColumnInList(columns, from, to) {
   const next = [...columns]
   const [item] = next.splice(from, 1)
   next.splice(to, 0, item)
+  return next
+}
+
+function isRateOrPriceCol(col) {
+  const id = String(col?.id || '').toLowerCase()
+  const label = String(col?.label || '').toLowerCase()
+  return id === 'rate' || id === 'price' || /^(rate|price|unit\s*rate)$/i.test(label)
+}
+
+function isQtyCol(col) {
+  const id = String(col?.id || '').toLowerCase()
+  const label = String(col?.label || '').toLowerCase()
+  return id === 'quantity' || id === 'qty' || /^(qty|quantity)$/i.test(label)
+}
+
+/** Where a newly added column should land in the row. */
+export function insertIndexForNewColumn(columns, col) {
+  const list = Array.isArray(columns) ? columns : []
+  const type = columnType(col)
+  const label = String(col?.label || '')
+  const looksHsn = type === 'hsn' || /hsn|sac/i.test(`${col?.id || ''} ${label}`)
+
+  if (looksHsn) {
+    // Before Quantity or Rate — whichever comes first.
+    let best = -1
+    list.forEach((c, i) => {
+      if (isQtyCol(c) || isRateOrPriceCol(c)) {
+        if (best < 0 || i < best) best = i
+      }
+    })
+    if (best >= 0) return best
+    const unitIdx = list.findIndex(c => c.id === 'unit')
+    return unitIdx >= 0 ? unitIdx : list.length
+  }
+
+  if (type === 'discount') {
+    // After Rate / Price.
+    let rateIdx = -1
+    list.forEach((c, i) => { if (isRateOrPriceCol(c)) rateIdx = i })
+    if (rateIdx >= 0) return rateIdx + 1
+    const amountIdx = list.findIndex(c => c.id === 'amount' || /amount/i.test(c.label || ''))
+    if (amountIdx >= 0) return amountIdx
+    return list.length
+  }
+
+  if (type === 'tax') {
+    // After the last Discount; else after Rate; else before Amount.
+    let lastDisc = -1
+    list.forEach((c, i) => { if (columnType(c) === 'discount') lastDisc = i })
+    if (lastDisc >= 0) return lastDisc + 1
+    let rateIdx = -1
+    list.forEach((c, i) => { if (isRateOrPriceCol(c)) rateIdx = i })
+    if (rateIdx >= 0) return rateIdx + 1
+    const amountIdx = list.findIndex(c => c.id === 'amount' || /amount/i.test(c.label || ''))
+    if (amountIdx >= 0) return amountIdx
+    return list.length
+  }
+
+  // Default (text / image / formula…): before Unit, else before Qty, else end.
+  const unitIdx = list.findIndex(c => c.id === 'unit')
+  if (unitIdx >= 0) return unitIdx
+  const qtyIdx = list.findIndex(isQtyCol)
+  return qtyIdx >= 0 ? qtyIdx : list.length
+}
+
+/** Insert one or more columns at the appropriate commercial positions. */
+export function insertTypedColumns(columns, newCols) {
+  let next = Array.isArray(columns) ? [...columns] : []
+  for (const col of newCols || []) {
+    if (!col) continue
+    const idx = insertIndexForNewColumn(next, col)
+    next.splice(idx, 0, col)
+  }
   return next
 }
 

@@ -1,0 +1,406 @@
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Manrope:wght@400;500;600;700&display=swap');
+
+.qg-marketing {
+  box-sizing: border-box;
+  scroll-behavior: smooth;
+  background: #ffffff;
+  color: #0D1117;
+  font-family: Manrope, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+.qg-marketing *,
+.qg-marketing *::before,
+.qg-marketing *::after {
+  box-sizing: border-box;
+}
+
+.qg-marketing section[id] {
+  scroll-margin-top: 84px;
+}
+
+.qg-marketing .qg-shell {
+  width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
+}
+
+.qg-marketing a {
+  color: #2447F0;
+  text-decoration: none;
+}
+
+.qg-marketing a:hover {
+  color: #1633c4;
+}
+
+.qg-marketing textarea,
+.qg-marketing button,
+.qg-marketing input {
+  font: inherit;
+}
+
+@keyframes qgFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes qgUp {
+  from { opacity: 0; transform: translateY(22px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes qgSheen {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+@keyframes qgCaret {
+  0%, 45% { opacity: 1; }
+  50%, 95% { opacity: 0; }
+}
+
+.qg-marketing [data-lift] {
+  transition: transform .35s cubic-bezier(.2,.7,.2,1), box-shadow .35s ease, border-color .35s ease;
+}
+
+.qg-marketing a,
+.qg-marketing button {
+  transition: background-color .25s ease, color .25s ease, border-color .25s ease, transform .2s cubic-bezier(.2,.7,.2,1), box-shadow .25s ease;
+}
+
+.qg-marketing header nav a:hover {
+  transform: translateY(-1px);
+}
+
+.qg-marketing #hero textarea + div button:hover {
+  transform: translateY(-2px);
+}
+
+.qg-marketing #faq button span:last-child {
+  transition: transform .3s cubic-bezier(.2,.7,.2,1), background-color .25s ease;
+}
+
+.qg-marketing #faq button:hover span:last-child {
+  transform: rotate(90deg);
+  background: #E4EAFB;
+}
+
+.qg-marketing .qg-app button {
+  transition: background-color .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease, transform .18s cubic-bezier(.2,.7,.2,1);
+}
+
+.qg-marketing .qg-app button:hover {
+  filter: brightness(.97);
+}
+
+.qg-marketing .qg-appnav button:hover {
+  background: #EEF2FD !important;
+  color: #0D1117 !important;
+}
+
+.qg-marketing .qg-app button:active {
+  transform: translateY(1px);
+}
+
+.qg-marketing .qg-app a:hover {
+  text-decoration: underline;
+}
+
+.qg-marketing #how img,
+.qg-marketing #proof img {
+  transition: transform .9s cubic-bezier(.2,.7,.2,1);
+}
+
+.qg-marketing #how div:hover > img,
+.qg-marketing #proof div:hover > img {
+  transform: scale(1.03);
+}
+
+.qg-marketing [data-lift]:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 26px 50px -32px rgba(20,35,80,.45);
+}
+
+.qg-marketing .qg-btn-primary {
+  background: #2447F0;
+  color: #fff;
+  border: 0;
+  cursor: pointer;
+}
+
+.qg-marketing .qg-btn-primary:hover {
+  background: #1633c4;
+}
+
+.qg-marketing .qg-btn-ghost {
+  background: #fff;
+  border: 1px solid #E2E7F1;
+  color: #3B4657;
+  cursor: pointer;
+}
+
+.qg-marketing .qg-btn-ghost:hover {
+  border-color: #C3CCE0;
+  color: #0D1117;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qg-marketing * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .qg-marketing .qg-grid,
+  .qg-marketing .qg-hero {
+    grid-template-columns: 1fr !important;
+  }
+
+  .qg-marketing .qg-hero > div:last-child {
+    position: static !important;
+  }
+
+  .qg-marketing section {
+    padding-left: 20px !important;
+    padding-right: 20px !important;
+  }
+
+  .qg-marketing header {
+    padding-left: 20px !important;
+    padding-right: 20px !important;
+  }
+
+  .qg-marketing header .qg-shell {
+    gap: 16px !important;
+  }
+
+  .qg-marketing header nav {
+    display: none !important;
+  }
+
+  .qg-marketing #hero {
+    padding-top: 56px !important;
+    padding-bottom: 64px !important;
+  }
+
+  .qg-marketing #how,
+  .qg-marketing #inputs,
+  .qg-marketing #proof,
+  .qg-marketing #faq {
+    padding-top: 64px !important;
+    padding-bottom: 64px !important;
+  }
+
+  .qg-marketing #inputs > div > div:last-child > div,
+  .qg-marketing #inputs > div > div:first-child,
+  .qg-marketing #proof blockquote {
+    padding: 28px !important;
+  }
+
+  .qg-marketing .qg-appframe {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .qg-marketing .qg-app {
+    width: 980px;
+    min-height: 560px !important;
+  }
+
+  .qg-marketing .qg-appnav {
+    border-right: 0 !important;
+    border-bottom: 1px solid #E8EBF2;
+    gap: 12px !important;
+    padding: 16px 14px !important;
+  }
+
+  .qg-marketing .qg-appnav > div:nth-last-child(1),
+  .qg-marketing .qg-appnav > div:nth-last-child(2),
+  .qg-marketing .qg-appnav > div:nth-last-child(3) {
+    display: none !important;
+  }
+
+  .qg-marketing .qg-appnav > div {
+    display: flex !important;
+    gap: 8px !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .qg-marketing .qg-appnav > div::-webkit-scrollbar {
+    display: none;
+  }
+
+  .qg-marketing .qg-appnav > div:first-child {
+    overflow: visible;
+  }
+
+  .qg-marketing .qg-appnav > div > button {
+    white-space: nowrap;
+    flex: none;
+  }
+
+  .qg-marketing .qg-stats {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  .qg-marketing #inputs > div > div:first-child {
+    min-height: 0 !important;
+  }
+
+  .qg-marketing #proof img {
+    height: auto !important;
+    width: 100% !important;
+    max-height: 320px !important;
+  }
+
+  .qg-marketing footer > div {
+    gap: 28px !important;
+  }
+
+  .qg-marketing footer > div > div:last-child {
+    gap: 28px !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .qg-marketing header {
+    height: 60px !important;
+  }
+
+  .qg-marketing #hero textarea {
+    min-height: 150px !important;
+    padding: 20px 18px 14px !important;
+    font-size: 16px !important;
+  }
+
+  .qg-marketing #hero textarea + div {
+    padding: 12px !important;
+  }
+
+  .qg-marketing #hero textarea + div button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .qg-marketing #hero textarea + div button:last-child {
+    flex: 1 1 100%;
+    margin-left: 0 !important;
+  }
+
+  .qg-marketing #features > div > div > div {
+    padding: 24px !important;
+  }
+
+  .qg-marketing .qg-inline-signup {
+    padding: 22px !important;
+  }
+
+  .qg-marketing .qg-head {
+    flex-direction: column !important;
+    gap: 26px !important;
+  }
+
+  .qg-marketing .qg-inline-signup {
+    grid-template-columns: 1fr !important;
+    gap: 26px !important;
+  }
+
+  .qg-marketing .qg-row {
+    grid-template-columns: 1fr !important;
+    gap: 0 !important;
+    padding: 32px 0 !important;
+  }
+
+  .qg-marketing .qg-appframe {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .qg-marketing .qg-app {
+    width: 980px;
+    min-height: 560px !important;
+  }
+
+  .qg-marketing .qg-appnav {
+    border-right: 0 !important;
+    border-bottom: 1px solid #E8EBF2;
+    padding: 14px !important;
+    gap: 12px !important;
+  }
+
+  .qg-marketing .qg-appnav .qg-navlabel,
+  .qg-marketing .qg-appnav .qg-navuser {
+    display: none !important;
+  }
+
+  .qg-marketing .qg-appnav .qg-navgroup {
+    display: flex !important;
+    gap: 8px !important;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .qg-marketing .qg-appnav .qg-navgroup button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 8px 12px !important;
+    font-size: 13.5px !important;
+    border-radius: 999px !important;
+  }
+
+  .qg-marketing .qg-app > div > div:first-child {
+    padding: 14px 16px !important;
+  }
+
+  .qg-marketing .qg-app > div > div:last-child {
+    padding: 16px !important;
+  }
+
+  .qg-marketing .qg-stats {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  .qg-marketing .qg-row > div {
+    grid-column: 1 !important;
+  }
+
+  .qg-marketing .qg-inline-signup {
+    padding: 28px !important;
+  }
+
+  .qg-marketing #hero {
+    padding-top: 56px !important;
+    padding-bottom: 64px !important;
+  }
+
+  .qg-marketing .qg-signup {
+    flex: 1 1 auto !important;
+    width: 100%;
+    max-width: 360px;
+    padding-top: 0 !important;
+  }
+
+  .qg-marketing .qg-signup input,
+  .qg-marketing .qg-signup label {
+    width: 100% !important;
+  }
+
+  .qg-marketing #faq button {
+    font-size: 1.02rem !important;
+    padding: 20px 0 !important;
+  }
+
+  .qg-marketing #faq p {
+    padding-right: 0 !important;
+  }
+
+  .qg-marketing .qg-stats {
+    grid-template-columns: 1fr !important;
+  }
+}

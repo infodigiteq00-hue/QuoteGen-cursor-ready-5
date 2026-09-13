@@ -7,6 +7,7 @@ import cors from 'cors'
 import OpenAI from 'openai'
 import { registerAuthRoutes, requireAuth } from './auth.js'
 import { registerUploadDocRoutes } from './uploadDoc.js'
+import { registerOnlyOfficeRoutes, registerOnlyOfficeAuthRoutes } from './onlyoffice.js'
 import { registerPersistenceRoutes } from './persistence.js'
 import { registerRevisionRoutes } from './revisions.js'
 import { registerKnowledgeRoutes, autofillItemsFromKnowledge, retrieveKnowledgeContext, formatKnowledgePromptBlock } from './knowledge.js'
@@ -15,18 +16,32 @@ import { registerQuoteAssetRoutes } from './quoteAssets.js'
 import { registerPdfRoutes } from './pdfExport.js'
 import { getSupabase, isSupabaseConfigured } from './db.js'
 import { aiFillableColumns, blankItemFor, normalizeColumnList } from '../shared/quoteColumns.js'
+import { suggestFormulaFromAsk, validateFormulaDraft } from '../shared/formulaAssistant.js'
 import { catalogItemCountHint, catalogItemsToQuoteRows, extractCatalogLineItems } from './enquiryItems.js'
 import { ensureSuggestedColumn } from '../shared/productKeywords.js'
+import { extractEnquiryReference, normalizeReferenceNo } from '../shared/enquiryReference.js'
+import { extractKnowledgeText } from './knowledgeExtract.js'
+import multer from 'multer'
 
 const app = express()
 if (process.env.VERCEL || process.env.RAILWAY_ENVIRONMENT) app.set('trust proxy', 1)
 app.use(cors())
 app.use(express.json({ limit: '30mb' }))
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    return res.status(400).json({ error: 'Invalid request data. Try generating the quote again.' })
+  }
+  next(err)
+})
+
+// OnlyOffice must reach files/callbacks without a browser session.
+registerOnlyOfficeRoutes(app)
 
 // Auth endpoints are public; everything else under /api requires a session.
 registerAuthRoutes(app)
 app.use('/api', requireAuth)
 
+registerOnlyOfficeAuthRoutes(app)
 registerUploadDocRoutes(app)
 registerRevisionRoutes(app)
 registerPersistenceRoutes(app)
@@ -69,11 +84,12 @@ function buildItemTemplate(columns) {
   return Object.fromEntries(aiFillableColumns(columns).map(c => [c.id, '']))
 }
 
-function buildQuotationPrompt(columns) {
+function buildQuotationPrompt(columns, layoutRoles = []) {
   const fillable = aiFillableColumns(columns)
   const itemTemplate = buildItemTemplate(columns)
   const columnGuide = fillable.map(c => `"${c.id}" (${c.label})`).join(', ')
   const hasDescription = fillable.some(c => c.id === 'description')
+  const layoutHint = layoutRolesHint(layoutRoles)
   const descriptionRule = hasDescription ? `
 For the "description" column specifically: keep the customer's own wording, including local names, slang, or trade names. Do not replace it with a catalogue name.
 Use a two-line format stored as a single string with a newline character.
@@ -81,6 +97,7 @@ Use a two-line format stored as a single string with a newline character.
 - Line 2+: secondary details NOT already captured in other columns (e.g. class, standard, finish). Put specs that belong in dedicated columns (Material Grade, Size, HSN, etc.) in those columns instead — not in description.
 If there are no secondary details, use line 1 only.
 Leave "ourSuggested" empty when that column exists — the system fills the standard product name.` : ''
+  const layoutBlock = layoutHint ? `\n${layoutHint}` : ''
   return `You are an experienced industrial quotation engineer.
 Your job is to convert any raw customer enquiry into a professional quotation draft. Understand the enquiry naturally like a human engineer would. Use your judgement to identify what the customer is asking for, commercially important details, available technical information, and missing information. Recognize industry terminology, brands, materials, dimensions, specifications, quantities, standards, scope and commercial details whenever relevant.
 
@@ -88,17 +105,50 @@ Do not invent technical information, rates, tax rates, delivery commitments, or 
 
 The quotation table uses these columns (in order): ${columnGuide}
 Each line item MUST be a JSON object with exactly these keys and no others: ${fillable.map(c => c.id).join(', ')}
-Use empty strings when information is unknown. Rate and amount must be empty unless provided in the enquiry. Make descriptions concise and professional.${descriptionRule}
+Map enquiry fields into those columns by *meaning*, not by matching an exact header word. Examples:
+- Purchase Requisition / PR / Indent / Enquiry No / Series No / Reference No → the column that means that identifier (e.g. "Series Number", "PR No.", "Indent No.")
+- Material / Material Code / Item Code / Part No / SAP code → the column that means material/item code
+- Short text + long text / spec → Description (keep customer wording)
+- Qty / Quantity → quantity column; UOM / Unit → unit column
+If the user added a custom column, fill it when the enquiry clearly has a matching value. Leave columns empty when unknown. Do not dump identifiers into Description when a dedicated column exists. Rate and amount must be empty unless provided in the enquiry. Make descriptions concise and professional.${descriptionRule}
 
 Return ONLY valid JSON matching this shape:
 {
  "title":"Quotation for ...",
  "customer":{"name":"","company":"","gst":"","location":""},
+ "referenceNo":"",
  "items":[${JSON.stringify(itemTemplate)}],
  "notes":[""],
  "clarifications":[""],
  "terms":{"validity":"","delivery":"","payment":"","taxes":"","freight":""}
-}`
+}
+For referenceNo: copy the customer's enquiry / PR / indent / PO / "Your Ref" / "Ref No" if the enquiry clearly states one. Leave it as "" when none is mentioned — do not invent a reference.${layoutBlock}`
+}
+
+const LAYOUT_ROLE_HINTS = {
+  payment_terms: 'payment terms / payment conditions mentioned in the enquiry → terms.payment',
+  delivery_terms: 'delivery schedule / lead time / delivery conditions → terms.delivery',
+  validity_terms: 'quotation validity period (e.g. "30 days") → terms.validity',
+  freight_terms: 'freight / F.O.R / transportation terms → terms.freight',
+  tax_terms: 'tax / GST applicability (e.g. "GST extra") → terms.taxes',
+  clarifications: 'open questions or missing info → clarifications array',
+  notes: 'general notes for the customer → notes array',
+  customer_name: 'contact person → customer.name',
+  customer_company: 'buyer company → customer.company',
+  customer_gst: 'buyer GSTIN → customer.gst',
+  customer_location: 'delivery city / ship-to → customer.location',
+  subject: 'subject line → title',
+  enquiry_ref: 'customer PR / indent / enquiry reference → referenceNo'
+}
+
+function layoutRolesHint(layoutRoles = []) {
+  const roles = [...new Set((layoutRoles || []).filter(Boolean))]
+  if (!roles.length) return ''
+  const lines = roles
+    .filter(r => LAYOUT_ROLE_HINTS[r])
+    .map(r => `- ${LAYOUT_ROLE_HINTS[r]}`)
+  if (!lines.length) return ''
+  return `This quotation uses a custom layout with these fillable fields — populate them when the enquiry provides matching information:\n${lines.join('\n')}\nLeave any field empty when the enquiry does not mention it.`
 }
 
 const suggestColumnsPrompt = `You are an experienced quotation engineer. Analyze the customer enquiry and suggest additional quotation table columns that would be useful for this specific industry or enquiry type.
@@ -181,20 +231,23 @@ async function callAI(system, user, requestId, options = {}) {
   }
 }
 
-function metadataPrompt() {
+function metadataPrompt(layoutRoles = []) {
+  const layoutBlock = layoutRolesHint(layoutRoles)
   return `You are an experienced industrial quotation engineer.
 Line items were already extracted from the enquiry. Do NOT return line items.
 Fill only quotation metadata from the enquiry. Do not invent rates, taxes, or commercial commitments.
-
+${layoutBlock ? `\n${layoutBlock}\n` : ''}
 Return ONLY valid JSON matching this shape:
 {
  "title":"Quotation for ...",
  "customer":{"name":"","company":"","gst":"","location":""},
+ "referenceNo":"",
  "items":[],
  "notes":[""],
  "clarifications":[""],
  "terms":{"validity":"","delivery":"","payment":"","taxes":"","freight":""}
-}`
+}
+For referenceNo: copy the customer's enquiry / PR / indent / PO / "Your Ref" / "Ref No" if clearly stated. Leave "" when absent.`
 }
 
 function splitEnquiryChunks(enquiry, size = 3500) {
@@ -254,6 +307,63 @@ function aiError(error, requestId, res) {
   console.error(`[${requestId}] AI request failed`, details)
   res.status(error?.status || 502).json({ error: details.message, details, requestId })
 }
+
+const enquiryUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 8 }
+})
+
+app.post('/api/enquiry/from-files', (req, res) => {
+  const requestId = `enq-files-${Date.now()}`
+  enquiryUpload.array('files', 8)(req, res, async (err) => {
+    if (err) {
+      const message = err.code === 'LIMIT_FILE_SIZE'
+        ? 'Each file must be under 20 MB.'
+        : (err.message || 'Upload failed')
+      return res.status(400).json({ error: message, code: 'VALIDATION_ERROR', requestId })
+    }
+    const files = req.files || []
+    if (!files.length) {
+      return res.status(400).json({ error: 'Choose a PDF, Word, Excel, image, or text file.', code: 'VALIDATION_ERROR', requestId })
+    }
+    const extracted = []
+    const failed = []
+    for (const file of files) {
+      try {
+        const result = await extractKnowledgeText(file)
+        extracted.push({
+          name: file.originalname || 'upload',
+          kind: result.kind,
+          chars: result.text.length,
+          extractor: result.meta?.extractor || result.kind,
+          text: result.text
+        })
+      } catch (error) {
+        failed.push({
+          name: file.originalname || 'upload',
+          error: error?.message || 'Could not read this file.'
+        })
+      }
+    }
+    const text = extracted.map((part) => {
+      const heading = `--- ${part.name} ---`
+      return `${heading}\n${part.text}`
+    }).join('\n\n').trim()
+    if (!text) {
+      return res.status(422).json({
+        error: failed[0]?.error || 'No text could be read from the files.',
+        failed,
+        requestId
+      })
+    }
+    res.json({
+      text,
+      files: extracted.map(({ name, kind, chars, extractor }) => ({ name, kind, chars, extractor })),
+      failed,
+      requestId
+    })
+  })
+})
 
 app.post('/api/suggest-columns', async (req, res) => {
   const { enquiry, columns: existing = [] } = req.body || {}
@@ -317,7 +427,8 @@ async function knowledgePromptAddon(enquiry, requestId, userId) {
 }
 
 app.post('/api/generate-quotation', async (req, res) => {
-  const { enquiry, customer = {}, columns: rawColumns } = req.body || {}
+  const { enquiry, customer = {}, columns: rawColumns, layoutRoles: rawLayoutRoles } = req.body || {}
+  const layoutRoles = Array.isArray(rawLayoutRoles) ? rawLayoutRoles.filter(Boolean) : []
   const requestId = `quote-${Date.now()}`
   if (!enquiry?.trim()) return res.status(400).json({ error: 'Please paste the customer enquiry.' })
   const emptyCustomer = { name: '', company: '', gst: '', location: '', ...customer }
@@ -338,8 +449,15 @@ app.post('/api/generate-quotation', async (req, res) => {
     if (catalog.length >= 3) {
       draft.items = catalogItemsToQuoteRows(catalog, columns, blankItemFor(columns))
     }
+    draft.referenceNo = normalizeReferenceNo(draft.referenceNo) || extractEnquiryReference(enquiry) || ''
     const enriched = await enrichWithKnowledge(draft, columns, enquiry, requestId, req.userId)
-    return res.json({ ...enriched, columns, mode: 'demo', extraction: catalog.length >= 3 ? 'catalog' : 'demo' })
+    return res.json({
+      ...enriched,
+      referenceNo: draft.referenceNo,
+      columns,
+      mode: 'demo',
+      extraction: catalog.length >= 3 ? 'catalog' : 'demo'
+    })
   }
 
   try {
@@ -355,7 +473,7 @@ app.post('/api/generate-quotation', async (req, res) => {
     let extraction = 'ai'
     if (catalog.length >= 3) {
       const { data } = await callAI(
-        metadataPrompt(),
+        metadataPrompt(layoutRoles),
         `Customer details already provided by the user: ${JSON.stringify(emptyCustomer)}\n\n${catalog.length} line items were already extracted from the repeating catalog list (line ref + item code + description + qty + unit). Return items as [].\n\nRaw enquiry:\n${enquiry}${knowledgeBlock}`,
         requestId,
         { max_tokens: 2000, temperature: 0 }
@@ -371,7 +489,7 @@ app.post('/api/generate-quotation', async (req, res) => {
         ? `\n\nThis enquiry appears to list about ${hintedCount} line items. Return exactly that many items. Do not stop early.`
         : ''
       const { data, finishReason } = await callAI(
-        buildQuotationPrompt(columns),
+        buildQuotationPrompt(columns, layoutRoles),
         `Customer details already provided by the user: ${JSON.stringify(emptyCustomer)}\n\nQuotation columns (use exactly these keys in each item): ${JSON.stringify(columns)}${expectedNote}\n\nRaw enquiry:\n${enquiry}${knowledgeBlock}`,
         requestId
       )
@@ -388,9 +506,11 @@ app.post('/api/generate-quotation', async (req, res) => {
 
     draft.customer = { ...emptyCustomer, ...(draft.customer || {}) }
     if (!draft.items.length) draft.items = fallback(enquiry, emptyCustomer, columns).items
+    draft.referenceNo = normalizeReferenceNo(draft.referenceNo) || extractEnquiryReference(enquiry) || ''
     const enriched = await enrichWithKnowledge(draft, columns, enquiry, requestId, req.userId)
     res.json({
       ...enriched,
+      referenceNo: draft.referenceNo,
       columns,
       mode: 'ai',
       extraction,
@@ -398,6 +518,33 @@ app.post('/api/generate-quotation', async (req, res) => {
     })
   } catch (error) {
     aiError(error, requestId, res)
+  }
+})
+
+app.post('/api/suggest-formula', async (req, res) => {
+  const { ask = '', column = null, columns: existing = [] } = req.body || {}
+  const requestId = `fx-${Date.now()}`
+  const cols = normalizeColumns(existing)
+  const local = suggestFormulaFromAsk(ask, column, cols)
+  if (local.status !== 'unrecognized' || !process.env.OPENAI_API_KEY) {
+    return res.json({ ...local, mode: 'local' })
+  }
+  try {
+    const columnGuide = cols.map(c => `${c.id} (${c.label}, type ${c.type || 'text'})`).join('; ')
+    const { data } = await callAI(
+      `You suggest quotation column formulas. Return ONLY JSON:
+{"title":"","steps":["..."],"preset":"before_tax|after_tax|list_amount|after_discount|rate_after_discount|null","tokens":[{"type":"stage","stage":"list|taxable|gross"}] }
+Tokens may also be {type:field,field:quantity|rate|amount}, {type:op,op:+|-|*|/}, {type:pctOf}, {type:number,value:n}, {type:col,colId,part:amount|percent|value}.
+Use only column ids from this table. Prefer presets. Do not invent columns.`,
+      `Column being edited: ${column?.id || ''} "${column?.label || ''}"\nTable: ${columnGuide}\nAsk: ${ask}`,
+      requestId,
+      { max_tokens: 600, temperature: 0 }
+    )
+    const validated = validateFormulaDraft({ ...data, ask }, column, cols)
+    return res.json({ ...validated, mode: validated.status === 'unrecognized' ? 'local' : 'ai' })
+  } catch (error) {
+    console.warn(`[${requestId}] formula AI skipped`, error?.message || error)
+    return res.json({ ...local, mode: 'local' })
   }
 })
 

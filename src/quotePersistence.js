@@ -1,5 +1,6 @@
 /** Client helpers for quotation series + autosave (talks to Express only). */
-import { normalizeColumnList } from '../shared/quoteColumns.js'
+import { attachmentUrlKey, imagePathKey, isAttachmentColumn, isImageColumn, normalizeColumnList } from '../shared/quoteColumns.js'
+import { quoteAssetSrc, storagePathFromUrl } from './pdfExport.js'
 
 export function formatSeriesPreview({ prefix = 'QG', padding = 4, nextNumber = 1, includeYear = true } = {}) {
   const safePadding = Math.min(12, Math.max(1, Number(padding) || 4))
@@ -373,8 +374,9 @@ export async function saveProduct(product) {
   return { unavailable: false, product: data.product || null }
 }
 
-export async function listQuotations(limit = 30) {
-  const response = await fetch(`/api/quotations?limit=${limit}`)
+export async function listQuotations(limit = 200) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 200, 1), 200)
+  const response = await fetch(`/api/quotations?limit=${safeLimit}`)
   const data = await response.json().catch(() => ({}))
   if (isPersistenceUnavailable(response, data)) {
     return { unavailable: true, quotations: [] }
@@ -410,6 +412,7 @@ export function buildQuotationPayload(quote, { layoutRef, uploadTemplateId } = {
     notes: quote.notes || [],
     clarifications: quote.clarifications || [],
     terms: quote.terms || {},
+    fields: quote.fields && typeof quote.fields === 'object' ? quote.fields : {},
     mode: quote.mode,
     // Kept so autosaving an invoice can't quietly turn it back into a quotation.
     docType: quote.docType === 'invoice' ? 'invoice' : 'quotation',
@@ -417,6 +420,7 @@ export function buildQuotationPayload(quote, { layoutRef, uploadTemplateId } = {
     layoutRef: layoutRef ?? quote.layoutRef ?? null,
     uploadTemplateId: uploadTemplateId ?? quote.uploadTemplateId ?? null,
     paperStyle: quote.paperStyle || null,
+    watermarkEnabled: quote.watermarkEnabled !== false,
     tableColorId: quote.tableColorId || 'blue',
     tableAccent: quote.tableAccent || null,
     logoPalette: quote.logoPalette || null
@@ -458,19 +462,35 @@ export async function updateQuotation(id, body) {
   return { unavailable: false, quotation: data.quotation }
 }
 
+export async function deleteQuotation(id) {
+  const response = await fetch(`/api/quotations/${id}`, { method: 'DELETE' })
+  const data = await response.json().catch(() => ({}))
+  if (isPersistenceUnavailable(response, data)) {
+    return { unavailable: true, ok: false }
+  }
+  if (data?.code === 'DB_TIMEOUT' || data?.code === '57014' || response.status === 504) {
+    throw new Error(data.error || 'Database is busy right now. Wait a couple of seconds and delete again — the quotation is still saved.')
+  }
+  if (!response.ok) throw new Error(data.error || 'Could not delete quotation')
+  if (!data?.ok) throw new Error(data.error || 'Delete did not confirm. The quotation may still be saved.')
+  return { unavailable: false, ok: true, id: data.id || id }
+}
+
 export function quotationToEditorState(quotation) {
   const data = quotation?.data && typeof quotation.data === 'object' ? quotation.data : {}
+  const columns = Array.isArray(data.columns) && data.columns.length ? normalizeColumnList(data.columns) : undefined
   return {
     title: data.title ?? quotation?.title ?? '',
     number: data.number ?? quotation?.number ?? '',
     date: data.date ?? quotation?.date ?? '',
-    columns: Array.isArray(data.columns) && data.columns.length ? normalizeColumnList(data.columns) : undefined,
-    customer: data.customer || { name: '', company: '', gst: '', location: '' },
-    items: Array.isArray(data.items) ? data.items : [],
+    columns,
+    customer: data.customer || { name: '', company: '', gst: '', location: '', shippingSame: true, shippingLocation: '' },
+    items: rewriteSavedAssetUrls(Array.isArray(data.items) ? data.items : [], columns),
     extraLines: Array.isArray(data.extraLines) ? data.extraLines : [],
     notes: Array.isArray(data.notes) ? data.notes : [],
     clarifications: Array.isArray(data.clarifications) ? data.clarifications : [],
     terms: data.terms || {},
+    fields: data.fields && typeof data.fields === 'object' ? data.fields : {},
     // The row's doc_type is authoritative; data.docType is the copy inside the payload.
     docType: quotation?.docType || data.docType || 'quotation',
     invoiceKind: data.invoiceKind || null,
@@ -478,12 +498,40 @@ export function quotationToEditorState(quotation) {
     layoutRef: data.layoutRef ?? quotation?.layoutRef ?? null,
     uploadTemplateId: data.uploadTemplateId ?? null,
     paperStyle: data.paperStyle || 'corporate',
+    watermarkEnabled: data.watermarkEnabled !== false,
     tableColorId: data.tableColorId || 'blue',
     tableAccent: data.tableAccent || null,
     logoPalette: data.logoPalette || null,
     // Authoritative revision lives in the column, not the JSON snapshot.
     revision: quotation?.revision
   }
+}
+
+function rewriteSavedAssetUrls(items, columns) {
+  const cols = columns || []
+  if (!cols.length) return items
+  return items.map((item) => {
+    if (!item || typeof item !== 'object') return item
+    const next = { ...item }
+    for (const col of cols) {
+      if (isImageColumn(col)) {
+        const path = next[imagePathKey(col)] || storagePathFromUrl(next[col.id])
+        if (path) {
+          next[imagePathKey(col)] = path
+          next[col.id] = quoteAssetSrc(next[col.id], path)
+        }
+      }
+      if (isAttachmentColumn(col)) {
+        const urlKey = attachmentUrlKey(col)
+        const path = next[imagePathKey(col)] || storagePathFromUrl(next[urlKey]) || storagePathFromUrl(next[col.id])
+        if (path) {
+          next[imagePathKey(col)] = path
+          next[urlKey] = quoteAssetSrc(next[urlKey], path)
+        }
+      }
+    }
+    return next
+  })
 }
 
 export function cloneQuotationForNew(editorQuote, newNumber) {
@@ -527,6 +575,29 @@ export async function deleteKnowledgeDocument(id) {
   }
   if (!response.ok) throw new Error(data.error || 'Could not delete document')
   return { unavailable: false, ok: true }
+}
+
+export async function ingestEnquiryFiles(fileList) {
+  const form = new FormData()
+  for (const file of fileList) form.append('files', file)
+  let response
+  try {
+    response = await fetch('/api/enquiry/from-files', { method: 'POST', body: form })
+  } catch {
+    throw new Error('Cannot reach the API server. Run npm run dev and keep that terminal open.')
+  }
+  const data = await response.json().catch(() => ({}))
+  if (response.status === 401) {
+    throw new Error('Sign in to attach files and photos.')
+  }
+  if (!response.ok) {
+    throw new Error(data.error || 'Could not read those files.')
+  }
+  return {
+    text: data.text || '',
+    files: data.files || [],
+    failed: data.failed || []
+  }
 }
 
 export async function uploadKnowledgeDocuments(fileList) {
@@ -668,9 +739,19 @@ export async function uploadQuoteImage(file) {
     const response = await fetch('/api/quote-assets/image', { method: 'POST', body: form })
     const data = await response.json().catch(() => ({}))
     if (response.ok && data.url) {
-      return { url: data.url, path: data.path || null, storage: data.storage || 'supabase' }
+      const path = data.path || null
+      return {
+        url: path ? `/api/quote-assets/content?path=${encodeURIComponent(path)}` : data.url,
+        path,
+        storage: data.storage || 'supabase'
+      }
     }
-    if (response.status === 400) throw new Error(data.error || 'Image upload failed')
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      throw new Error(data.error || 'Image upload failed')
+    }
+    if (data.error && response.status >= 500 && file.size > 400 * 1024) {
+      throw new Error(data.error)
+    }
   } catch (error) {
     if (error?.message && !/Failed to fetch/i.test(error.message) && /image/i.test(error.message)) throw error
   }
@@ -701,9 +782,16 @@ export async function uploadQuoteFile(file) {
     const response = await fetch('/api/quote-assets/file', { method: 'POST', body: form })
     const data = await response.json().catch(() => ({}))
     if (response.ok && data.url) {
-      return { url: data.url, path: data.path || null, storage: data.storage || 'supabase' }
+      const path = data.path || null
+      return {
+        url: path ? `/api/quote-assets/content?path=${encodeURIComponent(path)}` : data.url,
+        path,
+        storage: data.storage || 'supabase'
+      }
     }
-    if (response.status === 400) throw new Error(data.error || 'File upload failed')
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      throw new Error(data.error || 'File upload failed')
+    }
     if (data.error) throw new Error(data.error)
   } catch (error) {
     if (error?.message && !/Failed to fetch/i.test(error.message)) throw error

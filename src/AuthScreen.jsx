@@ -8,6 +8,7 @@ import {
   verifyEmailCode
 } from './apiAuth.js'
 import { emailLinkError, supabaseConfigured } from './supabaseClient.js'
+import BrandMark from './BrandMark.jsx'
 
 function Field({ label, hint, ...props }) {
   return (
@@ -117,8 +118,8 @@ function LoginForm({ onSwitch, onNeedsConfirmation, onForgotPassword, prefillEma
   )
 }
 
-function SignupForm({ onNeedsConfirmation, onAlreadyRegistered, onSwitch }) {
-  const [email, setEmail] = useState('')
+function SignupForm({ onNeedsConfirmation, onAlreadyRegistered, onSwitch, prefillEmail = '' }) {
+  const [email, setEmail] = useState(prefillEmail || '')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [loading, setLoading] = useState(false)
@@ -349,8 +350,8 @@ const COPY = {
   }
 }
 
-export default function AuthScreen({ recovery = false, onPasswordUpdated }) {
-  const [mode, setMode] = useState(recovery ? 'reset' : 'login')
+export default function AuthScreen({ recovery = false, onPasswordUpdated, initialMode, prefillEmail = '' }) {
+  const [mode, setMode] = useState(recovery ? 'reset' : (initialMode || 'login'))
   const [pendingEmail, setPendingEmail] = useState('')
   const [loginNotice, setLoginNotice] = useState('')
 
@@ -374,9 +375,9 @@ export default function AuthScreen({ recovery = false, onPasswordUpdated }) {
         <div className="auth-blob bottom-[-12%] left-[18%] h-80 w-80 bg-indigo-200" style={{ animationDelay: '6s' }} />
       </div>
       <div className="relative w-full max-w-md">
-        <div className="auth-logo-in mb-6 flex items-center justify-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-moss font-bold text-white shadow-lg shadow-blue-500/30">Q</div>
-          <span className="font-semibold tracking-tight">QuoteGen</span>
+        <div className="auth-logo-in mb-6 flex items-center justify-center gap-2.5">
+          <BrandMark size={40} />
+          <span className="text-lg font-semibold tracking-tight">QuoteGen</span>
         </div>
         <div className="auth-card-in rounded-3xl bg-white p-6 shadow-soft ring-1 ring-black/[.03] sm:p-8">
           <h1 className="mb-1 text-xl font-semibold">{COPY[mode].title}</h1>
@@ -405,7 +406,7 @@ export default function AuthScreen({ recovery = false, onPasswordUpdated }) {
               onSwitch={() => { setLoginNotice(''); setMode('signup') }}
               onNeedsConfirmation={needsConfirmation}
               onForgotPassword={() => setMode('forgot')}
-              prefillEmail={pendingEmail}
+              prefillEmail={pendingEmail || prefillEmail}
               notice={loginNotice}
             />
           )}
@@ -414,6 +415,7 @@ export default function AuthScreen({ recovery = false, onPasswordUpdated }) {
               onNeedsConfirmation={needsConfirmation}
               onAlreadyRegistered={alreadyRegistered}
               onSwitch={() => setMode('login')}
+              prefillEmail={pendingEmail || prefillEmail}
             />
           )}
           {mode === 'confirm' && (

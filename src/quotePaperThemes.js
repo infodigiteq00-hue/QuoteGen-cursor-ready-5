@@ -7,8 +7,9 @@ function tableTintFromAccent(accent) {
     accent,
     accentSoft: mixHex(accent, '#ffffff', 0.94),
     labelColor: accent,
-    tableHeadBg: mixHex(accent, '#020617', 0.80),
+    tableHeadBg: accent,
     tableHeadText: '#ffffff',
+    tableStripeBg: mixHex(accent, '#ffffff', 0.96),
     tableBorder: mixHex(accent, '#e8edf3', 0.78),
     dropBorder: mixHex(accent, '#e8edf3', 0.88),
     dropBg: '#ffffff',
@@ -21,6 +22,7 @@ export const PAPER_THEMES = {
     id: 'corporate',
     label: 'Corporate clean',
     hint: 'Crisp white paper, quiet slate-blue — professional B2B',
+    themeClass: 'qg-theme-corporate',
     pageBg: '#eef0f5',
     paperBg: '#ffffff',
     text: '#2d3748',
@@ -34,6 +36,7 @@ export const PAPER_THEMES = {
     id: 'warm',
     label: 'Warm invoice',
     hint: 'Ivory paper, stone headings — understated and trustworthy',
+    themeClass: 'qg-theme-warm',
     pageBg: '#ede9e1',
     paperBg: '#faf8f3',
     text: '#3a3020',
@@ -42,6 +45,20 @@ export const PAPER_THEMES = {
     fontFamily: 'Georgia, "Times New Roman", serif',
     titleFont: 'Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif',
     ...tableTintFromAccent(DEFAULT_ACCENT)
+  },
+  formal: {
+    id: 'formal',
+    label: 'Formal quotation',
+    hint: 'Letterhead + navy table — classic industrial quote layout',
+    themeClass: 'qg-theme-formal',
+    pageBg: '#e6e9ef',
+    paperBg: '#ffffff',
+    text: '#1a2332',
+    muted: '#5c6879',
+    metaBarBg: '#f3f5f8',
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    titleFont: 'Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif',
+    ...tableTintFromAccent('#1e4a8c')
   }
 }
 

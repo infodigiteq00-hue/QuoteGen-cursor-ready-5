@@ -8,7 +8,7 @@
 import {
   AMOUNT_AUTO,
   AMOUNT_MANUAL,
-  amountKey,
+  columnMoneyAmount,
   columnType,
   computeRowTotals,
   findFieldColumn,
@@ -73,6 +73,9 @@ export function normalizeFormula(raw) {
 
 function normalizeToken(token) {
   if (!token || typeof token !== 'object') return null
+  if (token.type === 'paren' && (token.paren === '(' || token.paren === ')')) {
+    return { type: 'paren', paren: token.paren }
+  }
   if (token.type === 'op' && ['+', '-', '*', '/'].includes(token.op)) return { type: 'op', op: token.op }
   if (token.type === 'pctOf') return { type: 'pctOf' }
   if (token.type === 'number') {
@@ -97,26 +100,136 @@ export function isFormulaColumn(col) {
   return Boolean(normalizeFormula(col?.formula))
 }
 
-export function canHaveFormula(col, _columns) {
+/** Explicit custom formula column (not the built-in Amount path). */
+export function isCalculatedColumn(col) {
+  return Boolean(col?.calculated)
+}
+
+/**
+ * fx is only for the Amount column or columns marked calculated
+ * (created via "Formula column"). Description / Unit / Qty / Rate stay plain.
+ */
+export function canHaveFormula(col, columns = []) {
   if (!col) return false
   if (isImageColumn(col) || isAttachmentColumn(col) || isNestedColumn(col)) return false
   const type = columnType(col)
   if (type === 'tax' || type === 'discount') return false
   if (String(col.id || '').toLowerCase() === 'oursuggested') return false
-  return true
+  if (isCalculatedColumn(col)) return true
+  const amountCol = findFieldColumn(columns, 'amount')
+  if (amountCol && col.id === amountCol.id) return true
+  return false
 }
 
-/** Turn a typed Excel-style line ("Quantity * Rate + 18") into tokens. */
-export function parsePlainFormula(text, columns = [], forColId = '') {
+/**
+ * Soften casual typing before tokenization.
+ * Important: `qty x rate - disc x tax%` means commercial A:
+ * qty×rate − discount% + tax%  (not disc×tax).
+ */
+function normalizeCommercialShorthand(text) {
   let raw = String(text || '').trim().replace(/^=/, '')
-  if (!raw) return []
+  if (!raw) return ''
   raw = raw.replace(/×/g, '*').replace(/÷/g, '/').replace(/−/g, '-')
+  // Treat lone "x" / "X" between operands as multiply
+  raw = raw.replace(/\bx\b/gi, '*')
+  // qty*rate / quantity*rate → stage nickname
   raw = raw.replace(/\bqty\s*\*\s*rate\b/ig, 'Quantity × Rate')
   raw = raw.replace(/\bquantity\s*\*\s*rate\b/ig, 'Quantity × Rate')
-  const parts = raw.split(/(\s*\+\s*|\s*-\s*|\s*\*\s*|\s*\/\s*|% of|Quantity × Rate)/i).map(s => s.trim()).filter(Boolean)
+  // `- disc * tax%` or `- discount x gst%` → `- disc + tax%` (user intent A)
+  raw = raw.replace(
+    /-\s*((?:disc(?:ount)?|gst|tax|cgst|sgst|igst)(?:\s*%|%)?)\s*\*\s*((?:disc(?:ount)?|gst|tax|cgst|sgst|igst)(?:\s*%|%)?)/gi,
+    (_m, left, right) => {
+      const L = String(left).toLowerCase()
+      const R = String(right).toLowerCase()
+      const leftIsDisc = /disc/.test(L)
+      const rightIsTax = /tax|gst|cgst|sgst|igst/.test(R)
+      const leftIsTax = /tax|gst|cgst|sgst|igst/.test(L)
+      const rightIsDisc = /disc/.test(R)
+      if (leftIsDisc && rightIsTax) return `- ${left.replace(/%/g, '').trim()} + ${right.replace(/%/g, '').trim()}%`
+      if (leftIsTax && rightIsDisc) return `- ${right.replace(/%/g, '').trim()} + ${left.replace(/%/g, '').trim()}%`
+      return `- ${left} + ${right}`
+    }
+  )
+  return raw
+}
+
+function findOperandColumn(name, columns, forColId) {
+  const cleaned = String(name || '')
+    .toLowerCase()
+    .replace(/%/g, '')
+    .replace(/₹|rs\.?/g, '')
+    .replace(/[_\s.]+/g, ' ')
+    .trim()
+  if (!cleaned) return null
+  const list = (columns || []).filter(c => c && c.id !== forColId)
+
+  const byExact = list.find(c => String(c.label || '').toLowerCase().trim() === cleaned
+    || String(c.id || '').toLowerCase() === cleaned.replace(/\s/g, ''))
+  if (byExact) return byExact
+
+  const aliases = {
+    qty: 'quantity',
+    quantity: 'quantity',
+    nos: 'quantity',
+    pcs: 'quantity',
+    rate: 'rate',
+    price: 'rate',
+    amount: 'amount',
+    disc: 'discount',
+    discount: 'discount',
+    tax: 'tax',
+    gst: 'tax',
+    cgst: 'tax',
+    sgst: 'tax',
+    igst: 'tax'
+  }
+  const fieldHint = aliases[cleaned] || aliases[cleaned.replace(/\s+/g, '')]
+  if (fieldHint === 'quantity' || fieldHint === 'rate' || fieldHint === 'amount') {
+    return findFieldColumn(list, fieldHint)
+  }
+  if (fieldHint === 'discount') {
+    return list.find(c => columnType(c) === 'discount') || null
+  }
+  if (fieldHint === 'tax') {
+    // Prefer exact gst/tax label match, else first tax column
+    return list.find(c => columnType(c) === 'tax' && /gst|^tax$/i.test(String(c.label || '')))
+      || list.find(c => columnType(c) === 'tax')
+      || null
+  }
+
+  // Fuzzy: label contains the typed word (disc ↔ Discount)
+  return list.find(c => {
+    const label = String(c.label || '').toLowerCase()
+    const id = String(c.id || '').toLowerCase()
+    return label === cleaned || label.includes(cleaned) || cleaned.includes(label) || id.includes(cleaned.replace(/\s/g, ''))
+  }) || null
+}
+
+function tokenForOperandColumn(col, { wantPercent = false } = {}) {
+  if (!col) return null
+  if (columnType(col) === 'tax' || columnType(col) === 'discount' || isNestedColumn(col)) {
+    // % columns: use ₹ contribution (base × % / 100). Raw percent only for "N % of".
+    if (wantPercent) return { type: 'col', colId: col.id, part: 'percent' }
+    return { type: 'col', colId: col.id, part: 'amount' }
+  }
+  return { type: 'col', colId: col.id, part: 'value' }
+}
+
+/** Turn a typed Excel-style / casual line into tokens. */
+export function parsePlainFormula(text, columns = [], forColId = '') {
+  let raw = normalizeCommercialShorthand(text)
+  if (!raw) return []
+  const parts = raw
+    .split(/(\s*\+\s*|\s*-\s*|\s*\*\s*|\s*\/\s*|% of|Quantity × Rate|\(|\))/i)
+    .map(s => s.trim())
+    .filter(Boolean)
   const tokens = []
   for (const part of parts) {
     const lower = part.toLowerCase()
+    if (part === '(' || part === ')') {
+      tokens.push({ type: 'paren', paren: part })
+      continue
+    }
     if (part === '+' || part === '-' || part === '*' || part === '/') {
       tokens.push({ type: 'op', op: part === '*' ? '*' : part === '/' ? '/' : part })
       continue
@@ -141,29 +254,216 @@ export function parsePlainFormula(text, columns = [], forColId = '') {
       tokens.push({ type: 'field', field: 'amount' })
       continue
     }
-    if (lower === 'after discount' || lower === 'amount after discount') {
+    if (lower === 'after discount' || lower === 'amount after discount' || lower === 'amount before tax') {
       tokens.push({ type: 'stage', stage: 'taxable' })
       continue
     }
-    if (lower === 'after tax' || lower === 'amount after tax') {
+    if (lower === 'after tax' || lower === 'amount after tax' || lower === 'final amount') {
       tokens.push({ type: 'stage', stage: 'gross' })
       continue
     }
-    const n = Number(String(part).replace(/,/g, ''))
-    if (Number.isFinite(n) && String(part).replace(/[,\s]/g, '') !== '') {
+    const n = Number(String(part).replace(/,/g, '').replace(/%/g, ''))
+    if (Number.isFinite(n) && String(part).replace(/[,\s%]/g, '') !== '' && !/[a-z]/i.test(part)) {
+      // Bare "18%" in a chain is unusual; keep as number (use with "% of")
       tokens.push({ type: 'number', value: n })
       continue
     }
-    const col = (columns || []).find(c => c && c.id !== forColId && String(c.label || '').toLowerCase() === lower)
+    const wantPercent = /%/.test(part)
+    const col = findOperandColumn(part, columns, forColId)
     if (col) {
-      if (isNestedColumn(col) || columnType(col) === 'tax' || columnType(col) === 'discount') {
-        tokens.push({ type: 'col', colId: col.id, part: 'amount' })
-      } else {
-        tokens.push({ type: 'col', colId: col.id, part: 'value' })
+      const qty = findFieldColumn(columns, 'quantity')
+      const rate = findFieldColumn(columns, 'rate')
+      const amount = findFieldColumn(columns, 'amount')
+      if (qty && col.id === qty.id) {
+        tokens.push({ type: 'field', field: 'quantity' })
+        continue
       }
+      if (rate && col.id === rate.id) {
+        tokens.push({ type: 'field', field: 'rate' })
+        continue
+      }
+      if (amount && col.id === amount.id) {
+        tokens.push({ type: 'field', field: 'amount' })
+        continue
+      }
+      const tok = tokenForOperandColumn(col, { wantPercent: false })
+      if (tok) tokens.push(tok)
+      continue
     }
   }
-  return tokens
+  return rewritePercentOpsToMoney(tokens, columns)
+}
+
+/**
+ * If someone still built `… * Discount%` after a minus, turn tax/discount
+ * percent multiplies into ₹ amount tokens so 10 means 10% of list, not ×10.
+ */
+function rewritePercentOpsToMoney(tokens, columns) {
+  if (!tokens?.length) return tokens
+  const out = []
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]
+    if (
+      t?.type === 'col'
+      && t.part === 'percent'
+      && (columnType((columns || []).find(c => c.id === t.colId)) === 'tax'
+        || columnType((columns || []).find(c => c.id === t.colId)) === 'discount')
+    ) {
+      out.push({ ...t, part: 'amount' })
+      continue
+    }
+    out.push(t)
+  }
+  return out
+}
+
+/**
+ * Formula to attach when a column is added. Only clearly named
+ * Amount-before/after-tax columns get a shortcut without the Formula type —
+ * vague labels like "including" / "exclusive" stay ordinary text cells.
+ * Other columns only get a guess when `guessTokens` is set (the Formula type
+ * or the "this column is a formula" checkbox) — same as before.
+ */
+export function formulaForAddedColumn(col, columns = [], { guessTokens = false } = {}) {
+  if (!canHaveFormula(col, columns)) return null
+  const text = String(col?.label || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const namedBeforeTax = (/before/.test(text) && (/\btax\b/.test(text) || /\bgst\b/.test(text)))
+    || /pre tax/.test(text)
+    || /pretax/.test(text)
+    || (/\btaxable\b/.test(text) && /\bamount\b/.test(text))
+  const namedAfterTax = (/after/.test(text) && (/\btax\b/.test(text) || /\bgst\b/.test(text)))
+    || /final amount/.test(text)
+  if (namedBeforeTax) {
+    return normalizeFormula({ preset: 'before_tax', tokens: tokensForPreset('before_tax') })
+  }
+  if (namedAfterTax) {
+    return normalizeFormula({ preset: 'after_tax', tokens: tokensForPreset('after_tax') })
+  }
+  if (!guessTokens) return null
+  const guessed = defaultFormulaTokens(col, columns)
+  if (!guessed.length) return null
+  return normalizeFormula({ tokens: guessed })
+}
+
+const AUTO_AMOUNT_PRESETS = new Set([
+  'list_amount',
+  'before_tax',
+  'after_discount',
+  'after_tax',
+  'rate_after_discount'
+])
+
+function amountLabelLocksBeforeTax(col) {
+  const text = String(col?.label || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  return (/before/.test(text) && (/\btax\b/.test(text) || /\bgst\b/.test(text)))
+    || /pre tax/.test(text)
+    || /pretax/.test(text)
+    || (/\btaxable\b/.test(text) && /\bamount\b/.test(text))
+    || /excl/.test(text)
+}
+
+function isCommercialAmountToken(token, columns = []) {
+  if (!token) return false
+  if (token.type === 'op') return true
+  if (token.type === 'stage' && ['list', 'taxable', 'gross', 'discountTotal', 'taxTotal'].includes(token.stage)) return true
+  if (token.type === 'field' && (token.field === 'quantity' || token.field === 'rate')) return true
+  if (token.type === 'col') {
+    const col = (columns || []).find(c => c.id === token.colId)
+    return Boolean(col && (columnType(col) === 'tax' || columnType(col) === 'discount'))
+  }
+  return false
+}
+
+/** True when Amount is still on the built-in / shortcut path (safe to auto-upgrade). */
+export function isAutoAmountFormula(formula, columns = []) {
+  const f = normalizeFormula(formula)
+  if (!f) return true
+  if (f.preset && AUTO_AMOUNT_PRESETS.has(f.preset)) return true
+  if (
+    f.tokens.length === 1
+    && f.tokens[0]?.type === 'stage'
+    && ['list', 'taxable', 'gross'].includes(f.tokens[0].stage)
+  ) return true
+  // Click-builder / guessed Qty × Rate − Discount (+ Tax) chains without a preset.
+  if (f.tokens.length && f.tokens.every(t => isCommercialAmountToken(t, columns))) {
+    return f.tokens.some(t => t.type === 'field' || t.type === 'stage' || t.type === 'col')
+  }
+  return false
+}
+
+/** Best commercial preset for the Amount column given current tax/discount columns. */
+export function suggestedAmountPreset(columns = []) {
+  const cols = columns || []
+  const hasTax = cols.some(c => columnType(c) === 'tax')
+  const hasDisc = cols.some(c => columnType(c) === 'discount')
+  if (hasTax) return 'after_tax'
+  if (hasDisc) return 'after_discount'
+  return null
+}
+
+/**
+ * When Tax % / Discount is added (or removed), keep the Amount cell in sync:
+ * Qty × Rate → after discount → after tax. Hand-built custom formulas stay put.
+ * Returns `{ columns, amountFormulaChanged }`.
+ */
+export function adaptAmountFormula(columns = []) {
+  const cols = Array.isArray(columns) ? columns : []
+  const amountCol = findFieldColumn(cols, 'amount')
+  if (!amountCol || !canHaveFormula(amountCol, cols)) {
+    return { columns: cols, amountFormulaChanged: false }
+  }
+  if (!isAutoAmountFormula(amountCol.formula, cols)) {
+    return { columns: cols, amountFormulaChanged: false }
+  }
+  if (amountLabelLocksBeforeTax(amountCol)) {
+    return { columns: cols, amountFormulaChanged: false }
+  }
+
+  const preset = suggestedAmountPreset(cols)
+  const current = normalizeFormula(amountCol.formula)
+
+  if (!preset) {
+    if (!current) return { columns: cols, amountFormulaChanged: false }
+    return {
+      columns: cols.map(c => {
+        if (c.id !== amountCol.id) return c
+        const next = { ...c }
+        delete next.formula
+        return next
+      }),
+      amountFormulaChanged: true
+    }
+  }
+
+  const nextFormula = normalizeFormula({ preset, tokens: tokensForPreset(preset) })
+  if (
+    current?.preset === nextFormula.preset
+    && JSON.stringify(current.tokens) === JSON.stringify(nextFormula.tokens)
+  ) {
+    return { columns: cols, amountFormulaChanged: false }
+  }
+
+  return {
+    columns: cols.map(c => (c.id === amountCol.id ? { ...c, formula: nextFormula } : c)),
+    amountFormulaChanged: true
+  }
+}
+
+/**
+ * Adapt Amount's commercial formula and clear stale overrides so recalc can
+ * rewrite line Amount (e.g. 180 after discount → 216 after tax).
+ */
+export function syncAmountFormula(columns = [], items = []) {
+  const { columns: nextColumns, amountFormulaChanged } = adaptAmountFormula(columns)
+  if (!amountFormulaChanged) return { columns: nextColumns, items, changed: false }
+  const amountCol = findFieldColumn(nextColumns, 'amount')
+  const nextItems = amountCol
+    ? (Array.isArray(items) ? items : []).map(item => ({
+      ...(item || {}),
+      [sourceKey(amountCol)]: AMOUNT_AUTO
+    }))
+    : items
+  return { columns: nextColumns, items: nextItems, changed: true }
 }
 
 export function inferFormulaPreset(label, columns = [], colIndex = -1) {
@@ -270,8 +570,13 @@ export function defaultFormulaTokens(col, columns = []) {
     discCols = discsAll
     taxCols = []
   } else {
-    discCols = discsBefore
-    taxCols = taxesBefore
+    // Canonical Amount should include every tax/discount on the row, even when
+    // those columns sit after it (e.g. user reordered). Other amount-like
+    // columns still only pick up what appears before them.
+    const amountField = findFieldColumn(cols, 'amount')
+    const isCanonicalAmount = amountField && col.id === amountField.id
+    discCols = isCanonicalAmount ? discsAll : discsBefore
+    taxCols = isCanonicalAmount ? taxesAll : taxesBefore
   }
 
   const tokens = [valueTokenFor(qty, cols), { type: 'op', op: '*' }, valueTokenFor(rate, cols)]
@@ -347,11 +652,23 @@ function expandStageToken(token, columns) {
 
 export function tokensToChain(tokens, columns = []) {
   const flat = []
-  for (const token of tokens || []) flat.push(...expandStageToken(token, columns).filter(Boolean))
+  for (const token of tokens || []) {
+    if (token?.type === 'paren') {
+      flat.push(token)
+      continue
+    }
+    flat.push(...expandStageToken(token, columns).filter(Boolean))
+  }
   const chain = []
   for (const token of flat) {
+    if (token.type === 'paren') {
+      chain.push({ kind: 'paren', paren: token.paren })
+      continue
+    }
     if (token.type === 'op') {
-      if (chain.length && chain[chain.length - 1].kind === 'value') chain.push({ kind: 'op', op: token.op })
+      if (chain.length && (chain[chain.length - 1].kind === 'value' || chain[chain.length - 1].kind === 'paren')) {
+        chain.push({ kind: 'op', op: token.op })
+      }
       continue
     }
     if (token.type === 'pctOf') {
@@ -368,7 +685,7 @@ export function tokensToChain(tokens, columns = []) {
       { kind: 'value', key: '' }
     ]
   }
-  if (chain.length === 1) {
+  if (chain.length === 1 && chain[0].kind === 'value') {
     chain.push({ kind: 'op', op: '*' }, { kind: 'value', key: '' })
   }
   return chain
@@ -379,6 +696,10 @@ export function chainToTokens(chain, options = []) {
   const tokens = []
   for (const item of chain || []) {
     if (!item) continue
+    if (item.kind === 'paren' && (item.paren === '(' || item.paren === ')')) {
+      tokens.push({ type: 'paren', paren: item.paren })
+      continue
+    }
     if (item.kind === 'op') {
       if (!tokens.length) continue
       if (item.op === 'pctOf') tokens.push({ type: 'pctOf' })
@@ -402,8 +723,14 @@ export function formulaSentence(tokens, columns = []) {
   return parts.length ? parts.join(' ') : ''
 }
 
+/** Typeable expression string from tokens (uses × ÷ − for display). */
+export function formulaExpression(tokens, columns = []) {
+  return formulaSentence(tokens, columns)
+}
+
 function tokenLabel(token, columns) {
   if (!token) return ''
+  if (token.type === 'paren') return token.paren
   if (token.type === 'op') return token.op === '*' ? '×' : token.op === '/' ? '÷' : token.op === '-' ? '−' : '+'
   if (token.type === 'pctOf') return '% of'
   if (token.type === 'number') return String(token.value)
@@ -484,7 +811,10 @@ function resolveTokenValue(token, ctx) {
       return toNumber(ctx.item?.[col.id])
     }
     if (token.part === 'amount') {
-      if (isNestedColumn(col)) return toNumber(ctx.item?.[amountKey(col)])
+      if (isNestedColumn(col) || columnType(col) === 'tax' || columnType(col) === 'discount') {
+        const percentBase = columnType(col) === 'tax' ? ctx.taxable : ctx.list
+        return columnMoneyAmount(ctx.item, col, percentBase)
+      }
       return toNumber(ctx.item?.[col.id])
     }
     return toNumber(ctx.item?.[col.id])
@@ -495,6 +825,41 @@ function resolveTokenValue(token, ctx) {
 export function evaluateTokens(tokens, ctx) {
   const list = Array.isArray(tokens) ? tokens : []
   if (!list.length) return null
+  const flattened = flattenParenGroups(list, ctx)
+  if (!flattened) return null
+  return evaluateFlatTokens(flattened, ctx)
+}
+
+/** Resolve `( … )` groups first; inside each group use the same left-to-right rules. */
+function flattenParenGroups(tokens, ctx) {
+  const out = []
+  let i = 0
+  while (i < tokens.length) {
+    const token = tokens[i]
+    if (token?.type === 'paren' && token.paren === '(') {
+      let depth = 1
+      let j = i + 1
+      while (j < tokens.length && depth > 0) {
+        if (tokens[j]?.type === 'paren' && tokens[j].paren === '(') depth += 1
+        else if (tokens[j]?.type === 'paren' && tokens[j].paren === ')') depth -= 1
+        j += 1
+      }
+      if (depth !== 0) return null
+      const inner = tokens.slice(i + 1, j - 1)
+      const value = evaluateTokens(inner, ctx)
+      if (value == null || !Number.isFinite(value)) return null
+      out.push({ type: 'number', value })
+      i = j
+      continue
+    }
+    if (token?.type === 'paren' && token.paren === ')') return null
+    out.push(token)
+    i += 1
+  }
+  return out
+}
+
+function evaluateFlatTokens(list, ctx) {
   let acc = null
   let pendingOp = null
   let pendingPctOf = false

@@ -26,12 +26,19 @@ const LEGACY_STORAGE_KEY = 'quotegen_session'
 let currentSession = null
 let sessionReady = null
 
+const SESSION_BOOT_MS = 4000
+
 function watchSession() {
   if (sessionReady || !supabase) return sessionReady
-  sessionReady = supabase.auth.getSession().then(({ data }) => {
-    currentSession = data.session || null
-    return currentSession
-  }).catch(() => null)
+  sessionReady = Promise.race([
+    supabase.auth.getSession().then(({ data }) => {
+      currentSession = data.session || null
+      return currentSession
+    }).catch(() => null),
+    new Promise((resolve) => {
+      setTimeout(() => resolve(currentSession), SESSION_BOOT_MS)
+    })
+  ])
   supabase.auth.onAuthStateChange((_event, session) => { currentSession = session || null })
   return sessionReady
 }

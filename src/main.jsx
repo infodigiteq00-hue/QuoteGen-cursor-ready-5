@@ -1,14 +1,20 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 import UploadDoc from './UploadDoc.jsx'
+import OpenEditor from './OpenEditor.jsx'
 import UploadedTemplateQuote from './UploadedTemplateQuote.jsx'
+import NativeTemplateQuote from './NativeTemplateQuote.jsx'
 import KnowledgeBasePanel from './KnowledgeBasePanel.jsx'
 import AuthScreen from './AuthScreen.jsx'
+import MarketingLanding from './MarketingLanding.jsx'
+import WsConvertModal from './WsConvertModal.jsx'
+import BrandMark from './BrandMark.jsx'
+import { emailLinkError } from './supabaseClient.js'
 import { getCurrentSession, installAuthFetch, onAuthChange, signOut } from './apiAuth.js'
-import { downloadQuotationPdf, quotationFileName } from './pdfExport.js'
+import { downloadQuotationPdf, onQuoteAssetImgError, quotationFileName, quoteAssetSrc } from './pdfExport.js'
 import { downloadQuotationExcel, downloadQuotationWord } from './officeExport.js'
-import { formatIndianAmount } from '../shared/templateMap.js'
+import { formatIndianAmount, layoutRolesFromMapping } from '../shared/templateMap.js'
 import {
   autofillFromKnowledge,
   buildQuotationPayload,
@@ -21,6 +27,7 @@ import {
   formatSeriesPreview,
   getQuotation,
   getRevision,
+  ingestEnquiryFiles,
   learnFromQuote,
   listProducts,
   listQuotations,
@@ -51,19 +58,21 @@ import {
   defaultSeriesSettings,
   invoiceSeriesTypeById
 } from '../shared/invoiceSeries.js'
+import { resolveDocLabel } from '../shared/docLabel.js'
 import {
   QuotePaperHeader,
   QuoteStudioCanvas,
   QuoteStudioFooterBar,
   QuoteStudioToolbar,
   QuoteToSubjectBlock,
-  LayoutStyleCards,
-  ExportMenu
+  LayoutStyleCards
 } from './QuoteStudio.jsx'
-import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, extractImagePalette, accentForTableColor } from './quotePaperThemes.js'
+import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor } from './quotePaperThemes.js'
+import { A4_WIDTH_PX, defaultA4Pages, measureA4Blocks, normalizeA4Pages, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
 import { applyProductToItem, clientsFromQuotations, matchProducts, productsFromHistory } from './suggestCatalog.js'
 import FormulaGuide from './FormulaGuide.jsx'
+import RichTextField, { RichTextView } from './RichTextField.jsx'
 import FloatingPop from './FloatingPop.jsx'
 import { footerFitCssVars, normalizeFooterFit, patchFooterFit } from '../shared/footerFit.js'
 import {
@@ -91,6 +100,8 @@ import {
   isHighlightColumn,
   isImageColumn,
   isNestedColumn,
+  isSuggestedColumn,
+  insertTypedColumns,
   moveColumnInList,
   nestedFieldInfo,
   normalizeColumnList,
@@ -106,16 +117,20 @@ import {
 import {
   canHaveFormula,
   clearFormulaOverride,
-  defaultFormulaTokens,
   formulaCellState,
   formulaEditPatch,
+  adaptAmountFormula,
+  syncAmountFormula,
+  formulaForAddedColumn,
   formulaSentence,
   isFormulaColumn,
   normalizeFormula
 } from '../shared/quoteFormulas.js'
 import {
   attachSuggestedColumn,
-  fillSuggestedOnItems
+  fillSuggestedOnItems,
+  SUGGESTED_COLUMN_ENABLED,
+  withoutSuggestedColumns
 } from '../shared/productKeywords.js'
 
 const DEFAULT_DATA_COLUMNS = [
@@ -202,7 +217,7 @@ const ADDABLE_COLUMN_TYPES = [
 /** The landing-page "+ Add column" panel offers plain text alongside the typed options. */
 const BUILDER_COLUMN_TYPES = [
   { type: 'text', label: 'Text column', hint: 'Plain text cell — the default', defaultLabel: 'Column' },
-  { type: 'formula', label: 'Formula column', hint: 'Calculates itself, like Excel — Quantity × Rate, % of Amount…', defaultLabel: 'Calculated' },
+  { type: 'formula', label: 'Formula column', hint: 'Custom calculated column — Quantity × Rate, % of Amount…', defaultLabel: 'Calculated' },
   ...ADDABLE_COLUMN_TYPES
 ]
 
@@ -232,6 +247,7 @@ function uniqueId(label, existing) {
 function makeTypedColumn(label, type = 'text', existing = [], options = {}) {
   const resolved = type === 'formula' ? 'text' : type
   const col = { id: uniqueId(label, existing), label, type: resolved }
+  if (type === 'formula') col.calculated = true
   if (resolved === 'highlight') col.color = DEFAULT_HIGHLIGHT_COLOR
   if (resolved === 'image') col.imageWidth = 96
   if (resolved === 'tax' || resolved === 'discount') col.mode = options.mode === 'amount' ? 'amount' : 'percent'
@@ -247,10 +263,8 @@ function unitInsertIndex(columns) {
 }
 
 function insertColumnsBeforeUnit(columns, newCols) {
-  const idx = unitInsertIndex(columns)
-  const next = [...columns]
-  next.splice(idx, 0, ...newCols)
-  return next
+  // Prefer commercial placement (HSN / discount / tax); fall back to before Unit.
+  return insertTypedColumns(columns, newCols)
 }
 
 /** Ensure an HSN column exists so HSN lookup has somewhere to write. */
@@ -261,7 +275,7 @@ function ensureHsnGstColumns(columns) {
   const toAdd = []
   if (!hasHsn) toAdd.push({ id: uniqueId('HSN Code', [...next, ...toAdd]), label: 'HSN Code', type: 'hsn', digits: '4' })
   if (!toAdd.length) return columns
-  return insertColumnsBeforeUnit(next, toAdd)
+  return insertTypedColumns(next, toAdd)
 }
 
 const moveColumn = moveColumnInList
@@ -269,7 +283,7 @@ const moveColumn = moveColumnInList
 const blankItem = blankItemFor
 
 function stripMarkdownBold(text) {
-  return String(text || '').replace(/\*\*/g, '').trim()
+  return String(text || '').replace(/\*\*/g, '')
 }
 
 function splitDescription(value) {
@@ -390,19 +404,12 @@ function TotalsExtraLines({ lines, base, onAdd, onUpdate, onRemove }) {
   )
 }
 
-/**
- * Print-only rendering of a currency cell: drops the forced ".00" on whole
- * numbers (most row amounts) and inserts a zero-width space after every comma
- * so the browser wraps at a digit-group boundary instead of mid-digit — an
- * <input> never wraps at all, so its printed twin needs real break points.
- */
 function printAmountText(value) {
   if (value === '' || value == null) return ''
   const num = Number(value)
   if (!Number.isFinite(num)) return String(value)
   const hasFraction = Math.abs(num % 1) > 0.004
-  const formatted = num.toLocaleString('en-IN', { minimumFractionDigits: hasFraction ? 2 : 0, maximumFractionDigits: 2 })
-  return formatted.replace(/,/g, ',​')
+  return num.toLocaleString('en-IN', { minimumFractionDigits: hasFraction ? 2 : 0, maximumFractionDigits: 2 })
 }
 
 function productSuggestionItems(products, query) {
@@ -414,59 +421,73 @@ function productSuggestionItems(products, query) {
   }))
 }
 
-function DescriptionCell({ value, onChange, onBlurExtra, label, products, onPickProduct }) {
+function DescriptionCell({ value, onChange, onBlurExtra, products, onPickProduct }) {
   const [editing, setEditing] = useState(false)
   const pickedRef = useRef(false)
   const clean = stripMarkdownBold(value)
   const { primary, secondary } = splitDescription(clean)
-  const suggestions = productSuggestionItems(products, clean)
+  const [draft, setDraft] = useState(clean)
+  useEffect(() => {
+    if (!editing) setDraft(stripMarkdownBold(value))
+  }, [value, editing])
 
-  if (editing) {
+  const suggestions = useMemo(() => {
+    if (!editing || String(draft || '').trim().length < 1) return []
+    return productSuggestionItems(products, draft)
+  }, [editing, draft, products])
+
+  // Resting view: first line bold (title), details muted — same as original.
+  // Edit mode only while focused, so typing stays snappy without losing hierarchy.
+  if (!editing) {
     return (
-      <>
-        <SuggestField
-          multiline
-          autoFocus
-          value={clean}
-          onChange={v => onChange(stripMarkdownBold(v))}
-          suggestions={suggestions}
-          onPick={(item) => {
-            pickedRef.current = true
-            onPickProduct?.(item.product)
-            setEditing(false)
-          }}
-          onBlur={() => {
-            if (pickedRef.current) {
-              pickedRef.current = false
-              return
-            }
-            setEditing(false)
-            onBlurExtra?.()
-          }}
-          placeholder={'Product name on first line\ndetails on lines below'}
-          className="w-full min-w-0 resize-y rounded p-2 text-sm outline-none ring-2 ring-blue-50 hover:bg-slate-50 focus:bg-blue-50 print:hidden"
-        />
-        <div className="description-cell hidden min-w-0 print:block">
-          {primary ? <p className="font-semibold text-ink">{primary}</p> : null}
-          {secondary && <p className="mt-1 whitespace-pre-line text-xs font-normal leading-relaxed text-slate-500">{secondary}</p>}
-        </div>
-      </>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setEditing(true)}
+        onKeyDown={e => { if (e.key === 'Enter') setEditing(true) }}
+        className="description-cell min-w-0 w-full cursor-text rounded p-2 leading-snug hover:bg-slate-50"
+      >
+        {primary
+          ? <p className="font-semibold text-ink">{primary}</p>
+          : <span className="text-slate-300">—</span>}
+        {secondary && <p className="mt-1 whitespace-pre-line text-xs font-normal leading-relaxed text-slate-500">{secondary}</p>}
+      </div>
     )
   }
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={() => setEditing(true)}
-      onKeyDown={e => { if (e.key === 'Enter') setEditing(true) }}
-      className="description-cell min-w-0 w-full cursor-text rounded p-2 leading-snug hover:bg-slate-50"
-    >
-      {primary
-        ? <p className="font-semibold text-ink">{primary}</p>
-        : <span className="text-slate-300">—</span>}
-      {secondary && <p className="mt-1 whitespace-pre-line text-xs font-normal leading-relaxed text-slate-500">{secondary}</p>}
-    </div>
+    <>
+      <SuggestField
+        multiline
+        autoFocus
+        value={draft}
+        onChange={(v) => {
+          const next = stripMarkdownBold(v)
+          setDraft(next)
+          onChange(next)
+        }}
+        suggestions={suggestions}
+        onPick={(item) => {
+          pickedRef.current = true
+          onPickProduct?.(item.product)
+          setEditing(false)
+        }}
+        onBlur={() => {
+          if (pickedRef.current) {
+            pickedRef.current = false
+            return
+          }
+          setEditing(false)
+          onBlurExtra?.()
+        }}
+        placeholder={'Product name on first line\ndetails on lines below'}
+        className="no-print w-full min-w-0 resize-y rounded p-2 text-sm outline-none ring-2 ring-blue-50 hover:bg-slate-50 focus:bg-blue-50"
+      />
+      <div className="description-cell hidden min-w-0 print:block">
+        {primary ? <p className="font-semibold text-ink">{primary}</p> : null}
+        {secondary && <p className="mt-1 whitespace-pre-line text-xs font-normal leading-relaxed text-slate-500">{secondary}</p>}
+      </div>
+    </>
   )
 }
 
@@ -509,7 +530,7 @@ function stopFileDrag(e) {
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
 }
 
-function ImageCell({ col, value, edit, onChange, onEditChange, onFitColumn, rowIndex }) {
+function ImageCell({ col, value, path, edit, onChange, onEditChange, onFitColumn, rowIndex }) {
   const fileRef = useRef(null)
   const drag = useRef(null)
   const [busy, setBusy] = useState(false)
@@ -522,6 +543,7 @@ function ImageCell({ col, value, edit, onChange, onEditChange, onFitColumn, rowI
   const aspect = natural.w > 0 && natural.h > 0 ? natural.w / natural.h : 1
   const height = size
   const width = Math.max(24, Math.round(size * aspect))
+  const src = quoteAssetSrc(value, path)
   const fitRef = useRef(onFitColumn)
   fitRef.current = onFitColumn
 
@@ -584,19 +606,20 @@ function ImageCell({ col, value, edit, onChange, onEditChange, onFitColumn, rowI
 
   return (
     <div
-      className={`quote-media-cell ${value ? 'quote-media-cell--image' : ''} relative flex min-h-[42px] items-center justify-center overflow-visible p-0.5 ${value ? 'rounded-md border border-sand bg-white' : `qg-drop-zone ${over ? 'qg-drop-zone--over' : ''}`} ${value ? '' : 'no-print'}`}
+      className={`quote-media-cell ${src ? 'quote-media-cell--image' : ''} relative flex min-h-[42px] items-center justify-center overflow-visible p-0.5 ${src ? 'rounded-md border border-sand bg-white' : `qg-drop-zone ${over ? 'qg-drop-zone--over' : ''}`} ${src ? '' : 'no-print'}`}
       onDragEnter={stopFileDrag}
       onDragOver={(e) => { stopFileDrag(e); setOver(true) }}
       onDragLeave={() => setOver(false)}
       onDrop={(e) => { stopFileDrag(e); setOver(false); addFile(e.dataTransfer.files?.[0]) }}
     >
       <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" className="hidden" onChange={e => { addFile(e.target.files?.[0]); e.target.value = '' }} />
-      {value ? (
+      {src ? (
         <div className="qg-image-wrap">
           <img
-            src={value}
+            src={src}
             alt={col.label}
             draggable={false}
+            onError={onQuoteAssetImgError}
             onLoad={e => {
               const w = e.currentTarget.naturalWidth || 1
               const h = e.currentTarget.naturalHeight || 1
@@ -628,7 +651,7 @@ function ImageCell({ col, value, edit, onChange, onEditChange, onFitColumn, rowI
           {busy ? 'Adding…' : error || 'Drop image'}
         </button>
       )}
-      {error && value ? <p className="no-print absolute bottom-0.5 left-1 right-1 truncate text-[9px] text-rose-500">{error}</p> : null}
+      {error && src ? <p className="no-print absolute bottom-0.5 left-1 right-1 truncate text-[9px] text-rose-500">{error}</p> : null}
     </div>
   )
 }
@@ -644,7 +667,8 @@ function AttachmentCell({ col, item, onChange }) {
   const [draftName, setDraftName] = useState('')
 
   const label = String(item?.[col.id] || '').trim()
-  const url = String(item?.[attachmentUrlKey(col)] || '').trim()
+  const storedUrl = String(item?.[attachmentUrlKey(col)] || '').trim()
+  const url = quoteAssetSrc(storedUrl, item?.[imagePathKey(col)])
     || (/^(https?:|data:)/i.test(label) ? label : '')
   const linkLabel = url && /^(https?:|data:)/i.test(label) ? 'Open file' : (label || 'Open file')
 
@@ -742,26 +766,74 @@ function AttachmentCell({ col, item, onChange }) {
   )
 }
 
-function QuoteTableCell({ col, columns, item, rowIndex, updateItem, onDescriptionBlur, onImageChange, onAttachmentChange, onFitColumn, onRevertAmount, onAmountBlur, products, onApplyProduct }) {
-  const [focused, setFocused] = useState(false)
-  const value = item[col.id] ?? ''
-  const fill = item._knowledgeFill
-  const hsnFill = item._hsnGstFill
-  const filledHere = fill?.fields?.includes(col.id)
-  const hsnHere = hsnFill?.fields?.includes(col.id)
-  const amount = amountCellState(item, columns, col)
-  const formula = formulaCellState(item, columns, col)
-  const derived = amount || formula
-  const highlighted = isHighlightColumn(col)
-  const cellStyle = highlighted ? { backgroundColor: highlightColor(col) } : undefined
-  const highlightClass = highlighted ? 'qg-highlight' : ''
+function WrapCellTextarea({ value, onChange, onFocus, onBlur, placeholder, ariaLabel, className = '', inputRef }) {
+  const localRef = useRef(null)
+  const focusedRef = useRef(false)
+  const [draft, setDraft] = useState(value ?? '')
+  const setRefs = (node) => {
+    localRef.current = node
+    if (!inputRef) return
+    if (typeof inputRef === 'function') inputRef(node)
+    else inputRef.current = node
+  }
+  const resize = (el) => {
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+  useEffect(() => {
+    if (!focusedRef.current) setDraft(value ?? '')
+  }, [value])
+  useEffect(() => { resize(localRef.current) }, [draft])
+  return (
+    <textarea
+      ref={setRefs}
+      rows={1}
+      aria-label={ariaLabel}
+      value={draft}
+      placeholder={placeholder}
+      autoComplete="off"
+      onChange={e => {
+        const next = e.target.value
+        setDraft(next)
+        onChange(next)
+        resize(e.target)
+      }}
+      onFocus={(e) => {
+        focusedRef.current = true
+        onFocus?.(e)
+      }}
+      onBlur={(e) => {
+        focusedRef.current = false
+        onBlur?.(e)
+      }}
+      className={`no-print min-w-0 w-full resize-none overflow-hidden whitespace-pre-wrap break-words rounded bg-transparent p-2 leading-snug outline-none hover:bg-slate-50/60 focus:bg-blue-50 ${className}`}
+    />
+  )
+}
 
+function shouldWrapTableCell(col) {
+  if (isSuggestedColumn(col)) return true
+  if (isImageColumn(col) || isAttachmentColumn(col) || isNestedColumn(col)) return false
+  const id = String(col?.id || '').toLowerCase()
+  if (['rate', 'amount', 'quantity', 'qty', 'unit'].includes(id)) return false
+  if (columnType(col) === 'hsn') return false
+  if (id === 'description' || /^(description|enquiry|inquiry)$/i.test(String(col.label || '').trim())) return false
+  return true
+}
+
+function QuoteTableCell(props) {
+  const { col } = props
   if (isImageColumn(col)) {
+    const { item, rowIndex, updateItem, onImageChange, onFitColumn } = props
+    const highlightClass = isHighlightColumn(col) ? 'qg-highlight' : ''
+    const compactClass = isCompactColumn(col) ? 'qg-cell-compact' : ''
     return (
-      <td className={`align-top ${highlightClass}`} style={cellStyle}>
+      <td className={`align-top ${highlightClass} ${compactClass}`}>
         <ImageCell
           col={col}
-          value={value}
+          value={item[col.id] ?? ''}
+          path={item[imagePathKey(col)]}
           edit={item[imageEditKey(col)]}
           rowIndex={rowIndex}
           onChange={(url, path) => onImageChange(rowIndex, col, url, path)}
@@ -771,10 +843,12 @@ function QuoteTableCell({ col, columns, item, rowIndex, updateItem, onDescriptio
       </td>
     )
   }
-
   if (isAttachmentColumn(col)) {
+    const { item, rowIndex, onAttachmentChange } = props
+    const highlightClass = isHighlightColumn(col) ? 'qg-highlight' : ''
+    const compactClass = isCompactColumn(col) ? 'qg-cell-compact' : ''
     return (
-      <td className={`align-top ${highlightClass}`} style={cellStyle}>
+      <td className={`align-top ${highlightClass} ${compactClass}`}>
         <AttachmentCell
           col={col}
           item={item}
@@ -783,17 +857,18 @@ function QuoteTableCell({ col, columns, item, rowIndex, updateItem, onDescriptio
       </td>
     )
   }
-
   if (col.id === 'description' || /^(description|enquiry|inquiry)$/i.test(String(col.label || '').trim())) {
+    const { item, rowIndex, updateItem, onDescriptionBlur, products, onApplyProduct } = props
+    const highlightClass = isHighlightColumn(col) ? 'qg-highlight' : ''
+    const compactClass = isCompactColumn(col) ? 'qg-cell-compact' : ''
     return (
-      <td className={`p-1 align-top ${highlightClass}`} style={cellStyle}>
+      <td className={`p-1 align-top ${highlightClass} ${compactClass}`}>
         <div className="flex items-start gap-1">
           <div className="min-w-0 flex-1">
             <DescriptionCell
-              value={value}
+              value={item[col.id] ?? ''}
               onChange={v => updateItem(rowIndex, col.id, v)}
               onBlurExtra={() => onDescriptionBlur?.(rowIndex)}
-              label={col.label}
               products={products}
               onPickProduct={(product) => onApplyProduct?.(rowIndex, product, col.id)}
             />
@@ -802,43 +877,94 @@ function QuoteTableCell({ col, columns, item, rowIndex, updateItem, onDescriptio
       </td>
     )
   }
+  return <QuoteTextTableCell {...props} />
+}
 
+function QuoteTextTableCell({ col, columns, item, rowIndex, updateItem, onRevertAmount, onAmountBlur, products, onApplyProduct }) {
+  const [focused, setFocused] = useState(false)
+  const focusedRef = useRef(false)
+  const suggestWrapRef = useRef(null)
+  const fieldRef = useRef(null)
+  const value = item[col.id] ?? ''
+  const [draft, setDraft] = useState(value)
+  useEffect(() => {
+    if (!focusedRef.current) setDraft(value)
+  }, [value])
+  const fill = item._knowledgeFill
+  const hsnFill = item._hsnGstFill
+  const filledHere = fill?.fields?.includes(col.id)
+  const hsnHere = hsnFill?.fields?.includes(col.id)
+  const amount = amountCellState(item, columns, col)
+  const formula = formulaCellState(item, columns, col)
+  const derived = amount || formula
+  const highlighted = isHighlightColumn(col)
+  const highlightClass = highlighted ? 'qg-highlight' : ''
+  const compactClass = isCompactColumn(col) ? 'qg-cell-compact' : ''
   const tint = derived?.overridden ? 'bg-amber-50/60' : (filledHere || hsnHere) ? 'bg-blue-50/40' : ''
   const isCurrency = col.id === 'rate' || col.id === 'amount' || Boolean(derived) || ((columnType(col) === 'tax' || columnType(col) === 'discount') && columnMode(col) === 'amount')
-  const displayValue = (isCurrency && !focused && value !== '' && Number.isFinite(Number(value)))
-    ? formatIndianAmount(value)
-    : value
+  const displayValue = (isCurrency && !focused && draft !== '' && Number.isFinite(Number(draft)))
+    ? formatIndianAmount(draft)
+    : draft
   const canSuggest = col.id !== 'amount' && !derived
-  const suggestions = canSuggest ? productSuggestionItems(products, value) : []
+  const suggestions = useMemo(() => {
+    if (!focused || !canSuggest || String(draft || '').trim().length < 1) return []
+    return productSuggestionItems(products, draft)
+  }, [focused, canSuggest, draft, products])
+  const wrapText = shouldWrapTableCell(col)
+  const commitValue = (raw) => {
+    const next = isCurrency ? String(raw).replace(/,/g, '') : raw
+    setDraft(next)
+    updateItem(rowIndex, col.id, next)
+  }
   return (
     <td
-      className={`p-1 align-top ${highlightClass} ${!highlighted ? tint : ''}`}
-      style={cellStyle}
+      className={`p-1 align-top ${highlightClass} ${compactClass} ${!highlighted ? tint : ''}`}
     >
-      <div className={`qg-suggest flex items-center gap-1 ${focused && suggestions.length ? 'qg-suggest--open' : ''}`}>
-        <input
-          aria-label={col.label}
-          value={displayValue}
-          onChange={e => updateItem(rowIndex, col.id, isCurrency ? e.target.value.replace(/,/g, '') : e.target.value)}
-          onFocus={() => setFocused(true)}
-          onBlur={() => {
-            window.setTimeout(() => {
-              setFocused(false)
-              if (derived) onAmountBlur(rowIndex)
-            }, 120)
-          }}
-          className={`no-print w-full rounded bg-transparent p-2 outline-none hover:bg-slate-50/60 focus:bg-blue-50 ${derived || col.id === 'amount' ? 'text-right font-medium' : ''}`}
-          placeholder={derived && !derived.manual ? (amount ? 'Qty × Rate' : 'Auto') : '—'}
-          autoComplete="off"
-        />
+      <div ref={suggestWrapRef} className={`qg-suggest min-w-0 w-full ${wrapText ? '' : 'flex items-center gap-1'} ${focused && suggestions.length ? 'qg-suggest--open' : ''}`}>
+        {wrapText ? (
+          <WrapCellTextarea
+            ariaLabel={col.label}
+            value={displayValue}
+            onChange={commitValue}
+            inputRef={fieldRef}
+            onFocus={() => { focusedRef.current = true; setFocused(true) }}
+            onBlur={() => {
+              window.setTimeout(() => {
+                focusedRef.current = false
+                setFocused(false)
+                if (derived) onAmountBlur(rowIndex)
+              }, 120)
+            }}
+            placeholder={derived && !derived.manual ? (amount ? 'Qty × Rate' : 'Auto') : '—'}
+          />
+        ) : (
+          <input
+            ref={fieldRef}
+            aria-label={col.label}
+            value={displayValue}
+            onChange={e => commitValue(e.target.value)}
+            onFocus={() => { focusedRef.current = true; setFocused(true) }}
+            onBlur={() => {
+              window.setTimeout(() => {
+                focusedRef.current = false
+                setFocused(false)
+                if (derived) onAmountBlur(rowIndex)
+              }, 120)
+            }}
+            className={`no-print w-full min-w-0 rounded bg-transparent p-2 outline-none hover:bg-slate-50/60 focus:bg-blue-50 ${compactClass ? 'whitespace-nowrap' : ''} ${derived || col.id === 'amount' ? 'text-right font-medium' : ''}`}
+            placeholder={derived && !derived.manual ? (amount ? 'Qty × Rate' : 'Auto') : '—'}
+            autoComplete="off"
+          />
+        )}
         {focused && suggestions.length ? (
           <SuggestionMenu
             items={suggestions}
             active={0}
             onPick={(item) => onApplyProduct?.(rowIndex, item.product, col.id)}
+            anchorRef={suggestWrapRef}
           />
         ) : null}
-        <span className={`print-only-cell w-full p-2 ${derived || col.id === 'amount' ? 'text-right font-medium' : ''}`}>
+        <span className={`print-only-cell w-full min-w-0 p-2 ${compactClass ? 'whitespace-nowrap' : 'whitespace-pre-wrap break-words'} ${derived || col.id === 'amount' ? 'text-right font-medium' : ''}`}>
           {isCurrency ? printAmountText(value) : (value || (derived && !derived.manual ? (amount ? 'Qty × Rate' : 'Auto') : ''))}
         </span>
         {derived?.overridden && <AmountOverrideBadge computed={derived.computed} onRevert={() => onRevertAmount(rowIndex, col)} />}
@@ -852,10 +978,9 @@ function NestedTableCells({ col, item, rowIndex, updateItem }) {
   const rk = rateKey(col)
   const hsnFill = item._hsnGstFill
   const hsnHere = hsnFill?.fields?.includes(rk)
-  const tint = columnType(col) === 'discount' ? 'bg-rose-50/40' : 'bg-sky-50/40'
   const rateValue = item[rk] ?? ''
   return (
-    <td className={`p-1 align-top ${tint}`}>
+    <td className="qg-cell-compact p-1 align-top">
       <div className="flex items-center gap-1">
         <input
           aria-label={`${col.label} %`}
@@ -914,12 +1039,22 @@ function useIsMobile() {
   return isMobile
 }
 
+function hasAuthRedirectHash() {
+  if (typeof window === 'undefined') return false
+  const hash = window.location.hash.replace(/^#/, '')
+  if (!hash) return false
+  const params = new URLSearchParams(hash)
+  return params.has('access_token') || params.has('error_code') || params.get('type') === 'recovery'
+}
+
 function App() {
   const [authChecked, setAuthChecked] = useState(false)
   const [authUser, setAuthUser] = useState(null)
   const [passwordRecovery, setPasswordRecovery] = useState(false)
+  const [guestAuthMode, setGuestAuthMode] = useState(null)
+  const [guestEmail, setGuestEmail] = useState('')
   const [view, setView] = useState('home')
-  const [customer, setCustomer] = useState({ name: '', company: '', gst: '', location: '' })
+  const [customer, setCustomer] = useState({ name: '', company: '', gst: '', location: '', shippingSame: true, shippingLocation: '' })
   const [enquiry, setEnquiry] = useState('')
   const [columns, setColumns] = useState(DEFAULT_DATA_COLUMNS)
   const [quote, setQuote] = useState(null)
@@ -953,7 +1088,7 @@ function App() {
     setSidebarHidden(hidden)
     try { localStorage.setItem('qg-sidebar-hidden', hidden ? '1' : '0') } catch { /* ignore */ }
   }
-  const [brandingOpen, setBrandingOpen] = useState(false)
+  const [brandingOpen, setBrandingOpen] = useState(true)
   const [bankDetailsOpen, setBankDetailsOpen] = useState(false)
   const [termsOpen, setTermsOpen] = useState(false)
   const [seriesOpen, setSeriesOpen] = useState(false)
@@ -971,6 +1106,7 @@ function App() {
   const lastSavedJsonRef = useRef('')
   const lastSeriesSyncedNumberRef = useRef('')
   const selectedTemplateIdRef = useRef(selectedTemplateId)
+  const autosaveGenRef = useRef(0)
 
   useEffect(() => { quoteIdRef.current = quoteId }, [quoteId])
   useEffect(() => { selectedTemplateIdRef.current = selectedTemplateId }, [selectedTemplateId])
@@ -1104,7 +1240,7 @@ function App() {
     setHistoryLoading(true)
     setHistoryError('')
     try {
-      const listRes = await listQuotations(40)
+      const listRes = await listQuotations(200)
       if (listRes.unavailable) {
         setPersistenceConfigured(false)
         setRecentQuotations([])
@@ -1128,9 +1264,13 @@ function App() {
       setAuthUser(session?.user || null)
       setAuthChecked(true)
     }
-    getCurrentSession().then(session => apply(session)).catch(() => apply(null))
+    // Hard cap so a hung Supabase getSession never leaves a blank/near-white screen.
+    const bootTimer = setTimeout(() => apply(null), 4500)
+    getCurrentSession()
+      .then(session => { clearTimeout(bootTimer); apply(session) })
+      .catch(() => { clearTimeout(bootTimer); apply(null) })
     const unsubscribe = onAuthChange(apply)
-    return () => { cancelled = true; unsubscribe() }
+    return () => { cancelled = true; clearTimeout(bootTimer); unsubscribe() }
   }, [])
 
   useEffect(() => {
@@ -1143,7 +1283,7 @@ function App() {
       .then(r => r.json())
       .then(d => setUploadTemplates(d.templates || []))
       .catch(() => {})
-  }, [view, authUser])
+  }, [authUser])
 
   // Debounced autosave while editing a quotation
   useEffect(() => {
@@ -1162,11 +1302,15 @@ function App() {
     const json = JSON.stringify(body)
     if (json === lastSavedJsonRef.current) return
 
+    const gen = ++autosaveGenRef.current
     const timer = setTimeout(async () => {
+      if (gen !== autosaveGenRef.current) return
+      const currentId = quoteIdRef.current
       setSaveStatus('saving')
       try {
-        if (quoteIdRef.current) {
-          const result = await updateQuotation(quoteIdRef.current, body)
+        if (currentId) {
+          const result = await updateQuotation(currentId, body)
+          if (gen !== autosaveGenRef.current) return
           if (result.unavailable) {
             setPersistenceConfigured(false)
             setSaveStatus('unavailable')
@@ -1187,6 +1331,7 @@ function App() {
           }
         } else {
           const result = await createQuotation(body)
+          if (gen !== autosaveGenRef.current) return
           if (result.unavailable) {
             setPersistenceConfigured(false)
             setSaveStatus('unavailable')
@@ -1209,7 +1354,7 @@ function App() {
           }
         }
       } catch {
-        setSaveStatus('error')
+        if (gen === autosaveGenRef.current) setSaveStatus('error')
       }
     }, 900)
 
@@ -1217,6 +1362,7 @@ function App() {
   }, [quote, persistenceConfigured, activeUploadTemplate])
 
   const resetEditorSession = () => {
+    autosaveGenRef.current += 1
     setQuote(null)
     setQuoteId(null)
     quoteIdRef.current = null
@@ -1224,14 +1370,33 @@ function App() {
     lastSeriesSyncedNumberRef.current = ''
     setActiveUploadTemplate(null)
     setSaveStatus('idle')
+    setEnquiry('')
+    setError('')
+  }
+
+  const goNewQuote = () => {
+    const layouts = collectSavedLayouts(companyProfile, recentQuotations)
+    const active = layouts.find(l => l.id === companyProfile?.activeColumnLayoutId) || layouts[0]
+    setColumns(active?.columns?.length
+      ? active.columns.map(c => ({ ...c }))
+      : (companyProfile?.columnLayout?.length ? companyProfile.columnLayout : DEFAULT_DATA_COLUMNS))
+    setSelectedTemplateId(companyProfile?.defaultUploadTemplateId || '')
+    setNewQuoteStep(1)
+    setNewQuoteSession(n => n + 1)
+    setEnquiry('')
+    setError('')
+    setWorkspaceView('new')
   }
 
   const openQuoteInEditor = async (editorQuote, { id = null, template = null } = {}) => {
     // AI drafts, reopened quotes and clones all land here, so this is where rows
     // get their calculated Amount. A supplied Amount that disagrees with
     // Quantity × Rate reads as deliberate and is kept.
-    const cols = editorQuote.columns?.length ? editorQuote.columns : columns
-    const attached = attachSuggestedColumn(cols, editorQuote.items || [])
+    const synced = syncAmountFormula(
+      editorQuote.columns?.length ? editorQuote.columns : columns,
+      editorQuote.items || []
+    )
+    const attached = attachSuggestedColumn(synced.columns, synced.items)
     const ready = {
       ...editorQuote,
       columns: attached.columns,
@@ -1309,6 +1474,11 @@ function App() {
     }
   }
 
+  const handleConvertedDocument = async (id) => {
+    await handleOpenQuotation(id)
+    refreshLandingData()
+  }
+
   /**
    * Turn the open quotation into a sales invoice and switch the editor to it.
    * The quotation is left untouched, so both documents stay on record.
@@ -1351,11 +1521,38 @@ function App() {
   }
 
   if (!authChecked) {
-    return <main className="flex min-h-screen items-center justify-center bg-mist"><span className="animate-spin text-2xl text-moss">◌</span></main>
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-3.5 bg-mist">
+        <BrandMark size={56} className="qg-boot-mark-react" alt="" />
+        <div className="text-center">
+          <div className="text-lg font-bold tracking-tight text-ink" style={{ fontFamily: 'Outfit, Inter, system-ui, sans-serif' }}>QuoteGen</div>
+          <div className="mt-2 text-sm text-slate-500 qg-boot-sub-react">Loading…</div>
+        </div>
+      </main>
+    )
   }
 
   if (!authUser) {
-    return <AuthScreen />
+    const needsAuthScreen = passwordRecovery || emailLinkError || hasAuthRedirectHash() || guestAuthMode
+    if (needsAuthScreen) {
+      return (
+        <AuthScreen
+          recovery={passwordRecovery}
+          onPasswordUpdated={() => setPasswordRecovery(false)}
+          initialMode={guestAuthMode === 'signup' ? 'signup' : undefined}
+          prefillEmail={guestEmail}
+        />
+      )
+    }
+    return (
+      <MarketingLanding
+        onSignIn={() => setGuestAuthMode('login')}
+        onSignUp={(email) => {
+          setGuestEmail(email || '')
+          setGuestAuthMode('signup')
+        }}
+      />
+    )
   }
 
   if (passwordRecovery) {
@@ -1389,6 +1586,10 @@ function App() {
     )
   }
 
+  if (view === 'open-editor') {
+    return <OpenEditor onBack={() => setView('home')} />
+  }
+
   const changeCustomer = (key, value) => setCustomer(c => ({ ...c, [key]: value }))
 
   const makeQuote = async () => {
@@ -1397,17 +1598,19 @@ function App() {
     try {
       let colsForAi = columns
       let tplData = null
+      let layoutRoles = []
       if (selectedTemplateId) {
         const tplRes = await fetch(`/api/upload-templates/${selectedTemplateId}`)
         tplData = await readApiResponse(tplRes)
         if (!tplRes.ok) throw new Error(tplData.error || 'Could not load uploaded template')
         if (tplData.mapping?.columns?.length) colsForAi = tplData.mapping.columns
+        layoutRoles = layoutRolesFromMapping(tplData.mapping)
       }
 
       const response = await fetch('/api/generate-quotation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enquiry, customer, columns: colsForAi })
+        body: JSON.stringify({ enquiry, customer, columns: colsForAi, layoutRoles })
       })
       const data = await readApiResponse(response)
       if (!response.ok) throw new Error(data.error)
@@ -1415,6 +1618,12 @@ function App() {
       const built = {
         ...data,
         columns: data.columns || colsForAi,
+        customer: {
+          shippingSame: true,
+          shippingLocation: '',
+          ...(data.customer || {}),
+          ...(customer?.company || customer?.name || customer?.gst ? customer : {})
+        },
         number: quoteNumber,
         date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
         companyProfile: companyProfile || undefined,
@@ -1422,7 +1631,11 @@ function App() {
         uploadTemplateId: selectedTemplateId || null,
         paperStyle: selectedTemplateId ? undefined : paperStyle,
         tableColorId: 'blue',
-        fields: { validUntil: defaultValidUntil(15) }
+        watermarkEnabled: true,
+        fields: {
+          validUntil: defaultValidUntil(15),
+          referenceNo: String(data.referenceNo || '').trim()
+        }
       }
 
       await openQuoteInEditor(built, { id: null, template: tplData || null })
@@ -1452,9 +1665,10 @@ function App() {
         title: '',
         items: [blankItem(cols)],
         columns: cols,
-        customer: { name: '', company: '', gst: '', location: '', ...customer },
+        customer: { name: '', company: '', gst: '', location: '', shippingSame: true, shippingLocation: '', ...customer },
         notes: [],
         clarifications: [],
+        terms: {},
         number: quoteNumber,
         date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
         companyProfile: companyProfile || undefined,
@@ -1462,7 +1676,8 @@ function App() {
         uploadTemplateId: selectedTemplateId || null,
         paperStyle: selectedTemplateId ? undefined : paperStyle,
         tableColorId: 'blue',
-        fields: { validUntil: defaultValidUntil(15) }
+        watermarkEnabled: true,
+        fields: { validUntil: defaultValidUntil(15), referenceNo: '' }
       }
       await openQuoteInEditor(built, { id: null, template: tplData || null })
     } catch (e) {
@@ -1475,9 +1690,18 @@ function App() {
   }
 
   const update = (path, value) => setQuote(q => {
-    const next = structuredClone(q); let ref = next
-    for (let i = 0; i < path.length - 1; i++) ref = ref[path[i]]
-    ref[path.at(-1)] = value; return next
+    const next = structuredClone(q)
+    let ref = next
+    for (let i = 0; i < path.length - 1; i++) {
+      const key = path[i]
+      const child = ref[key]
+      if (child == null || typeof child !== 'object') {
+        ref[key] = typeof path[i + 1] === 'number' ? [] : {}
+      }
+      ref = ref[key]
+    }
+    ref[path.at(-1)] = value
+    return next
   })
 
   // Functional variant of `update`, for editors that need to read-then-write the
@@ -1504,6 +1728,24 @@ function App() {
   const total = totals.grandTotal
 
   if (quote && activeUploadTemplate) {
+    if (activeUploadTemplate.content?.fileId) {
+      return (
+        <NativeTemplateQuote
+          template={activeUploadTemplate}
+          quote={quote}
+          columns={quoteColumns}
+          total={total}
+          update={update}
+          saveStatus={saveStatus}
+          companyProfile={companyProfile || quote.companyProfile}
+          persistenceConfigured={persistenceConfigured}
+          onColumnsChange={setColumns}
+          onNew={() => { resetEditorSession(); goNewQuote(); refreshLandingData() }}
+          onHome={() => { resetEditorSession(); refreshLandingData(); setWorkspaceView('home') }}
+          onRetry={makeQuote}
+        />
+      )
+    }
     return (
       <UploadedTemplateQuote
         template={activeUploadTemplate}
@@ -1515,7 +1757,7 @@ function App() {
         companyProfile={companyProfile || quote.companyProfile}
         persistenceConfigured={persistenceConfigured}
         onColumnsChange={setColumns}
-        onNew={() => { resetEditorSession(); refreshLandingData() }}
+        onNew={() => { resetEditorSession(); goNewQuote(); refreshLandingData() }}
         onHome={() => { resetEditorSession(); refreshLandingData(); setWorkspaceView('home') }}
         onRetry={makeQuote}
       />
@@ -1536,7 +1778,7 @@ function App() {
         companyProfile={companyProfile || quote.companyProfile}
         persistenceConfigured={persistenceConfigured}
         onColumnsChange={setColumns}
-        onNew={() => { resetEditorSession(); refreshLandingData() }}
+        onNew={() => { resetEditorSession(); goNewQuote(); refreshLandingData() }}
         onHome={() => { resetEditorSession(); refreshLandingData(); setWorkspaceView('home') }}
         onRetry={makeQuote}
         onRestored={handleRevisionRestored}
@@ -1565,7 +1807,7 @@ function App() {
   const wsTotalValue = recentQuotations.reduce((a, q) => a + (q.total || 0), 0)
 
   const wsHomeStats = [
-    { label: 'Drafts to finish', value: String(wsDraftCount), sub: 'Not yet converted', go: () => { setListTab('draft'); setWorkspaceView('list') } },
+    { label: 'Drafts to finish', value: String(wsDraftCount), sub: `${wsDraftCount} of ${recentQuotations.length} total`, go: () => { setListTab('draft'); setWorkspaceView('list') } },
     { label: 'Completed', value: String(wsCompletedCount), sub: 'Converted to invoice', go: () => { setListTab('completed'); setWorkspaceView('list') } },
     { label: 'This month', value: String(wsThisMonthCount), sub: 'Quotations touched', go: () => setWorkspaceView('list') },
     { label: 'Total quoted', value: money(wsTotalValue), sub: `Across ${recentQuotations.length} quotations`, go: () => setWorkspaceView('insights') }
@@ -1610,23 +1852,12 @@ function App() {
   }
   const [wsPageTitle, wsPageHint] = wsTitles[workspaceView] || wsTitles.home
 
-  const goNewQuote = () => {
-    const layouts = collectSavedLayouts(companyProfile, recentQuotations)
-    const active = layouts.find(l => l.id === companyProfile?.activeColumnLayoutId) || layouts[0]
-    setColumns(active?.columns?.length
-      ? active.columns.map(c => ({ ...c }))
-      : (companyProfile?.columnLayout?.length ? companyProfile.columnLayout : DEFAULT_DATA_COLUMNS))
-    setSelectedTemplateId(companyProfile?.defaultUploadTemplateId || '')
-    setNewQuoteStep(1)
-    setNewQuoteSession(n => n + 1)
-    setWorkspaceView('new')
-  }
-
   return <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'stretch', background: '#f5f7fa', color: '#2d3748' }}>
     <WsSidebar
       view={workspaceView}
       onNav={(v) => { setWorkspaceView(v); setMobileNavOpen(false) }}
       onNewQuote={() => { goNewQuote(); setMobileNavOpen(false) }}
+      onOpenEditor={() => { setView('open-editor'); setMobileNavOpen(false) }}
       recentCount={recentQuotations.length}
       authUserEmail={authUser.email}
       isMobile={isMobile}
@@ -1663,9 +1894,11 @@ function App() {
             topClients={wsTopClients}
             onOpen={handleOpenQuotation}
             onClone={handleCloneQuotation}
+            onConverted={handleConvertedDocument}
             onOpenCompany={(name) => { setListQuery(name); setListTab('all'); setWorkspaceView('list') }}
             onNav={setWorkspaceView}
             onNewQuote={goNewQuote}
+            onOpenEditor={() => setView('open-editor')}
           />
         )}
 
@@ -1676,7 +1909,6 @@ function App() {
             setEnquiry={setEnquiry}
             onGenerate={makeQuote}
             onManual={createManualQuote}
-            onAttach={() => { setUploadReturnTo('new'); setView('upload') }}
             onUploadLayout={() => { setUploadReturnTo('new'); setNewQuoteStep(2); setView('upload') }}
             initialStep={newQuoteStep}
             loading={loading}
@@ -1709,6 +1941,8 @@ function App() {
             setTab={setListTab}
             onOpen={handleOpenQuotation}
             onClone={handleCloneQuotation}
+            onConverted={handleConvertedDocument}
+            authUser={authUser}
           />
         )}
 
@@ -1740,7 +1974,7 @@ function App() {
                 persistenceConfigured={persistenceConfigured}
                 onDraftChange={(partial) => setCompanyDraft(prev => ({ ...prev, ...partial }))}
                 onFooterFitChange={applyFooterFit}
-                onSaved={(profile) => { setCompanyProfile(profile); setPersistenceConfigured(true) }}
+                onSaved={(profile) => { setCompanyProfile(profile); setCompanyDraft({}); setPersistenceConfigured(true) }}
                 onUnavailable={() => setPersistenceConfigured(false)}
               />
               <BankDetailsPanel
@@ -1749,7 +1983,7 @@ function App() {
                 profile={companyProfile}
                 persistenceConfigured={persistenceConfigured}
                 onDraftChange={(partial) => setCompanyDraft(prev => ({ ...prev, ...partial }))}
-                onSaved={(profile) => { setCompanyProfile(profile); setPersistenceConfigured(true) }}
+                onSaved={(profile) => { setCompanyProfile(profile); setCompanyDraft({}); setPersistenceConfigured(true) }}
                 onUnavailable={() => setPersistenceConfigured(false)}
               />
               <TermsAndConditionsPanel
@@ -1758,7 +1992,7 @@ function App() {
                 profile={companyProfile}
                 persistenceConfigured={persistenceConfigured}
                 onDraftChange={(partial) => setCompanyDraft(prev => ({ ...prev, ...partial }))}
-                onSaved={(profile) => { setCompanyProfile(profile); setPersistenceConfigured(true) }}
+                onSaved={(profile) => { setCompanyProfile(profile); setCompanyDraft({}); setPersistenceConfigured(true) }}
                 onUnavailable={() => setPersistenceConfigured(false)}
               />
               <SeriesSettingsPanel
@@ -1767,7 +2001,7 @@ function App() {
                 profile={companyProfile}
                 persistenceConfigured={persistenceConfigured}
                 onDraftChange={(partial) => setCompanyDraft(prev => ({ ...prev, ...partial }))}
-                onSaved={(profile) => { setCompanyProfile(profile); setPersistenceConfigured(true) }}
+                onSaved={(profile) => { setCompanyProfile(profile); setCompanyDraft({}); setPersistenceConfigured(true) }}
                 onUnavailable={() => setPersistenceConfigured(false)}
               />
               <CompanyColumnLayoutPanel
@@ -1775,7 +2009,7 @@ function App() {
                 onToggle={() => setColumnLayoutOpen(o => !o)}
                 profile={companyProfile}
                 persistenceConfigured={persistenceConfigured}
-                onSaved={(profile) => { setCompanyProfile(profile); setPersistenceConfigured(true) }}
+                onSaved={(profile) => { setCompanyProfile(profile); setCompanyDraft({}); setPersistenceConfigured(true) }}
                 onUnavailable={() => setPersistenceConfigured(false)}
                 templates={uploadTemplates}
                 onPreviewChange={setLayoutPreview}
@@ -1830,6 +2064,7 @@ function CompanyLetterhead({ profile, compact = false, hideLogo = false, showPla
         alt={`${name} header`}
         className="block h-auto w-full object-contain"
         style={{ maxHeight: compact || dense ? 90 : 180 }}
+        onError={onQuoteAssetImgError}
       />
     )
   }
@@ -1842,6 +2077,7 @@ function CompanyLetterhead({ profile, compact = false, hideLogo = false, showPla
             <img
               src={logoUrl}
               alt={`${name} logo`}
+              onError={onQuoteAssetImgError}
               style={{
                 width: '100%',
                 height: height || 'auto',
@@ -2000,6 +2236,7 @@ function CompanyFooter({ profile, className = '', editable = false, onFitChange 
           alt="Quotation footer"
           className="qg-footer-image"
           draggable={false}
+          onError={onQuoteAssetImgError}
         />
         {canEdit && !editing && (
           <button
@@ -2076,6 +2313,7 @@ function CompanyBankDetails({ profile, className = '', showEmpty = false, headin
                 src={qrUrl}
                 alt="Payment QR"
                 className={dense ? 'qg-bank-qr qg-bank-qr-dense' : 'qg-bank-qr'}
+                onError={onQuoteAssetImgError}
               />
               <p className={dense ? 'qg-bank-qr-hint qg-bank-qr-hint-dense' : 'qg-bank-qr-hint'}>Scan with any UPI payment app</p>
             </div>
@@ -2608,6 +2846,24 @@ function fileToDataUrl(file) {
   })
 }
 
+function BrandingSectionSave({ saving, disabled, dirty, onSave, label = 'Save' }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+      <p className="text-[11px] text-slate-500">
+        {dirty ? 'Unsaved changes — preview updates live; click Save to use on new quotations.' : 'Saved for new quotations.'}
+      </p>
+      <button
+        type="button"
+        disabled={saving || disabled || !dirty}
+        onClick={onSave}
+        className="rounded-xl bg-moss px-4 py-2 text-sm font-semibold text-white hover:bg-[#1558b0] disabled:opacity-50"
+      >
+        {saving ? 'Saving…' : label}
+      </button>
+    </div>
+  )
+}
+
 function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, onSaved, onUnavailable, onDraftChange, onFooterFitChange }) {
   const [companyName, setCompanyName] = useState(profile?.companyName || '')
   const [headerFields, setHeaderFields] = useState(() => parseHeaderFields(profile?.headerText))
@@ -2629,6 +2885,7 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
   const fileRef = useRef(null)
   const headerImageRef = useRef(null)
   const footerImageRef = useRef(null)
+  const saveInFlight = useRef(null)
 
   useEffect(() => {
     if (!profile) return
@@ -2678,6 +2935,17 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
     logoWidth: Number(logoWidth) || 64,
     logoHeight: Number(logoHeight) || 64
   }
+
+  const savedHeaderMode = profile?.headerImageUrl ? 'image' : 'text'
+  const savedFooterMode = profile?.footerImageUrl ? 'image' : 'text'
+  const dirty =
+    String(companyName || '') !== String(profile?.companyName || '') ||
+    String(headerMode === 'text' ? headerText : '') !== String(profile?.headerText || '') ||
+    String(footerMode === 'text' ? footerText : '') !== String(profile?.footerText || '') ||
+    Number(logoWidth) !== Number(profile?.logoWidth ?? logoWidth) ||
+    Number(logoHeight) !== Number(profile?.logoHeight ?? logoHeight) ||
+    headerMode !== savedHeaderMode ||
+    footerMode !== savedFooterMode
 
   useEffect(() => {
     onDraftChange?.({
@@ -2735,6 +3003,7 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
   }
 
   const handleSave = async () => {
+    if (saveInFlight.current) return saveInFlight.current
     setSaving(true)
     setError('')
     setMessage('')
@@ -2743,43 +3012,58 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
     const nameToSave = companyName
     const widthToSave = Number(logoWidth) || null
     const heightToSave = Number(logoHeight) || null
-    try {
-      if (headerMode === 'text' && profile?.headerImageUrl) {
-        const removed = await removeCompanyBanner('header')
-        if (removed.unavailable) {
+    const run = (async () => {
+      try {
+        if (headerMode === 'text' && profile?.headerImageUrl) {
+          const removed = await removeCompanyBanner('header')
+          if (removed.unavailable) {
+            onUnavailable?.()
+            setError(SUPABASE_SETUP_HINT)
+            return false
+          }
+        }
+        if (footerMode === 'text' && profile?.footerImageUrl) {
+          const removed = await removeCompanyBanner('footer')
+          if (removed.unavailable) {
+            onUnavailable?.()
+            setError(SUPABASE_SETUP_HINT)
+            return false
+          }
+        }
+        const result = await saveCompanyProfile({
+          companyName: nameToSave,
+          headerText: headerTextToSave,
+          footerText: footerTextToSave,
+          logoWidth: widthToSave,
+          logoHeight: heightToSave,
+          footerFit: normalizeFooterFit(profile?.footerFit)
+        })
+        if (result.unavailable) {
           onUnavailable?.()
           setError(SUPABASE_SETUP_HINT)
-          return
+          return false
         }
+        onSaved?.(result.profile)
+        setMessage('Company branding saved — new quotations will use these details.')
+        return true
+      } catch (e) {
+        setError(e.message || 'Could not save branding')
+        return false
+      } finally {
+        setSaving(false)
+        saveInFlight.current = null
       }
-      if (footerMode === 'text' && profile?.footerImageUrl) {
-        const removed = await removeCompanyBanner('footer')
-        if (removed.unavailable) {
-          onUnavailable?.()
-          setError(SUPABASE_SETUP_HINT)
-          return
-        }
-      }
-      const result = await saveCompanyProfile({
-        companyName: nameToSave,
-        headerText: headerTextToSave,
-        footerText: footerTextToSave,
-        logoWidth: widthToSave,
-        logoHeight: heightToSave,
-        footerFit: normalizeFooterFit(profile?.footerFit)
-      })
-      if (result.unavailable) {
-        onUnavailable?.()
-        setError(SUPABASE_SETUP_HINT)
-        return
-      }
-      onSaved?.(result.profile)
-      setMessage('Company branding saved.')
-    } catch (e) {
-      setError(e.message || 'Could not save branding')
-    } finally {
-      setSaving(false)
+    })()
+    saveInFlight.current = run
+    return run
+  }
+
+  const handleToggle = async () => {
+    if (open && dirty && persistenceConfigured) {
+      const ok = await handleSave()
+      if (!ok) return
     }
+    onToggle?.()
   }
 
   const handleLogoPick = async (e) => {
@@ -2901,7 +3185,7 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
           <h2 className="font-semibold">Company header & footer</h2>
           <p className="mt-1 text-xs text-slate-500">Company name, logo, and how the header and footer appear on quotations.</p>
         </div>
-        <button type="button" onClick={onToggle} className="text-sm font-medium text-moss">
+        <button type="button" onClick={handleToggle} className="text-sm font-medium text-moss">
           {open ? 'Hide branding' : 'Edit branding'}
         </button>
       </div>
@@ -2923,13 +3207,22 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
         </div>
       )}
       {open && (
-        <div className="mt-4 space-y-4">
-          <label className="block text-sm">
-            <span className="mb-1.5 block font-medium text-slate-700">Company name</span>
-            <input value={companyName} onChange={e => setCompanyName(e.target.value)} disabled={!persistenceConfigured} className={BRANDING_FIELD_CLASS} />
-          </label>
+        <div className="mt-4 space-y-4 pb-16">
+          <div className="space-y-3">
+            <label className="block text-sm">
+              <span className="mb-1.5 block font-medium text-slate-700">Company name</span>
+              <input value={companyName} onChange={e => setCompanyName(e.target.value)} disabled={!persistenceConfigured} className={BRANDING_FIELD_CLASS} />
+            </label>
+            <BrandingSectionSave
+              saving={saving}
+              disabled={!persistenceConfigured}
+              dirty={dirty}
+              onSave={handleSave}
+              label="Save company name"
+            />
+          </div>
 
-          <div className="rounded-2xl border border-sand bg-[#f7f9f7] p-4">
+          <div className="rounded-2xl border border-sand bg-[#f7f9f7] p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold text-slate-700">Logo</p>
               <div className="flex items-center gap-2">
@@ -2973,6 +3266,13 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
               onChange={e => handleWidthChange(e.target.value)}
               disabled={!persistenceConfigured}
               className="mt-3 w-full accent-[#1A73E8]"
+            />
+            <BrandingSectionSave
+              saving={saving}
+              disabled={!persistenceConfigured}
+              dirty={dirty}
+              onSave={handleSave}
+              label="Save logo size"
             />
           </div>
 
@@ -3026,6 +3326,15 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
               />
               </div>
             )}
+            {headerMode === 'text' && (
+              <BrandingSectionSave
+                saving={saving}
+                disabled={!persistenceConfigured}
+                dirty={dirty}
+                onSave={handleSave}
+                label="Save header details"
+              />
+            )}
           </div>
 
           <div className="rounded-2xl border border-sand bg-[#f7f9f7] p-4 space-y-3">
@@ -3073,18 +3382,37 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
               )}
               </div>
             )}
+            {footerMode === 'text' && (
+              <BrandingSectionSave
+                saving={saving}
+                disabled={!persistenceConfigured}
+                dirty={dirty}
+                onSave={handleSave}
+                label="Save footer"
+              />
+            )}
           </div>
 
           {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
           {message && <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-moss">{message}</p>}
-          <button
-            type="button"
-            disabled={saving || !persistenceConfigured}
-            onClick={handleSave}
-            className="rounded-xl bg-moss px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#1558b0] disabled:opacity-50"
-          >
-            {saving ? 'Saving…' : 'Save branding'}
-          </button>
+
+          <div className="sticky bottom-3 z-10 rounded-2xl border border-sand bg-white/95 p-3 shadow-soft backdrop-blur">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-slate-600">
+                {dirty
+                  ? 'Preview on the right is a draft until you save.'
+                  : 'Branding is saved for new quotations.'}
+              </p>
+              <button
+                type="button"
+                disabled={saving || !persistenceConfigured || !dirty}
+                onClick={handleSave}
+                className="rounded-xl bg-moss px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#1558b0] disabled:opacity-50"
+              >
+                {saving ? 'Saving…' : 'Save branding'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -3644,12 +3972,12 @@ function ColumnBuilder({ columns, setColumns }) {
     if (resolvedType === 'tax' || resolvedType === 'discount') options.mode = specialMode
     if (resolvedType === 'hsn') options.digits = hsnDigits
     const col = makeTypedColumn(trimmed, resolvedType, columns, options)
-    const nextColumns = insertColumnsBeforeUnit(columns, [col])
+    if (type === 'formula' || wantFormula || openFormula) col.calculated = true
+    let nextColumns = insertColumnsBeforeUnit(columns, [col])
     const shouldOpen = openFormula || type === 'formula' || wantFormula
-    if (shouldOpen && canHaveFormula(col, nextColumns)) {
-      const guessed = defaultFormulaTokens(col, nextColumns)
-      if (guessed.length) col.formula = normalizeFormula({ tokens: guessed })
-    }
+    const formula = formulaForAddedColumn(col, nextColumns, { guessTokens: shouldOpen })
+    if (formula) col.formula = formula
+    nextColumns = adaptAmountFormula(nextColumns).columns
     setColumns(nextColumns)
     setCustomName('')
     setShowAdd(false)
@@ -3682,8 +4010,13 @@ function ColumnBuilder({ columns, setColumns }) {
     setColumns(prev => prev.map(c => {
       if (c.id !== colId) return c
       const next = { ...c }
-      if (formula) next.formula = formula
-      else delete next.formula
+      if (formula) {
+        next.formula = formula
+        const amountCol = findFieldColumn(prev, 'amount')
+        if (!amountCol || c.id !== amountCol.id) next.calculated = true
+      } else {
+        delete next.formula
+      }
       return next
     }))
     setFormulaColId(null)
@@ -3768,8 +4101,8 @@ function ColumnBuilder({ columns, setColumns }) {
                         draggable={false}
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => { e.stopPropagation(); setFormulaColId(formulaColId === col.id ? null : col.id) }}
-                        title={isFormulaColumn(col) ? formulaSentence(col.formula?.tokens, columns) : 'Set a formula, like Excel'}
-                        className={`rounded px-1 text-[9px] font-bold normal-case tracking-normal ${isFormulaColumn(col) ? 'bg-blue-50 text-moss' : 'text-moss/70 hover:bg-blue-50 hover:text-moss'}`}
+                        title={isFormulaColumn(col) ? formulaSentence(col.formula?.tokens, columns) : (col.id === 'amount' ? 'Custom formula on Amount (optional)' : 'Set a formula')}
+                        className={`qg-col-fx shrink-0 rounded px-1.5 text-[9px] font-bold normal-case tracking-normal ${isFormulaColumn(col) ? 'bg-blue-50 text-moss' : 'text-moss/70 hover:bg-blue-50 hover:text-moss'}`}
                       >
                         fx
                       </button>
@@ -3781,7 +4114,7 @@ function ColumnBuilder({ columns, setColumns }) {
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => { e.stopPropagation(); removeColumn(i) }}
                         title="Remove column"
-                        className="rounded p-0.5 text-[10px] normal-case text-slate-300 opacity-0 transition hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100"
+                        className="qg-col-remove inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[12px] font-bold leading-none opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100"
                       >
                         ×
                       </button>
@@ -3938,7 +4271,7 @@ function ColumnBuilder({ columns, setColumns }) {
                 />
                 <span>
                   <span className="block text-xs font-semibold text-slate-700">Calculate with a formula</span>
-                  <span className="block text-[11px] leading-snug text-slate-500">Like Excel — Quantity × Rate, 18% of Amount. You can also tap fx on any column later.</span>
+                  <span className="block text-[11px] leading-snug text-slate-500">Like Excel — Quantity × Rate, or a custom formula. Use Formula column type, or fx on Amount.</span>
                 </span>
               </label>
             )}
@@ -4601,23 +4934,20 @@ function QuoteColumnName({ col, editing, draft, onStart, onChange, onCommit, onC
           aria-label={`Rename ${col.label}`}
           className="no-print relative z-10 max-w-[10rem] rounded border border-moss bg-white px-1 py-0.5 text-[11px] font-semibold normal-case tracking-normal text-slate-700 outline-none"
         />
-        <span className="hidden print:inline">{col.label}</span>
+        <span className="qg-col-title qg-col-title--capture">{col.label}</span>
       </>
     )
   }
   return (
-    <>
-      <span
-        onClick={(e) => { e.stopPropagation(); onStart() }}
-        onMouseDown={(e) => e.stopPropagation()}
-        draggable={false}
-        title="Click to rename"
-        className="no-print cursor-text"
-      >
-        {col.label}
-      </span>
-      <span className="hidden print:inline">{col.label}</span>
-    </>
+    <span
+      onClick={(e) => { e.stopPropagation(); onStart() }}
+      onMouseDown={(e) => e.stopPropagation()}
+      draggable={false}
+      title="Click to rename"
+      className="qg-col-title cursor-text"
+    >
+      {col.label}
+    </span>
   )
 }
 
@@ -4632,19 +4962,61 @@ function minWidthForHeaderLabel(label, chromePx = 54) {
   return Math.ceil(text.length * perChar + tracking + chromePx)
 }
 
-function defaultWidthForColumn(col, fontPx = 14) {
-  const s = fontPx / 14
+/** Column and paper geometry stay on this size so preview font changes do not stretch the page. */
+const LAYOUT_FONT_PX = 14
+
+function defaultWidthForColumn(col, fontPx = LAYOUT_FONT_PX) {
+  const s = fontPx / LAYOUT_FONT_PX
   let content = Math.round(118 * s)
   if (col?.id === 'description') content = Math.round(248 * s)
   else if (isImageColumn(col)) content = Math.round(88 * s)
   else if (isAttachmentColumn(col)) content = Math.round(124 * s)
   else if (columnType(col) === 'hsn') content = Math.round(88 * s)
   else if (col?.id === 'unit') content = Math.round(72 * s)
-  else if (col?.id === 'quantity') content = Math.round(108 * s)
-  else if (col?.id === 'rate' || col?.id === 'amount') content = Math.round(112 * s)
+  else if (col?.id === 'quantity') content = Math.round(120 * s)
+  else if (col?.id === 'rate' || col?.id === 'amount') content = Math.round(148 * s)
   else if (isNestedColumn(col)) content = Math.round(86 * s)
   else if (columnType(col) === 'tax' || columnType(col) === 'discount') content = Math.round(100 * s)
   return Math.max(content, minWidthForHeaderLabel(col?.label))
+}
+
+function isCompactColumn(col) {
+  if (!col) return false
+  if (col.id === 'unit' || col.id === 'quantity' || col.id === 'rate' || col.id === 'amount') return true
+  if (columnType(col) === 'hsn') return true
+  if (isNestedColumn(col)) return true
+  return false
+}
+
+function isNumericFitColumn(col) {
+  if (!col) return false
+  const id = String(col.id || '').toLowerCase()
+  if (id === 'amount' || id === 'rate' || id === 'quantity' || id === 'qty') return true
+  return isFormulaColumn(col)
+}
+
+function formattedNumericCell(raw, asMoney) {
+  if (raw === '' || raw == null) return ''
+  if (!asMoney) return String(raw)
+  const n = Number(String(raw).replace(/,/g, ''))
+  return Number.isFinite(n) ? formatIndianAmount(n) : String(raw)
+}
+
+function widthForNumericText(text, fontPx = LAYOUT_FONT_PX) {
+  const chars = Math.max(String(text || '').length, 4)
+  return Math.ceil(chars * fontPx * 0.74 + 40)
+}
+
+function contentWidthForNumericColumn(col, items, fontPx = LAYOUT_FONT_PX) {
+  if (!isNumericFitColumn(col)) return 0
+  const id = String(col.id || '').toLowerCase()
+  const asMoney = id === 'amount' || id === 'rate' || isFormulaColumn(col)
+  let longest = String(col.label || '')
+  for (const item of items || []) {
+    const shown = formattedNumericCell(item?.[col.id], asMoney)
+    if (shown.length > longest.length) longest = shown
+  }
+  return widthForNumericText(longest, fontPx)
 }
 
 function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, totals, saveStatus = 'idle', onNew, onHome, onRetry, onRestored, onConvertToInvoice, companyProfile, persistenceConfigured, onColumnsChange, canUndo, canRedo, onUndo, onRedo, onFooterFitChange, seriesSyncedRef }) {
@@ -4673,12 +5045,16 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const [invoiceKindLabel, setInvoiceKindLabel] = useState('Sales Invoice')
   const [gstMissing, setGstMissing] = useState(false)
   const gstFieldRef = useRef(null)
-  const [paperWidthMode, setPaperWidthMode] = useState('wide')
+  const [paperWidthMode, setPaperWidthMode] = useState('a4')
+  const studioRef = useRef(null)
+  const exportReadyRef = useRef(null)
+  const [a4Pages, setA4Pages] = useState(() => defaultA4Pages(0))
   const [paperFontPx, setPaperFontPx] = useState(14)
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [saveFlash, setSaveFlash] = useState('')
   const [paperStyle, setPaperStyleLocal] = useState(quote.paperStyle || quote.companyProfile?.paperStyle || 'corporate')
+  const [watermarkEnabled, setWatermarkEnabledLocal] = useState(quote.watermarkEnabled !== false)
   const [logoColorBusy, setLogoColorBusy] = useState(false)
   const [logoColorNote, setLogoColorNote] = useState('')
   const logoExtractedUrl = useRef('')
@@ -4691,6 +5067,15 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     setPaperStyleLocal(id)
     update(['paperStyle'], id)
   }
+
+  const setWatermarkEnabled = (enabled) => {
+    setWatermarkEnabledLocal(enabled)
+    update(['watermarkEnabled'], enabled)
+  }
+
+  useEffect(() => {
+    setWatermarkEnabledLocal(quote.watermarkEnabled !== false)
+  }, [quote.watermarkEnabled, quoteId])
 
   const tableColorId = quote.tableColorId || 'blue'
   const chosenAccent = accentForTableColor(tableColorId, quote.logoPalette)
@@ -4772,6 +5157,21 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     return () => { cancelled = true }
   }, [profile?.logoUrl])
 
+  // Keep line Amount in sync with Tax/Discount columns (180 after discount → 216 with tax).
+  useEffect(() => {
+    let adaptedColumns = null
+    updateQuote(q => {
+      const synced = syncAmountFormula(q.columns || [], q.items || [])
+      if (!synced.changed) return q
+      adaptedColumns = synced.columns
+      const next = structuredClone(q)
+      next.columns = synced.columns
+      next.items = recalcAllRows(synced.items, synced.columns)
+      return next
+    })
+    if (adaptedColumns) onColumnsChange?.(adaptedColumns)
+  }, [columnLayoutKey(quote.columns)])
+
   useEffect(() => {
     let cancelled = false
     Promise.all([
@@ -4796,6 +5196,15 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   }, [quoteId])
 
   useEffect(() => {
+    if (!SUGGESTED_COLUMN_ENABLED) {
+      updateQuote(q => {
+        if (!q) return q
+        const nextColumns = withoutSuggestedColumns(q.columns?.length ? q.columns : columns)
+        if (nextColumns.length === (q.columns || []).length) return q
+        return { ...q, columns: nextColumns }
+      })
+      return
+    }
     if (!catalogProducts.length) return
     const sig = `${quoteId || 'draft'}|${catalogProducts.map(p => p.key || p.description).join(',')}`
     if (suggestedFillSigRef.current === sig) return
@@ -4813,16 +5222,25 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
 
   const pickClient = (client) => {
     if (!client) return
-    updateQuote(q => ({
-      ...q,
-      customer: {
-        ...(q.customer || {}),
-        company: client.company || q.customer?.company || '',
-        name: client.name || q.customer?.name || '',
-        gst: client.gst || q.customer?.gst || '',
-        location: client.location || q.customer?.location || ''
+    updateQuote(q => {
+      const cur = q.customer || {}
+      const shippingSame = cur.shippingSame !== false
+      const shipList = Array.isArray(client.shippingAddresses) ? client.shippingAddresses.filter(Boolean) : []
+      const next = {
+        ...cur,
+        company: client.company || cur.company || '',
+        name: client.name || cur.name || '',
+        gst: client.gst || cur.gst || '',
+        location: client.location || cur.location || '',
+        shippingSame,
+        shippingLocation: cur.shippingLocation || '',
+        shippingAddresses: shipList.length ? shipList : (cur.shippingAddresses || [])
       }
-    }))
+      if (!shippingSame && shipList.length && !String(cur.shippingLocation || '').trim()) {
+        next.shippingLocation = shipList[0]
+      }
+      return { ...q, customer: next }
+    })
   }
 
   const applyProductSuggestion = (rowIndex, product, typedColId) => {
@@ -4836,8 +5254,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   }
 
   const isInvoice = (quote.docType || quote.doc_type) === 'invoice'
-  const invoiceKindMeta = INVOICE_SERIES_TYPES.find(t => t.id === quote.invoiceKind)
-  const docLabel = isInvoice ? (invoiceKindMeta?.label || 'TAX INVOICE').toUpperCase() : 'QUOTATION'
+  const docLabel = resolveDocLabel(quote)
 
   const commitQuoteNumberSeries = async (number) => {
     if (isInvoice || !persistenceConfigured) return
@@ -4904,7 +5321,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     }
   }
 
-  /** PDF snapshots the live preview; Word/Excel rebuild the same fields, colours, and captions. */
+  /** PDF = Chrome print (untouched). Excel = live preview pages + Items. Word = editable HTML. */
   const handleExport = async (kind) => {
     setPdfBusy(true)
     setPdfNote('')
@@ -5031,10 +5448,12 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       const currentColumns = q.columns || []
       const currentItems = q.items || []
       const result = mutate(currentColumns, currentItems) || {}
-      const nextColumns = result.columns || currentColumns
-      const baseItems = result.items || currentItems
-      const needsRecalc = nextColumns.some(isNestedColumn) || nextColumns.some(isFormulaColumn)
-      const nextItems = needsRecalc ? recalcAllRows(baseItems, nextColumns) : baseItems
+      const synced = syncAmountFormula(result.columns || currentColumns, result.items || currentItems)
+      const nextColumns = synced.columns
+      const needsRecalc = synced.changed
+        || nextColumns.some(c => columnType(c) === 'tax' || columnType(c) === 'discount')
+        || nextColumns.some(isFormulaColumn)
+      const nextItems = needsRecalc ? recalcAllRows(synced.items, nextColumns) : synced.items
       latestColumns = nextColumns
       const next = structuredClone(q)
       next.columns = nextColumns
@@ -5056,12 +5475,12 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       if (resolvedType === 'tax' || resolvedType === 'discount') options.mode = taxMode
       if (resolvedType === 'hsn') options.digits = hsnLen
       const col = makeTypedColumn(trimmed, resolvedType, cols, options)
-      if (openFormula || type === 'formula') {
-        const guessed = defaultFormulaTokens(col, [...cols, col])
-        if (guessed.length) col.formula = normalizeFormula({ tokens: guessed })
-      }
+      if (type === 'formula' || openFormula) col.calculated = true
+      const shouldGuess = openFormula || type === 'formula'
+      const formula = formulaForAddedColumn(col, [...cols, col], { guessTokens: shouldGuess })
+      if (formula) col.formula = formula
       added = col
-      return { columns: [...cols, col], items: its.map(item => withColumnKeys(item, col)) }
+      return { columns: insertTypedColumns(cols, [col]), items: its.map(item => withColumnKeys(item, col)) }
     })
     if ((openFormula || type === 'formula') && added && canHaveFormula(added, [...columns, added])) setFormulaColId(added.id)
   }
@@ -5071,8 +5490,13 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       const nextColumns = cols.map(c => {
         if (c.id !== colId) return c
         const next = { ...c }
-        if (formula) next.formula = formula
-        else delete next.formula
+        if (formula) {
+          next.formula = formula
+          const amountCol = findFieldColumn(cols, 'amount')
+          if (!amountCol || c.id !== amountCol.id) next.calculated = true
+        } else {
+          delete next.formula
+        }
         return next
       })
       return { columns: nextColumns, items: recalcAllRows(its, nextColumns) }
@@ -5099,7 +5523,6 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
    * good enough to warn before export, not to promise pixel-perfect fit.
    */
   const A4_PRINTABLE_PX = 718
-  const A4_PAPER_WIDTH_PX = 794
 
   const runAutofill = async () => {
     if (!persistenceConfigured) {
@@ -5314,22 +5737,22 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
 
   // Drag a column's right edge to resize it, like a spreadsheet. Widths are
   // per-column (nested tax/discount columns get separate rate/amount widths)
-  // and only override the default once the user actually drags — untouched
-  // columns keep sizing themselves off the font size as before.
+  // and only override the default once the user actually drags. Geometry stays
+  // on LAYOUT_FONT_PX so changing preview font size does not stretch the page.
   const [columnWidths, setColumnWidths] = useState({})
   const resizeStateRef = useRef(null)
   const imageFitRef = useRef({})
   const defaultColWidthForKey = (key) => {
     const col = columns.find(c => c.id === key || `${c.id}__rate` === key)
-    return col ? defaultWidthForColumn(col, paperFontPx) : Math.max(60, Math.round(110 * (paperFontPx / 14)))
+    return col ? defaultWidthForColumn(col, LAYOUT_FONT_PX) : Math.max(60, Math.round(110 * (LAYOUT_FONT_PX / 14)))
   }
-  const getColWidth = (key) => columnWidths[key] || defaultColWidthForKey(key)
+  const getColWidthRaw = (key) => columnWidths[key] || defaultColWidthForKey(key)
   const fitImageColumn = (colId, rowIndex, contentWidth) => {
     const slot = `${colId}:${rowIndex}`
     if (contentWidth > 0) imageFitRef.current[slot] = contentWidth
     else delete imageFitRef.current[slot]
     const col = columns.find(c => c.id === colId)
-    const floor = col ? defaultWidthForColumn(col, paperFontPx) : 80
+    const floor = col ? defaultWidthForColumn(col, LAYOUT_FONT_PX) : 80
     let max = 0
     for (const [key, w] of Object.entries(imageFitRef.current)) {
       if (key.startsWith(`${colId}:`)) max = Math.max(max, Number(w) || 0)
@@ -5340,7 +5763,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const beginColumnResize = (e, key) => {
     e.preventDefault()
     e.stopPropagation()
-    resizeStateRef.current = { key, startX: e.clientX, startWidth: getColWidth(key) }
+    resizeStateRef.current = { key, startX: e.clientX, startWidth: getColWidthRaw(key) }
     const onMove = (ev) => {
       const state = resizeStateRef.current
       if (!state) return
@@ -5357,13 +5780,16 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   }
   const SR_NO_COL_WIDTH = minWidthForHeaderLabel('Sr. No.', 22)
   const ROW_ACTIONS_COL_WIDTH = 40
+  const getColWidth = (key) => {
+    const base = getColWidthRaw(key)
+    const col = columns.find(c => c.id === key || `${c.id}__rate` === key)
+    return Math.max(base, contentWidthForNumericColumn(col, items, LAYOUT_FONT_PX))
+  }
   const tableTotalWidthPx = SR_NO_COL_WIDTH + ROW_ACTIONS_COL_WIDTH + columns.reduce((sum, col) => (
     sum + getColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id)
   ), 0)
-  const paperWidthPx = Math.max(
-    paperWidthMode === 'a4' ? A4_PAPER_WIDTH_PX : 860,
-    tableTotalWidthPx + 96
-  )
+  const paperWidthPx = A4_WIDTH_PX
+  const tableFitZoom = Math.min(1, A4_PRINTABLE_PX / Math.max(1, tableTotalWidthPx - ROW_ACTIONS_COL_WIDTH))
   const tableFitsPaper = tableTotalWidthPx + 24 <= paperWidthPx
   // "Shrink font" only helps columns still at their default (font-scaled)
   // width — a column the user has manually dragged to a fixed pixel width no
@@ -5393,6 +5819,70 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       className="qg-col-resizer no-print"
     />
   )
+
+  const pagePlan = normalizeA4Pages(a4Pages, items.length)
+  const customer = quote?.customer || {}
+  // Structural packing only — never remasure on every keystroke (that was the typing lag).
+  const layoutSignature = [
+    items.length,
+    columns.map(c => c.id).join('|'),
+    paperFontPx,
+    paperWidthPx,
+    JSON.stringify(columnWidths),
+    extraLines.length,
+    profile?.headerImageUrl ? 'h' : '',
+    profile?.footerImageUrl ? 'f' : '',
+    profile?.footerFit ? JSON.stringify(normalizeFooterFit(profile.footerFit)) : '',
+    profile?.standardTerms || '',
+    quote?.fields?.termsBlockWidthPct || '',
+    paperStyle,
+    hasAmount ? 'amt' : '',
+    String(tableFitZoom),
+    customer.shippingSame === false ? 'ship' : 'same'
+  ].join('::')
+  // Content height can change as text wraps — refresh packing after typing settles.
+  const contentSignature = [
+    items.map(it => `${String(it.description || '').length}:${Object.keys(it).length}`).join(','),
+    (quote.notes || []).join('\n').length,
+    Object.values(quote.terms || {}).map(v => (v == null ? '' : typeof v === 'string' ? v : String(v))).join('|').length,
+    String(customer.location || '').length,
+    String(customer.shippingLocation || '').length,
+    String(quote.title || '').length,
+    String(customer.company || '').length
+  ].join('::')
+
+  const runA4Pack = () => {
+    const root = studioRef.current
+    if (!root) return false
+    const measured = measureA4Blocks(root)
+    measured.rowHeights = Array.from({ length: items.length }, (_, i) => measured.rowHeights[i] || 36)
+    const next = packA4Pages({
+      rowCount: items.length,
+      ...measured,
+      totalsHeight: hasAmount ? measured.totalsHeight : 0
+    })
+    if (!pagesEqual(next, normalizeA4Pages(a4Pages, items.length))) {
+      setA4Pages(next)
+      return true
+    }
+    return false
+  }
+
+  useLayoutEffect(() => {
+    if (runA4Pack()) return undefined
+    const frame = requestAnimationFrame(() => {
+      requestAnimationFrame(() => exportReadyRef.current?.())
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [layoutSignature, items.length, hasAmount, a4Pages])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (runA4Pack()) return
+      exportReadyRef.current?.()
+    }, 180)
+    return () => window.clearTimeout(timer)
+  }, [contentSignature, layoutSignature, items.length, hasAmount])
 
   const flashSave = (msg) => {
     setSaveFlash(msg)
@@ -5464,14 +5954,21 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   }
 
   return <main className="min-h-screen bg-[#F4F6FA] text-ink print:bg-white">
-    <nav className="no-print sticky top-0 z-20 border-b border-sand bg-white/95 backdrop-blur">
-      <div className="mx-auto flex max-w-[900px] items-center justify-between px-4 py-3 sm:px-6">
-        <Brand onClick={onHome} />
-        <div className="flex items-center gap-2">
-          <span className="hidden rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-moss sm:inline">
-            {quote.mode === 'demo' ? 'Draft' : quote.mode === 'saved' ? 'From history' : 'AI draft'}
-          </span>
-          <ExportMenu onExport={handleExport} busy={pdfBusy} label="Export" variant="header" />
+    <nav className="no-print sticky top-0 z-50 border-b border-sand bg-white/95 backdrop-blur">
+      <div className="flex w-full items-center justify-between px-4 py-3 sm:px-6">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onHome}
+            title="Back to home"
+            className="flex items-center gap-1.5 rounded-lg border border-sand px-2.5 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+            <span className="hidden sm:inline">Back</span>
+          </button>
+          <Brand onClick={onHome} />
         </div>
       </div>
     </nav>
@@ -5490,11 +5987,13 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       logoColorNote={logoColorNote}
       onTableColorChange={setTableColor}
       onDetectFromLogo={() => detectColorsFromLogo()}
+      watermarkEnabled={watermarkEnabled}
+      onWatermarkChange={setWatermarkEnabled}
       saveFlash={saveFlash}
       saveStatusLabel={saveStatusLabel(saveStatus)}
       onSaveFlash={() => flashSave(saveStatusLabel(saveStatus))}
-      advancedOpen={advancedOpen}
-      onToggleAdvanced={() => setAdvancedOpen(o => !o)}
+      onExport={handleExport}
+      pdfBusy={pdfBusy}
     />
 
     {advancedOpen && (
@@ -5551,11 +6050,15 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     )}
   </div>
 
+    <div ref={studioRef}>
     <QuoteStudioCanvas
       themeId={paperStyle}
       tableAccent={chosenAccent}
       fontSizePx={paperFontPx}
       paperWidthPx={paperWidthPx}
+      lockA4={true}
+      watermarkUrl={profile?.logoUrl || null}
+      watermarkEnabled={watermarkEnabled}
       runningHeader={{
         left: profile?.companyName?.trim() || 'Quotation',
         right: [quote.number, quote.date].filter(Boolean).join(' · ')
@@ -5565,7 +6068,10 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         right: quote.number ? `Quotation ${quote.number}` : 'Continued'
       }}
     >
-      <section className="qg-page-section">
+      {pagePlan.map((page, pageIndex) => (
+      <section key={pageIndex} className="qg-page-section">
+        {page.showHeader ? (
+        <div data-qg-block="header">
         <QuotePaperHeader
         theme={paperTheme}
         profile={profile}
@@ -5575,6 +6081,10 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         isInvoice={isInvoice}
         onNumberCommit={commitQuoteNumberSeries}
       />
+        </div>
+        ) : null}
+        {page.showMeta ? (
+        <div data-qg-block="meta">
       <QuoteToSubjectBlock
         theme={paperTheme}
         quote={quote}
@@ -5586,21 +6096,206 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         clients={suggestClients}
         onPickClient={pickClient}
       />
+        </div>
+        ) : null}
+      {(page.showHeader || page.rows.length > 0 || page.showTotals) ? (
       <div className="qg-paper-body">
-        {invoiceNote && !invoicePromptOpen && <p className={`no-print mb-4 rounded-lg px-3 py-2 text-sm ${gstMissing || /already|Enter the/i.test(invoiceNote) ? 'bg-rose-50 text-rose-700' : 'bg-blue-50 text-moss'}`}>{invoiceNote}</p>}
+        {page.showHeader && invoiceNote && !invoicePromptOpen && <p className={`no-print mb-4 rounded-lg px-3 py-2 text-sm ${gstMissing || /already|Enter the/i.test(invoiceNote) ? 'bg-rose-50 text-rose-700' : 'bg-blue-50 text-moss'}`}>{invoiceNote}</p>}
 
-        <div className="quote-items-scroll overflow-x-auto">
-          <table className="quote-items-table qg-studio-table text-left" style={{ tableLayout: 'fixed', width: tableTotalWidthPx, minWidth: tableTotalWidthPx, fontSize: `${paperFontPx}px` }}>
+        {(page.showHeader || page.rows.length > 0) ? (
+        <>
+        {page.showHeader ? (
+          <div className="no-print mb-2 flex items-center justify-end">
+            <div className="relative">
+              <button
+                ref={addColBtnRef}
+                type="button"
+                onClick={() => {
+                  setFormulaColId(null)
+                  setDockAddColumnOpen(o => !o)
+                }}
+                title="Add column"
+                aria-label="Add column"
+                aria-expanded={dockAddColumnOpen}
+                className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold shadow-sm transition ${
+                  dockAddColumnOpen
+                    ? 'border-moss bg-moss text-white'
+                    : 'border-sand bg-white text-moss hover:border-moss hover:bg-blue-50'
+                }`}
+              >
+                <span className="text-sm leading-none" aria-hidden>+</span>
+                Add column
+              </button>
+              <FloatingPop
+                anchorRef={addColBtnRef}
+                open={dockAddColumnOpen}
+                onClose={() => setDockAddColumnOpen(false)}
+                width={280}
+                align="end"
+                className="rounded-xl border border-sand bg-white p-1.5 text-left font-normal normal-case tracking-normal shadow-lg"
+              >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const taken = new Set(columns.map(c => c.label.toLowerCase()))
+                          let label = 'Calculated'
+                          let n = 2
+                          while (taken.has(label.toLowerCase())) label = `Calculated ${n++}`
+                          addColumn(label, 'text', { openFormula: true })
+                          setDockAddColumnOpen(false)
+                        }}
+                        className="mb-1 flex w-full items-center rounded-lg bg-blue-50 px-3 py-2 text-left text-[13px] font-semibold text-moss ring-1 ring-inset ring-[#c5daf5] transition hover:bg-[#dbeafe]"
+                      >
+                        Formula (fx)
+                      </button>
+                      {ADDABLE_COLUMN_TYPES.map(option => (
+                        option.type === 'tax' || option.type === 'discount' ? (
+                          <div key={option.type} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-50">
+                            <span className="min-w-0 flex-1 text-left text-[13px] font-medium text-slate-700">{option.defaultLabel}</span>
+                            <button
+                              type="button"
+                              onClick={() => quickAddColumnFromDock(option, { mode: 'amount' })}
+                              className="shrink-0 rounded-full border border-sand bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 shadow-sm transition hover:border-moss hover:bg-blue-50 hover:text-moss"
+                            >
+                              Amount
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => quickAddColumnFromDock(option, { mode: 'percent' })}
+                              className="shrink-0 rounded-full border border-sand bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 shadow-sm transition hover:border-moss hover:bg-blue-50 hover:text-moss"
+                            >
+                              Percentage
+                            </button>
+                          </div>
+                        ) : option.type === 'hsn' ? (
+                          <div key={option.type} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-50">
+                            <span className="min-w-0 flex-1 text-left text-[13px] font-medium text-slate-700">{option.defaultLabel}</span>
+                            <button
+                              type="button"
+                              onClick={() => quickAddColumnFromDock(option, { digits: '4' })}
+                              className="shrink-0 rounded-full border border-sand bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 shadow-sm transition hover:border-moss hover:bg-blue-50 hover:text-moss"
+                            >
+                              4 digits
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => quickAddColumnFromDock(option, { digits: '8' })}
+                              className="shrink-0 rounded-full border border-sand bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 shadow-sm transition hover:border-moss hover:bg-blue-50 hover:text-moss"
+                            >
+                              8 digits
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            key={option.type}
+                            type="button"
+                            onClick={() => quickAddColumnFromDock(option)}
+                            className="mb-0.5 flex w-full items-center rounded-lg border border-transparent px-3 py-2 text-left text-[13px] font-medium text-slate-700 transition hover:border-sand hover:bg-slate-50"
+                          >
+                            {option.defaultLabel}
+                          </button>
+                        )
+                      ))}
+                      <div className="mt-1.5 border-t border-sand px-1.5 pb-1 pt-2">
+                        <input
+                          value={dockNewColumnLabel}
+                          onChange={e => setDockNewColumnLabel(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') submitDockNewColumn() }}
+                          placeholder="Name"
+                          className="mb-1.5 w-full rounded-lg border border-sand px-2.5 py-1.5 text-[13px] outline-none focus:border-moss"
+                        />
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            value={dockNewColumnType}
+                            onChange={e => {
+                              const next = e.target.value
+                              setDockNewColumnType(next)
+                              if (next === 'formula') setDockWantFormula(true)
+                              if (next === 'image' || next === 'attachment' || next === 'tax' || next === 'discount' || next === 'hsn') setDockWantFormula(false)
+                            }}
+                            aria-label="Column type"
+                            className="min-w-0 flex-1 rounded-lg border border-sand bg-white px-2 py-1.5 text-[13px] text-slate-600 outline-none focus:border-moss"
+                          >
+                            <option value="text">Text</option>
+                            <option value="formula">Formula</option>
+                            <option value="image">Image</option>
+                            <option value="attachment">File</option>
+                            <option value="tax">Tax</option>
+                            <option value="discount">Discount</option>
+                            <option value="hsn">HSN</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={submitDockNewColumn}
+                            disabled={!dockNewColumnLabel.trim()}
+                            className="rounded-lg bg-moss px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-[#1558b0] disabled:opacity-40"
+                          >
+                            Add
+                          </button>
+                        </div>
+                        {dockNewColumnType !== 'image' && dockNewColumnType !== 'attachment' && dockNewColumnType !== 'tax' && dockNewColumnType !== 'discount' && dockNewColumnType !== 'hsn' && (
+                          <label className="mt-1.5 flex cursor-pointer items-start gap-1.5 text-left">
+                            <input
+                              type="checkbox"
+                              checked={dockWantFormula || dockNewColumnType === 'formula'}
+                              onChange={e => setDockWantFormula(e.target.checked)}
+                              className="mt-0.5"
+                            />
+                            <span className="text-[11px] leading-snug text-slate-600">Calculate with a formula (Amount also has fx for a custom override)</span>
+                          </label>
+                        )}
+                        {(dockNewColumnType === 'tax' || dockNewColumnType === 'discount') && (
+                          <div className="mt-1.5 flex gap-1.5">
+                            {[
+                              ['percent', '%'],
+                              ['amount', '₹']
+                            ].map(([value, label]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => setDockSpecialMode(value)}
+                                className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition ${dockSpecialMode === value ? 'border-moss bg-blue-50 text-moss' : 'border-sand bg-white text-slate-600 hover:border-moss hover:bg-blue-50'}`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {dockNewColumnType === 'hsn' && (
+                          <div className="mt-1.5 flex gap-1.5">
+                            {[
+                              ['4', '4 digit'],
+                              ['8', '8 digit']
+                            ].map(([value, label]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => setDockHsnDigits(value)}
+                                className={`rounded-full border px-3 py-1 text-[12px] font-semibold transition ${dockHsnDigits === value ? 'border-moss bg-blue-50 text-moss' : 'border-sand bg-white text-slate-600 hover:border-moss hover:bg-blue-50'}`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+              </FloatingPop>
+            </div>
+          </div>
+        ) : null}
+        <div className="quote-items-scroll overflow-x-auto" style={{ overflow: 'hidden' }}>
+          <div data-qg-table-zoom={tableFitZoom} style={tableFitZoom < 1 ? { zoom: tableFitZoom, width: tableTotalWidthPx } : undefined}>
+          <table className="quote-items-table qg-studio-table text-left" style={{ tableLayout: 'fixed', width: `${tableTotalWidthPx}px`, minWidth: `${tableTotalWidthPx}px`, maxWidth: 'none', fontSize: `${paperFontPx}px` }}>
             <colgroup>
-              <col style={{ width: SR_NO_COL_WIDTH }} />
+              <col style={{ width: `${SR_NO_COL_WIDTH}px` }} />
               {columns.map(col => (
-                    <col key={col.id} style={{ width: getColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id) }} />
+                    <col key={col.id} style={{ width: `${getColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id)}px` }} />
                   ))}
-              <col style={{ width: ROW_ACTIONS_COL_WIDTH }} />
+              <col style={{ width: `${ROW_ACTIONS_COL_WIDTH}px` }} />
             </colgroup>
-            <thead>
+            <thead data-qg-block="thead">
               <tr className="border-y uppercase tracking-wide" style={{ borderColor: 'var(--qg-table-border, #d2e3fc)' }}>
-                <th className="p-3">Sr. No.</th>
+                <th className="qg-cell-compact p-3">Sr. No.</th>
                 {columns.map(col => (
                     <th
                       key={col.id}
@@ -5611,8 +6306,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                       onDrop={(e) => { e.preventDefault(); swapColumns(dragColId, col.id); setDragColId(null); setDropColId(null) }}
                       onDragEnd={() => { setDragColId(null); setDropColId(null) }}
                       title={`${col.label} — click to rename, drag to swap`}
-                      style={isHighlightColumn(col) ? { backgroundColor: highlightColor(col) } : undefined}
-                      className={`group relative cursor-grab p-3 active:cursor-grabbing ${isHighlightColumn(col) ? 'qg-highlight' : ''} ${col.id === 'amount' || isNestedColumn(col) || isFormulaColumn(col) ? 'text-right' : ''} ${dragColId === col.id ? 'opacity-40' : ''} ${dropColId === col.id && dragColId !== col.id ? 'bg-blue-50 ring-2 ring-inset ring-moss' : ''} ${formulaColId === col.id ? 'z-20' : ''}`}
+                      className={`group relative cursor-grab p-3 active:cursor-grabbing ${isCompactColumn(col) ? 'qg-cell-compact' : ''} ${isHighlightColumn(col) ? 'qg-highlight' : ''} ${col.id === 'amount' || isNestedColumn(col) || isFormulaColumn(col) ? 'text-right' : ''} ${dragColId === col.id ? 'opacity-40' : ''} ${dropColId === col.id && dragColId !== col.id ? 'bg-blue-50 ring-2 ring-inset ring-moss' : ''} ${formulaColId === col.id ? 'z-20' : ''}`}
                     >
                       <span className="inline-flex max-w-full flex-wrap items-center gap-0.5">
                       <span className="no-print mr-1 text-slate-300">⠿</span>
@@ -5632,24 +6326,24 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                           draggable={false}
                           onMouseDown={(e) => e.stopPropagation()}
                           onClick={(e) => { e.stopPropagation(); setFormulaColId(formulaColId === col.id ? null : col.id) }}
-                          title={isFormulaColumn(col) ? formulaSentence(col.formula?.tokens, columns) : 'Set a formula, like Excel'}
-                          className={`no-print ml-1 inline-flex h-5 items-center justify-center rounded px-1 text-[9px] font-bold normal-case tracking-normal ${isFormulaColumn(col) ? 'bg-blue-50 text-moss' : 'text-moss/70 hover:bg-blue-50 hover:text-moss'}`}
+                          title={isFormulaColumn(col) ? formulaSentence(col.formula?.tokens, columns) : (col.id === 'amount' ? 'Custom formula on Amount (optional)' : 'Set a formula')}
+                          className={`qg-col-fx no-print ml-1 inline-flex h-5 shrink-0 items-center justify-center rounded px-1.5 text-[9px] font-bold normal-case tracking-normal ${isFormulaColumn(col) ? 'bg-blue-50 text-moss' : 'text-moss/70 hover:bg-blue-50 hover:text-moss'}`}
                         >
                           fx
                         </button>
                       )}
-                      </span>
                       <button
                         type="button"
                         draggable={false}
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => { e.stopPropagation(); removeColumn(col.id) }}
                         title={`Remove ${col.label}`}
-                        className="no-print absolute right-1 top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-rose-50 text-[11px] font-bold text-rose-500 hover:bg-rose-100 group-hover:flex"
+                        className="qg-col-remove no-print ml-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[12px] font-bold leading-none opacity-0 transition group-hover:opacity-100 focus-visible:opacity-100"
                       >
                         ×
                       </button>
-                      {formulaColId === col.id && (
+                      </span>
+                      {formulaColId === col.id && page.showHeader && (
                         <FormulaGuide
                           col={col}
                           columns={columns}
@@ -5660,181 +6354,17 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                       <ColumnResizeHandle colKey={isNestedColumn(col) ? `${col.id}__rate` : col.id} />
                     </th>
                   ))}
-                <th className="no-print relative w-10 p-1 text-center">
-                  <button
-                    ref={addColBtnRef}
-                    type="button"
-                    onClick={() => {
-                      setFormulaColId(null)
-                      setDockAddColumnOpen(o => !o)
-                    }}
-                    title="Add column"
-                    aria-label="Add column"
-                    className={`mx-auto flex h-7 w-7 items-center justify-center rounded-full text-lg leading-none ${dockAddColumnOpen ? 'bg-moss text-white' : 'text-slate-400 hover:bg-blue-50 hover:text-moss'}`}
-                  >
-                    +
-                  </button>
-                  <FloatingPop
-                    anchorRef={addColBtnRef}
-                    open={dockAddColumnOpen}
-                    onClose={() => setDockAddColumnOpen(false)}
-                    width={280}
-                    align="end"
-                    className="rounded-xl border border-sand bg-white py-1.5 text-left font-normal normal-case tracking-normal shadow-lg"
-                  >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const taken = new Set(columns.map(c => c.label.toLowerCase()))
-                          let label = 'Calculated'
-                          let n = 2
-                          while (taken.has(label.toLowerCase())) label = `Calculated ${n++}`
-                          addColumn(label, 'text', { openFormula: true })
-                          setDockAddColumnOpen(false)
-                        }}
-                        className="block w-full px-3 py-1.5 text-left text-[13px] font-medium text-moss hover:bg-blue-50"
-                      >
-                        Formula (fx)
-                      </button>
-                      {ADDABLE_COLUMN_TYPES.map(option => (
-                        option.type === 'tax' || option.type === 'discount' ? (
-                          <div key={option.type} className="flex items-center gap-1 px-3 py-1">
-                            <span className="min-w-0 flex-1 text-left text-[13px] text-slate-700">{option.defaultLabel}</span>
-                            <button
-                              type="button"
-                              onClick={() => quickAddColumnFromDock(option, { mode: 'amount' })}
-                              className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-blue-50 hover:text-moss"
-                            >
-                              Amount
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => quickAddColumnFromDock(option, { mode: 'percent' })}
-                              className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-blue-50 hover:text-moss"
-                            >
-                              Percentage
-                            </button>
-                          </div>
-                        ) : option.type === 'hsn' ? (
-                          <div key={option.type} className="flex items-center gap-1 px-3 py-1">
-                            <span className="min-w-0 flex-1 text-left text-[13px] text-slate-700">{option.defaultLabel}</span>
-                            <button
-                              type="button"
-                              onClick={() => quickAddColumnFromDock(option, { digits: '4' })}
-                              className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-blue-50 hover:text-moss"
-                            >
-                              4 digits
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => quickAddColumnFromDock(option, { digits: '8' })}
-                              className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-blue-50 hover:text-moss"
-                            >
-                              8 digits
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            key={option.type}
-                            type="button"
-                            onClick={() => quickAddColumnFromDock(option)}
-                            className="block w-full px-3 py-1.5 text-left text-[13px] text-slate-700 hover:bg-slate-50"
-                          >
-                            {option.defaultLabel}
-                          </button>
-                        )
-                      ))}
-                      <div className="mt-1 border-t border-sand px-2.5 pb-1.5 pt-2">
-                        <input
-                          value={dockNewColumnLabel}
-                          onChange={e => setDockNewColumnLabel(e.target.value)}
-                          onKeyDown={e => { if (e.key === 'Enter') submitDockNewColumn() }}
-                          placeholder="Name"
-                          className="mb-1.5 w-full rounded-md border border-sand px-2 py-1 text-[13px] outline-none focus:border-moss"
-                        />
-                        <div className="flex items-center gap-1.5">
-                          <select
-                            value={dockNewColumnType}
-                            onChange={e => {
-                              const next = e.target.value
-                              setDockNewColumnType(next)
-                              if (next === 'formula') setDockWantFormula(true)
-                              if (next === 'image' || next === 'attachment' || next === 'tax' || next === 'discount' || next === 'hsn') setDockWantFormula(false)
-                            }}
-                            aria-label="Column type"
-                            className="min-w-0 flex-1 rounded-md border border-sand bg-white px-1.5 py-1 text-[13px] text-slate-600 outline-none focus:border-moss"
-                          >
-                            <option value="text">Text</option>
-                            <option value="formula">Formula</option>
-                            <option value="image">Image</option>
-                            <option value="attachment">File</option>
-                            <option value="tax">Tax</option>
-                            <option value="discount">Discount</option>
-                            <option value="hsn">HSN</option>
-                          </select>
-                          <button
-                            type="button"
-                            onClick={submitDockNewColumn}
-                            disabled={!dockNewColumnLabel.trim()}
-                            className="rounded-md bg-moss px-2.5 py-1 text-[13px] font-medium text-white hover:bg-[#1558b0] disabled:opacity-40"
-                          >
-                            Add
-                          </button>
-                        </div>
-                        {dockNewColumnType !== 'image' && dockNewColumnType !== 'attachment' && dockNewColumnType !== 'tax' && dockNewColumnType !== 'discount' && dockNewColumnType !== 'hsn' && (
-                          <label className="mt-1.5 flex cursor-pointer items-start gap-1.5 text-left">
-                            <input
-                              type="checkbox"
-                              checked={dockWantFormula || dockNewColumnType === 'formula'}
-                              onChange={e => setDockWantFormula(e.target.checked)}
-                              className="mt-0.5"
-                            />
-                            <span className="text-[11px] leading-snug text-slate-600">Calculate with a formula (you can also tap fx later)</span>
-                          </label>
-                        )}
-                        {(dockNewColumnType === 'tax' || dockNewColumnType === 'discount') && (
-                          <div className="mt-1.5 flex gap-1">
-                            {[
-                              ['percent', '%'],
-                              ['amount', '₹']
-                            ].map(([value, label]) => (
-                              <button
-                                key={value}
-                                type="button"
-                                onClick={() => setDockSpecialMode(value)}
-                                className={`rounded-md px-2 py-0.5 text-[12px] ${dockSpecialMode === value ? 'bg-blue-50 text-moss' : 'text-slate-500 hover:bg-slate-50'}`}
-                              >
-                                {label}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        {dockNewColumnType === 'hsn' && (
-                          <div className="mt-1.5 flex gap-1">
-                            {[
-                              ['4', '4 digit'],
-                              ['8', '8 digit']
-                            ].map(([value, label]) => (
-                              <button
-                                key={value}
-                                type="button"
-                                onClick={() => setDockHsnDigits(value)}
-                                className={`rounded-md px-2 py-0.5 text-[12px] ${dockHsnDigits === value ? 'bg-blue-50 text-moss' : 'text-slate-500 hover:bg-slate-50'}`}
-                              >
-                                {label}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                  </FloatingPop>
-                </th>
+                <th className="no-print w-0 p-0" aria-hidden="true" />
               </tr>
             </thead>
             <tbody>
-              {items.map((item, i) => (
+              {page.rows.map((i) => {
+                const item = items[i]
+                if (!item) return null
+                return (
                 <tr
                   key={i}
+                  data-qg-row={i}
                   className={`group/row border-b border-sand align-top ${dragRowIndex === i ? 'opacity-40' : ''} ${dropRowIndex === i && dragRowIndex !== i ? 'bg-blue-50' : ''}`}
                 >
                   <td
@@ -5845,7 +6375,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                     onDrop={(e) => { e.preventDefault(); moveItem(dragRowIndex, i); setDragRowIndex(null); setDropRowIndex(null) }}
                     onDragEnd={() => { setDragRowIndex(null); setDropRowIndex(null) }}
                     title="Drag to reorder this row"
-                    className="relative cursor-grab p-3 text-slate-400 active:cursor-grabbing"
+                    className={`qg-cell-compact relative cursor-grab p-3 text-slate-400 active:cursor-grabbing`}
                   >
                     <span className="no-print mr-1 text-slate-300">⠿</span>
                     {i + 1}
@@ -5882,13 +6412,19 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                     ))}
                   <td className="no-print p-1 align-top" />
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
+          </div>
         </div>
+        </>
+        ) : null}
+        {page.rows.length > 0 && !pagePlan.slice(pageIndex + 1).some(p => p.rows.length) ? (
         <button onClick={addItem} className="no-print mt-3 text-sm font-semibold text-moss">+ Add line item</button>
-        {hasAmount && (
-          <div className="qg-totals-card">
+        ) : null}
+        {page.showTotals && hasAmount && (
+          <div className="qg-totals-card" data-qg-block="totals">
             <div className="flex justify-between text-sm text-slate-500"><span>Subtotal</span><span>{money(quoteTotals.subtotal)}</span></div>
             {quoteTotals.perColumn.filter(entry => entry.type === 'discount').map(entry => (
               <div key={entry.id} className="mt-1 flex justify-between text-sm text-rose-600">
@@ -5919,36 +6455,115 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
           </div>
         )}
       </div>
-      </section>
-      <section className="qg-page-section">
+      ) : null}
+      {page.showClosing ? (
+      <div data-qg-block="closing">
       <div className={`qg-paper-body${profile?.footerImageUrl ? ' qg-paper-body--flush-footer' : ''}`}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
-          <section>
-            <h3 className="qg-section-heading" style={{ color: 'var(--qg-accent)' }}>Standard terms</h3>
-            {profile?.standardTerms?.trim() ? (
-              <p className="whitespace-pre-line text-sm leading-relaxed" style={{ color: 'var(--qg-muted)' }}>{profile.standardTerms}</p>
-            ) : (
-              <p className="text-sm leading-6" style={{ color: 'var(--qg-muted)' }}>Standard terms for this quotation</p>
-            )}
-          </section>
-          <section>
-            <h3 className="qg-section-heading" style={{ color: 'var(--qg-accent)' }}>Notes</h3>
-            <textarea value={(quote.notes || []).join('\n')} onChange={e => updateList('notes', e.target.value)} className="min-h-24 w-full resize-none rounded-lg p-2 text-sm leading-6 outline-none hover:bg-black/[0.03] focus:bg-[rgba(29,99,237,0.05)]" placeholder="Add notes, one per line" />
-          </section>
-        </div>
+        {(() => {
+          const termsHtml = quote.fields?.standardTerms ?? profile?.standardTerms ?? ''
+          const notesLines = (quote.notes || []).filter(n => String(n || '').trim())
+          const hasTerms = hasMeaningfulText(termsHtml)
+          const hasNotes = notesLines.length > 0
+          const blockWidth = Math.max(40, Math.min(100, Number(quote.fields?.termsBlockWidthPct) || 50))
+          // Wide terms (≥80%) → notes below. Narrower (~50%) → side by side like before.
+          const stackNotes = blockWidth >= 80
+          const startTermsWidthDrag = (e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            const startX = e.clientX
+            const startPct = blockWidth
+            const parent = e.currentTarget.closest('.qg-paper-body') || e.currentTarget.parentElement?.parentElement
+            const parentW = parent?.getBoundingClientRect()?.width || 600
+            const onMove = (ev) => {
+              const deltaPct = ((ev.clientX - startX) / parentW) * 100
+              const next = Math.round(Math.max(40, Math.min(100, startPct + deltaPct)))
+              update(['fields', 'termsBlockWidthPct'], next)
+            }
+            const onUp = () => {
+              window.removeEventListener('pointermove', onMove)
+              window.removeEventListener('pointerup', onUp)
+            }
+            window.addEventListener('pointermove', onMove)
+            window.addEventListener('pointerup', onUp)
+          }
+          return (
+            <div
+              className={`qg-closing-stack${stackNotes ? ' qg-closing-stack--stacked' : ' qg-closing-stack--side'}${(!hasTerms && !hasNotes) ? ' is-empty' : ''}`}
+              style={stackNotes
+                ? { width: `${blockWidth}%`, maxWidth: '100%' }
+                : {
+                  display: 'grid',
+                  gridTemplateColumns: `${blockWidth}% minmax(0, 1fr)`,
+                  gap: 24,
+                  width: '100%',
+                  maxWidth: '100%',
+                  ['--qg-terms-split']: `${blockWidth}%`
+                }}
+            >
+              <section className={`qg-closing-optional${hasTerms ? '' : ' is-empty'}`}>
+                <RichTextField
+                  singleLine
+                  className="qg-section-heading qg-rich-heading"
+                  style={{ color: 'var(--qg-accent)' }}
+                  value={quote.fields?.standardTermsTitle || 'Standard terms'}
+                  onChange={v => update(['fields', 'standardTermsTitle'], v)}
+                  placeholder="Standard terms"
+                />
+                <RichTextField
+                  multiline
+                  className="mt-1 min-h-[4.5rem] text-sm leading-relaxed"
+                  style={{ color: 'var(--qg-muted)' }}
+                  value={termsHtml}
+                  onChange={v => update(['fields', 'standardTerms'], v)}
+                  placeholder="Standard terms for this quotation — click to edit. Use the toolbar for bold, italic, colour…"
+                />
+              </section>
+              <section className={`qg-closing-optional qg-closing-notes${hasNotes ? '' : ' is-empty'}`}>
+                <RichTextField
+                  singleLine
+                  className="qg-section-heading qg-rich-heading"
+                  style={{ color: 'var(--qg-accent)' }}
+                  value={quote.fields?.notesTitle || 'Notes'}
+                  onChange={v => update(['fields', 'notesTitle'], v)}
+                  placeholder="Notes"
+                />
+                <RichTextField
+                  multiline
+                  className="mt-1 min-h-16 text-sm leading-6"
+                  value={(quote.notes || []).join('\n')}
+                  onChange={v => updateList('notes', plainTextFromMaybeHtml(v))}
+                  placeholder="Add notes, one per line"
+                />
+              </section>
+              <span
+                className="qg-terms-width-handle no-print"
+                title="Drag to adjust width — 80%+ puts Notes below"
+                aria-label="Adjust standard terms width"
+                onPointerDown={startTermsWidthDrag}
+              />
+            </div>
+          )
+        })()}
         <hr className="qg-section-rule" />
         <section>
-          <h3 className="qg-section-heading" style={{ color: 'var(--qg-accent)' }}>Commercial terms</h3>
+          <RichTextField
+            singleLine
+            className="qg-section-heading qg-rich-heading"
+            style={{ color: 'var(--qg-accent)' }}
+            value={quote.fields?.commercialTitle || 'Commercial terms'}
+            onChange={v => update(['fields', 'commercialTitle'], v)}
+            placeholder="Commercial terms"
+          />
           <div className="grid grid-cols-1 gap-x-8 gap-y-0 sm:grid-cols-2">
             {Object.entries({ ...defaultTerms, ...quote.terms }).map(([key, val]) => (
-              <div key={key} className="flex border-b border-dashed py-2 text-sm" style={{ borderColor: 'var(--qg-table-border)' }}>
+              <div key={key} className="flex gap-2 border-b border-dashed py-2 text-sm" style={{ borderColor: 'var(--qg-table-border)' }}>
                 <span className="w-28 shrink-0 capitalize" style={{ color: 'var(--qg-muted)' }}>{key}</span>
                 <TermField value={val} onChange={v => update(['terms', key], v)} />
               </div>
             ))}
           </div>
         </section>
-        <footer className="mt-8">
+        <footer className="mt-8 qg-signatory-block">
           {profile?.bankName || profile?.bankAccountNo || profile?.bankQrUrl ? (
             <>
               <hr className="qg-section-rule" />
@@ -5956,7 +6571,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
             </>
           ) : null}
           <hr className="qg-section-rule" />
-          <div className="flex justify-end">
+          <div className="flex justify-end pb-1">
             <div className="w-52 text-center">
               <div className="h-14" />
               <div className="pt-2" style={{ borderTop: '1.5px solid var(--qg-muted, #5c6879)' }}>
@@ -5979,8 +6594,12 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
           onFitChange={onFooterFitChange}
         />
       ) : null}
+      </div>
+      ) : null}
       </section>
+      ))}
     </QuoteStudioCanvas>
+    </div>
 
     <QuoteStudioFooterBar onExport={handleExport} pdfBusy={pdfBusy} onHome={onHome} />
 
@@ -6050,26 +6669,55 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   </main>
 }
 
-/** A commercial-terms value: a single-line <input> never wraps, so long text
- *  (e.g. a full taxes clause) silently overflows past the row instead of
- *  moving to the next line. This grows to fit its content instead. */
+/** A commercial-terms value: rich inline edit (bold/italic/colour) that never
+ *  crashes if a non-string slipped into quote.terms. */
+function plainTextFromMaybeHtml(value) {
+  const raw = value == null ? '' : typeof value === 'string' ? value : String(value)
+  if (!raw) return ''
+  if (!/<\/?[a-z][\s\S]*>/i.test(raw)) return raw
+  if (typeof document === 'undefined') return raw.replace(/<[^>]+>/g, '')
+  const el = document.createElement('div')
+  el.innerHTML = raw
+  return (el.innerText || el.textContent || '').replace(/\u00a0/g, ' ')
+}
+
+function hasMeaningfulText(value) {
+  return plainTextFromMaybeHtml(value).replace(/\s+/g, ' ').trim().length > 0
+}
+
+function termText(value) {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  // Objects in terms used to white-screen React — coerce safely.
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return ''
+  }
+}
+
 function TermField({ value, onChange }) {
-  const ref = useRef(null)
-  const resize = (el) => { if (!el) return; el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px` }
-  useEffect(() => { resize(ref.current) }, [value])
   return (
-    <textarea
-      ref={ref}
-      rows={1}
-      value={value || ''}
-      onChange={e => { onChange(e.target.value); resize(e.target) }}
-      className="min-w-0 flex-1 resize-none overflow-hidden whitespace-pre-wrap break-words bg-transparent leading-6 outline-none"
+    <RichTextField
+      multiline
+      className="min-w-0 flex-1 text-sm leading-6"
+      value={termText(value)}
+      onChange={onChange}
+      placeholder="Click to edit"
     />
   )
 }
 
 function Input({ label, value, onChange, bare = false, inputRef = null }) { return <label className={`block ${bare ? 'mb-1' : ''}`}><span className={bare ? 'sr-only' : 'mb-1.5 block text-sm font-medium text-slate-700'}>{label}</span><input ref={inputRef} value={value || ''} onChange={e => onChange(e.target.value)} placeholder={label} className={bare ? 'w-full bg-transparent py-1 text-sm outline-none placeholder:text-slate-400' : 'w-full rounded-xl border border-sand bg-white px-3 py-2.5 text-sm outline-none focus:border-moss focus:ring-4 focus:ring-blue-50'}/></label> }
-function Brand({ onClick }) { return <button type="button" onClick={onClick} title="Go to Home" className={`flex items-center gap-2 ${onClick ? 'cursor-pointer' : ''}`}><div className="flex h-8 w-8 items-center justify-center rounded-lg bg-moss font-bold text-white">Q</div><span className="font-semibold tracking-tight">QuoteGen</span></button> }
+function Brand({ onClick }) {
+  return (
+    <button type="button" onClick={onClick} title="Go to Home" className={`flex items-center gap-2 ${onClick ? 'cursor-pointer' : ''}`}>
+      <BrandMark size={32} />
+      <span className="font-semibold tracking-tight">QuoteGen</span>
+    </button>
+  )
+}
 
 /* ------------------------------------------------------------------------
  * Workspace shell — dashboard nav + pages shown when no quotation is open.
@@ -6090,7 +6738,8 @@ const WS_ICONS = {
   plus: 'M12 5v14M5 12h14',
   back: 'M15 18l-6-6 6-6',
   arrowRight: 'M5 12h14M13 6l6 6-6 6',
-  panelHide: 'M15 18l-6-6 6-6'
+  panelHide: 'M15 18l-6-6 6-6',
+  editor: 'M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z'
 }
 
 function WsIcon({ path, size = 20, strokeWidth = 2 }) {
@@ -6127,7 +6776,7 @@ function formatWsDate(raw) {
 const wsPrimaryBtn = { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, minHeight: 56, padding: '0 24px', border: 0, borderRadius: 14, background: '#1A73E8', color: '#fff', fontSize: 17, fontWeight: 700, cursor: 'pointer', boxShadow: '0 6px 16px rgba(29,99,237,.26)' }
 const wsSecondaryBtn = { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, minHeight: 56, padding: '0 24px', border: '1.5px solid #D5DDE9', borderRadius: 14, background: '#fff', fontSize: 17, fontWeight: 700, cursor: 'pointer', color: '#2d3748' }
 
-function WsSidebar({ view, onNav, onNewQuote, recentCount, authUserEmail, isMobile, mobileOpen, hidden, onClose, onHide }) {
+function WsSidebar({ view, onNav, onNewQuote, onOpenEditor, recentCount, authUserEmail, isMobile, mobileOpen, hidden, onClose, onHide }) {
   const mainNav = [
     { id: 'home', label: 'Home', icon: WS_ICONS.home },
     { id: 'list', label: 'Recent quotations', icon: WS_ICONS.list, badge: recentCount || null },
@@ -6159,7 +6808,7 @@ function WsSidebar({ view, onNav, onNewQuote, recentCount, authUserEmail, isMobi
           title="Go to Home"
           style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 10px', border: 0, background: 'none', cursor: 'pointer', textAlign: 'left', flex: 1, minWidth: 0 }}
         >
-          <div style={{ width: 34, height: 34, borderRadius: 10, background: '#1A73E8', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 19, fontWeight: 700, flex: '0 0 auto' }}>Q</div>
+          <BrandMark size={34} />
           <div>
             <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: '-0.01em' }}>Quote<span style={{ color: '#1A73E8' }}>Gen</span></div>
             <div style={{ fontSize: 12, color: '#7A8699' }}>Your AI quotation employee</div>
@@ -6178,10 +6827,18 @@ function WsSidebar({ view, onNav, onNewQuote, recentCount, authUserEmail, isMobi
         )}
       </div>
 
-      <div style={{ padding: '0 16px 14px' }}>
+      <div style={{ padding: '0 16px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
         <button onClick={onNewQuote} style={{ ...wsPrimaryBtn, width: '100%' }}>
           <WsIcon path={WS_ICONS.plus} strokeWidth={2.6} />
           Make a new quote
+        </button>
+        <button
+          type="button"
+          onClick={() => { onOpenEditor?.(); onClose?.() }}
+          style={{ ...wsSecondaryBtn, width: '100%', minHeight: 48, fontSize: 15 }}
+        >
+          <WsIcon path={WS_ICONS.editor} size={18} strokeWidth={2.2} />
+          Open editor
         </button>
       </div>
 
@@ -6251,10 +6908,166 @@ function WsHeader({ title, hint, showBack, onBack, isMobile, showMenu, onMenu })
   )
 }
 
-function WsQuoteCard({ q, onOpen, onClone }) {
+function WsConvertIcon({ size = 18 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 9H4l4-4" />
+      <path d="M4 9v0" />
+      <path d="M16 15h4l-4 4" />
+      <path d="M20 15v0" />
+      <path d="M4 9h16" />
+      <path d="M20 15H4" />
+    </svg>
+  )
+}
+
+function WsQuoteConvertMenu({ disabled, menuUp = false, onSelect }) {
+  const [open, setOpen] = useState(false)
+  const [tip, setTip] = useState(false)
+  const wrapRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const onDocClick = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [open])
+
+  if (disabled) return null
+
+  const activeItems = ['Proforma Invoice', 'Tax Invoice', 'Delivery Challan', 'Purchase Order']
+  const soonItems = ['Credit Note', 'Debit Note']
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        aria-label="Convert to invoice or other document"
+        title="Convert to invoice or other document"
+        onMouseEnter={() => setTip(true)}
+        onMouseLeave={() => { if (!open) setTip(false) }}
+        onClick={() => { setOpen(o => !o); setTip(false) }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 44,
+          height: 44,
+          minHeight: 44,
+          flex: '0 0 44px',
+          border: `1.5px solid ${open ? '#1A73E8' : '#D5DDE9'}`,
+          borderRadius: 12,
+          background: open ? '#E7EEFB' : '#fff',
+          color: open ? '#1A73E8' : '#3D4859',
+          cursor: 'pointer',
+          padding: 0
+        }}
+      >
+        <WsConvertIcon />
+      </button>
+      {tip && !open && (
+        <div style={{
+          position: 'absolute',
+          ...(menuUp ? { bottom: 'calc(100% + 8px)' } : { top: 'calc(100% + 8px)' }),
+          right: 0,
+          zIndex: 60,
+          width: 'max-content',
+          maxWidth: 240,
+          padding: '8px 12px',
+          borderRadius: 8,
+          background: '#2d3748',
+          color: '#fff',
+          fontSize: 13,
+          fontWeight: 600,
+          lineHeight: 1.35,
+          boxShadow: '0 8px 20px rgba(15,23,42,.18)',
+          pointerEvents: 'none',
+          whiteSpace: 'normal'
+        }}>
+          Convert to invoice or other document
+        </div>
+      )}
+      {open && (
+        <div style={{
+          position: 'absolute',
+          ...(menuUp ? { bottom: 'calc(100% + 8px)' } : { top: 'calc(100% + 8px)' }),
+          right: 0,
+          zIndex: 60,
+          minWidth: 220,
+          background: '#fff',
+          border: '1px solid #E8EBF2',
+          borderRadius: 12,
+          boxShadow: '0 16px 36px -14px rgba(20,35,80,.28)',
+          padding: '6px 0',
+          overflow: 'hidden'
+        }}>
+          {activeItems.map((label) => (
+            <button
+              key={label}
+              type="button"
+              onClick={() => { setOpen(false); onSelect?.(label) }}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                border: 0,
+                background: 'transparent',
+                padding: '11px 16px',
+                fontSize: 15,
+                fontWeight: 500,
+                color: '#0D1117',
+                cursor: 'pointer'
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = '#F5F8FC' }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
+            >
+              {label}
+            </button>
+          ))}
+          <div style={{ height: 1, background: '#E8EBF2', margin: '6px 0' }} />
+          {soonItems.map((label) => (
+            <div
+              key={label}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                padding: '11px 16px',
+                fontSize: 15,
+                fontWeight: 500,
+                color: '#9AA4B5'
+              }}
+            >
+              <span>{label}</span>
+              <span style={{
+                flex: '0 0 auto',
+                fontSize: 11.5,
+                fontWeight: 700,
+                color: '#1A73E8',
+                background: '#E7EEFB',
+                borderRadius: 999,
+                padding: '3px 8px',
+                whiteSpace: 'nowrap'
+              }}>
+                Coming soon
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function WsQuoteCard({ q, onOpen, onClone, onConverted }) {
+  const [convertType, setConvertType] = useState(null)
   const tag = q.docType === 'invoice' ? { label: 'COMPLETED', bg: '#e8f2ec', fg: '#2d6a4f' } : { label: 'DRAFT', bg: '#f0f3f8', fg: '#4C5768' }
   const clientName = q.customer?.company || q.customer?.name || 'No customer set'
   return (
+    <>
     <div style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 16, padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <span style={{ padding: '5px 12px', borderRadius: 999, fontSize: 12.5, fontWeight: 600, letterSpacing: '.04em', background: tag.bg, color: tag.fg }}>{tag.label}</span>
@@ -6268,35 +7081,69 @@ function WsQuoteCard({ q, onOpen, onClone }) {
         <span style={{ fontSize: 17, fontWeight: 600 }}>{q.total ? money(q.total) : 'Not priced yet'}</span>
         <span style={{ fontSize: 14, color: '#8A94A6' }}>{q.itemCount} item{q.itemCount === 1 ? '' : 's'}</span>
       </div>
-      <div style={{ display: 'flex', gap: 10 }}>
-        <button onClick={() => onOpen(q.id)} style={{ flex: 1, minHeight: 44, border: 0, borderRadius: 12, background: '#1A73E8', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>Open</button>
-        <button onClick={() => onClone(q.id)} style={{ flex: 1, minHeight: 44, border: '1.5px solid #D5DDE9', borderRadius: 12, background: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer', color: '#2d3748' }}>Make a copy</button>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button onClick={() => onOpen(q.id)} style={{ flex: 1, minWidth: 72, minHeight: 44, border: 0, borderRadius: 12, background: '#1A73E8', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}>Open</button>
+        <button onClick={() => onClone(q.id)} style={{ flex: 1, minWidth: 96, minHeight: 44, border: '1.5px solid #D5DDE9', borderRadius: 12, background: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer', color: '#2d3748' }}>Make a copy</button>
+        <WsQuoteConvertMenu disabled={q.docType === 'invoice'} menuUp onSelect={setConvertType} />
       </div>
     </div>
+    {convertType && (
+      <WsConvertModal
+        quoteId={q.id}
+        convertType={convertType}
+        onClose={() => setConvertType(null)}
+        onDone={onConverted}
+      />
+    )}
+    </>
   )
 }
 
-function WsHome({ greetingWord, greetingName, stats, recent, topClients, onOpen, onClone, onOpenCompany, onNav, onNewQuote }) {
+function wsStatValueStyle(value, { fontSize = 28, fontWeight = 700, letterSpacing = '-0.02em' } = {}) {
+  const n = String(value || '').replace(/\s/g, '').length
+  const size = n > 20 ? Math.max(15, fontSize - 12) : n > 16 ? Math.max(17, fontSize - 8) : n > 12 ? Math.max(20, fontSize - 4) : fontSize
+  return {
+    fontSize: size,
+    fontWeight,
+    letterSpacing,
+    marginTop: 6,
+    lineHeight: 1.2,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    maxWidth: '100%',
+    minWidth: 0
+  }
+}
+
+function WsHome({ greetingWord, greetingName, stats, recent, topClients, onOpen, onClone, onConverted, onOpenCompany, onNav, onNewQuote, onOpenEditor }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
       <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: '30px 32px' }}>
-        <div style={{ fontSize: 16, color: '#5C6879', fontWeight: 600 }}>{greetingWord}, {greetingName}</div>
-        <h1 style={{ margin: '8px 0 10px', fontSize: 29, lineHeight: 1.15, letterSpacing: '-0.02em', fontWeight: 600 }}><span style={{ color: '#1A73E8' }}>Paste the enquiry.</span> Check the rates. <span style={{ color: '#1A73E8' }}>Send the quotation.</span></h1>
-        <p style={{ margin: '0 0 22px', fontSize: 17, lineHeight: 1.55, color: '#4C5768', maxWidth: '64ch' }}>Email, WhatsApp message, phone notes, a PDF or a catalogue. Put it in the box and QuoteGen prepares the draft. You review every line before anything goes out.</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+          <BrandMark size={44} />
+          <div style={{ fontSize: 16, color: '#5C6879', fontWeight: 600 }}>{greetingWord}, {greetingName}</div>
+        </div>
+        <h1 style={{ margin: '0 0 10px', fontSize: 29, lineHeight: 1.15, letterSpacing: '-0.02em', fontWeight: 600 }}><span style={{ color: '#1A73E8' }}>Paste the enquiry.</span> Check the rates. <span style={{ color: '#1A73E8' }}>Send the quotation.</span></h1>
+        <p style={{ margin: '0 0 6px', fontSize: 17, lineHeight: 1.55, color: '#4C5768', maxWidth: '64ch' }}>Email, WhatsApp message, phone notes, a PDF or a catalogue.</p>
+        <p style={{ margin: '0 0 22px', fontSize: 17, lineHeight: 1.55, color: '#4C5768' }}>Quotegen does the magic.</p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
           <button onClick={onNewQuote} style={wsPrimaryBtn}>
             <WsIcon path={WS_ICONS.plus} strokeWidth={2.6} />
             Make a new quote
           </button>
+          <button onClick={onOpenEditor} style={wsSecondaryBtn}>
+            <WsIcon path={WS_ICONS.editor} size={18} strokeWidth={2.2} />
+            Open editor
+          </button>
           <button onClick={() => onNav('list')} style={wsSecondaryBtn}>Open Recent quotations</button>
         </div>
       </section>
 
-      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 16 }}>
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 16 }}>
         {stats.map(s => (
-          <button key={s.label} onClick={s.go} style={{ textAlign: 'left', background: '#fff', border: '1px solid #e8edf3', borderRadius: 16, padding: '20px 22px', cursor: 'pointer' }}>
+          <button key={s.label} onClick={s.go} style={{ textAlign: 'left', background: '#fff', border: '1px solid #e8edf3', borderRadius: 16, padding: '20px 22px', cursor: 'pointer', overflow: 'hidden', minWidth: 0, width: '100%', boxSizing: 'border-box' }}>
             <div style={{ fontSize: 14.5, fontWeight: 600, color: '#6B7688' }}>{s.label}</div>
-            <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em', marginTop: 6 }}>{s.value}</div>
+            <div style={wsStatValueStyle(s.value)}>{s.value}</div>
             <div style={{ fontSize: 14, color: '#8A94A6', marginTop: 2 }}>{s.sub}</div>
           </button>
         ))}
@@ -6309,7 +7156,7 @@ function WsHome({ greetingWord, greetingName, stats, recent, topClients, onOpen,
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(310px,1fr))', gap: 16 }}>
           {recent.length === 0 && <div style={{ color: '#8A94A6', fontSize: 15 }}>No quotations yet — make your first one above.</div>}
-          {recent.map(q => <WsQuoteCard key={q.id} q={q} onOpen={onOpen} onClone={onClone} />)}
+          {recent.map(q => <WsQuoteCard key={q.id} q={q} onOpen={onOpen} onClone={onClone} onConverted={onConverted} />)}
         </div>
       </section>
 
@@ -6347,65 +7194,59 @@ function WsHome({ greetingWord, greetingName, stats, recent, topClients, onOpen,
   )
 }
 
-function LayoutCardColumnsPreview({ columns, tone = 'default' }) {
-  const cols = Array.isArray(columns) ? columns.filter(c => c && (c.label || c.id)) : []
-  const headers = ['Sr.', ...cols.map(c => String(c.label || c.id || 'Column').trim() || 'Column')]
-  const bg = tone === 'upload' ? '#f1f5f9' : '#edf2fb'
-  return (
-    <div style={{ background: bg, padding: '16px 16px 10px', borderBottom: '1px solid #e2e8f0' }}>
-      <div style={{
-        background: '#fff',
-        borderRadius: 8,
-        height: 100,
-        boxShadow: tone === 'upload' ? '0 2px 8px rgba(0,0,0,0.08)' : '0 2px 8px rgba(0,0,0,0.10)',
-        overflow: 'hidden',
-        padding: 8,
-        pointerEvents: 'none'
-      }}>
+function LayoutChoicePreview({ kind = 'default' }) {
+  if (kind === 'upload') {
+    return (
+      <div style={{ background: '#f8fafc', padding: '14px 14px 8px', borderBottom: '1px solid #e2e8f0' }}>
         <div style={{
+          background: '#fff',
+          borderRadius: 8,
+          height: 108,
+          boxShadow: '0 1px 6px rgba(0,0,0,0.08)',
           display: 'flex',
-          border: '1px solid #e8edf3',
-          borderRadius: 6,
-          overflow: 'hidden',
-          height: '100%',
-          background: '#fff'
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 6
         }}>
-          {headers.map((label, i) => (
-            <div
-              key={`${label}-${i}`}
-              style={{
-                flex: i === 0 ? '0 0 28px' : '1 1 0',
-                minWidth: 0,
-                borderRight: i < headers.length - 1 ? '1px solid #e8edf3' : 'none',
-                background: '#f7f9fc'
-              }}
-            >
-              <div style={{
-                fontSize: 8,
-                fontWeight: 700,
-                letterSpacing: '0.02em',
-                textTransform: 'uppercase',
-                color: '#64748b',
-                padding: '6px 4px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                borderBottom: '1px solid #e8edf3'
-              }}>
-                {label}
-              </div>
-              <div style={{ padding: '8px 4px', fontSize: 8, color: '#cbd5e1', background: '#fff' }}>
-                {i === 0 ? '1' : '—'}
-              </div>
-            </div>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="8" y1="13" x2="16" y2="13" />
+            <line x1="8" y1="17" x2="12" y2="17" />
+          </svg>
+          <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 700, letterSpacing: '0.08em' }}>WORD / EXCEL</div>
+        </div>
+      </div>
+    )
+  }
+
+  const t = PAPER_THEMES.corporate
+  return (
+    <div style={{ background: t.pageBg, padding: '14px 14px 8px', borderBottom: `1px solid ${t.tableBorder}` }}>
+      <div style={{
+        background: t.paperBg,
+        borderRadius: 8,
+        overflow: 'hidden',
+        height: 108,
+        position: 'relative',
+        boxShadow: '0 1px 6px rgba(0,0,0,0.10)'
+      }}>
+        <div style={{ background: t.accent, height: 22 }} />
+        <div style={{ margin: '10px 10px 0', height: 5, borderRadius: 3, background: t.accent, width: '55%', opacity: 0.75 }} />
+        <div style={{ margin: '5px 10px 0', height: 3, borderRadius: 3, background: t.tableBorder, width: '40%' }} />
+        <div style={{ margin: '12px 10px 0', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {[0.92, 0.74, 0.84, 0.62].map((w, i) => (
+            <div key={i} style={{ height: 3, borderRadius: 2, background: t.tableBorder, width: `${w * 100}%`, opacity: 0.85 }} />
           ))}
         </div>
+        <div style={{ position: 'absolute', bottom: 10, right: 10, height: 4, borderRadius: 2, background: t.accent, width: 40, opacity: 0.65 }} />
       </div>
     </div>
   )
 }
 
-function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onAttach, onUploadLayout, initialStep = 1, loading, error, detailsOpen, setDetailsOpen, customer, changeCustomer, columns, setColumns, savedLayouts = [], activeLayoutId = '', persistenceConfigured, onSavedProfile, uploadTemplates, selectedTemplateId, setSelectedTemplateId, paperStyle, setPaperStyle, isMobile }) {
+function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, initialStep = 1, loading, error, detailsOpen, setDetailsOpen, customer, changeCustomer, columns, setColumns, savedLayouts = [], activeLayoutId = '', persistenceConfigured, onSavedProfile, uploadTemplates, selectedTemplateId, setSelectedTemplateId, paperStyle, setPaperStyle, isMobile }) {
   const [step, setStep] = React.useState(initialStep)
   const [layoutChoice, setLayoutChoice] = React.useState(selectedTemplateId ? 'upload' : 'default') // 'default' | 'upload'
   const [keepMode, setKeepMode] = React.useState('save') // 'once' | 'save'
@@ -6416,9 +7257,134 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onAttach, onUploadLa
   const [baselineKey, setBaselineKey] = React.useState(() => columnLayoutKey(columns))
   const appliedSavedRef = React.useRef(false)
   const customerFields = [['name', 'Customer name'], ['company', 'Company name'], ['gst', 'GST number'], ['location', 'Delivery location']]
+  const [ingestBusy, setIngestBusy] = React.useState(false)
+  const [ingestNote, setIngestNote] = React.useState('')
+  const [attachedFiles, setAttachedFiles] = React.useState([])
+  const [dragOver, setDragOver] = React.useState(false)
+  const [voiceState, setVoiceState] = React.useState('idle')
+  const attachRef = React.useRef(null)
+  const attachInputId = 'ws-enq-attach'
+  const ENQUIRY_FILE_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,application/pdf,image/*,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain'
+  const recognitionRef = React.useRef(null)
+  const voiceBaseRef = React.useRef('')
   const canProceed = enquiry.trim().length > 0
   const layoutChanged = columnLayoutKey(columns) !== baselineKey
   const companySavedLayouts = savedLayouts.filter(l => l.source !== 'quote')
+
+  React.useEffect(() => () => {
+    try { recognitionRef.current?.stop?.() } catch { /* ignore */ }
+  }, [])
+
+  const ingestAttachedFiles = async (fileList) => {
+    const files = Array.from(fileList || []).filter(f => f?.size > 0)
+    if (!files.length) return
+    setIngestBusy(true)
+    setIngestNote(`Reading ${files.length} file${files.length === 1 ? '' : 's'}…`)
+    try {
+      const result = await ingestEnquiryFiles(files)
+      if (!String(result.text || '').trim()) {
+        throw new Error('No text could be read from those files. Try a clearer PDF, Word/Excel file, or photo.')
+      }
+      setEnquiry((prev) => [String(prev || '').trim(), result.text].filter(Boolean).join('\n\n'))
+      setAttachedFiles((prev) => {
+        const seen = new Set(prev.map(p => `${p.name}|${p.chars || 0}`))
+        const next = [...prev]
+        for (const f of result.files || []) {
+          const key = `${f.name}|${f.chars || 0}`
+          if (!seen.has(key)) {
+            seen.add(key)
+            next.push(f)
+          }
+        }
+        return next
+      })
+      const names = (result.files || []).map(f => f.name).join(', ')
+      const fail = (result.failed || []).length
+      setIngestNote(
+        fail
+          ? `Added text from ${names || 'files'}. ${fail} file${fail === 1 ? '' : 's'} could not be read.`
+          : `Added text from ${names}. Tap Next when you're ready.`
+      )
+    } catch (err) {
+      setIngestNote(err?.message || 'Could not read those files.')
+    } finally {
+      setIngestBusy(false)
+      if (attachRef.current) attachRef.current.value = ''
+    }
+  }
+
+  const onAttachInputChange = (e) => {
+    ingestAttachedFiles(e.target.files)
+    e.target.value = ''
+  }
+
+  const onEnquiryDragOver = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!ingestBusy) setDragOver(true)
+  }
+
+  const onEnquiryDragLeave = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false)
+  }
+
+  const onEnquiryDrop = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOver(false)
+    if (ingestBusy) return
+    const dropped = e.dataTransfer?.files
+    if (dropped?.length) ingestAttachedFiles(dropped)
+  }
+
+  const toggleVoice = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) {
+      setIngestNote('Voice works in Chrome or Edge on this device.')
+      return
+    }
+    if (recognitionRef.current && voiceState !== 'idle') {
+      try { recognitionRef.current.stop() } catch { /* ignore */ }
+      return
+    }
+    const rec = new SpeechRecognition()
+    rec.lang = 'en-IN'
+    rec.continuous = true
+    rec.interimResults = true
+    rec.maxAlternatives = 1
+    voiceBaseRef.current = String(enquiry || '').trim()
+    rec.onstart = () => setVoiceState('listening')
+    rec.onerror = (event) => {
+      setVoiceState('idle')
+      recognitionRef.current = null
+      if (event?.error === 'not-allowed') setIngestNote('Microphone permission is needed for voice notes.')
+      else if (event?.error !== 'aborted') setIngestNote('Voice note stopped. You can type or attach a file instead.')
+    }
+    rec.onend = () => {
+      setVoiceState('idle')
+      recognitionRef.current = null
+    }
+    rec.onresult = (event) => {
+      let finalChunk = ''
+      let interim = ''
+      for (let i = 0; i < event.results.length; i++) {
+        const piece = event.results[i][0]?.transcript || ''
+        if (event.results[i].isFinal) finalChunk += `${piece} `
+        else interim += piece
+      }
+      const spoken = `${finalChunk}${interim}`.replace(/\s+/g, ' ').trim()
+      const base = voiceBaseRef.current
+      setEnquiry(base && spoken ? `${base}\n\n${spoken}` : (spoken || base))
+    }
+    recognitionRef.current = rec
+    setIngestNote('Listening… tap Speak it again when you are done.')
+    try { rec.start() } catch (err) {
+      setIngestNote(err?.message || 'Could not start the microphone.')
+      recognitionRef.current = null
+    }
+  }
 
   React.useEffect(() => {
     if (activeLayoutId) setSelectedSavedId(activeLayoutId)
@@ -6537,8 +7503,7 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onAttach, onUploadLa
               transition: 'all .15s',
             }}
           >
-            {/* Mini paper preview — live columns from the QuoteGen layout */}
-            <LayoutCardColumnsPreview columns={columns} />
+            <LayoutChoicePreview kind="default" />
             <div style={{ padding: '14px 18px 18px' }}>
               <div style={{ fontWeight: 800, fontSize: 15, color: '#1a202c' }}>QuoteGen layout</div>
               <div style={{ fontSize: 13, color: '#718096', marginTop: 4, lineHeight: 1.5 }}>Clean, professional design. Choose which columns to include.</div>
@@ -6561,13 +7526,10 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onAttach, onUploadLa
               transition: 'all .15s',
             }}
           >
-            <LayoutCardColumnsPreview
-              tone="upload"
-              columns={(uploadTemplates || []).find(t => t.id === selectedTemplateId)?.columns || []}
-            />
+            <LayoutChoicePreview kind="upload" />
             <div style={{ padding: '14px 18px 18px' }}>
               <div style={{ fontWeight: 800, fontSize: 15, color: '#1a202c' }}>Your own file</div>
-              <div style={{ fontSize: 13, color: '#718096', marginTop: 4, lineHeight: 1.5 }}>Upload a Word or Excel template — we fill it in with your enquiry data.</div>
+              <div style={{ fontSize: 13, color: '#718096', marginTop: 4, lineHeight: 1.5 }}>Upload a Word or Excel file. Same layout, just editable.</div>
             </div>
           </button>
         </div>
@@ -6736,7 +7698,9 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onAttach, onUploadLa
               ...(canProceed ? wsSecondaryBtn : wsPrimaryBtn),
               minHeight: 52,
               fontSize: canProceed ? undefined : 17,
-              padding: canProceed ? undefined : '0 32px',
+              padding: canProceed ? '0 28px' : '0 32px',
+              whiteSpace: 'nowrap',
+              minWidth: canProceed ? 210 : undefined,
               opacity: (loading || layoutSaving || (layoutChoice === 'upload' && !selectedTemplateId && uploadTemplates.length > 0)) ? 0.5 : 1
             }}
           >
@@ -6758,48 +7722,209 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onAttach, onUploadLa
         <div style={{ fontSize: 15.5, color: '#6B7688', marginBottom: 16 }}>
           A full email, one WhatsApp line, or your own notes from a phone call — all of it works.
         </div>
-        <textarea
-          id="ws-enq"
-          value={enquiry}
-          onChange={e => setEnquiry(e.target.value)}
-          placeholder="Example: Need 20 nos MS angle 50×50×6, 12 nos ball bearing 6205, delivery to Rajkot before 20th."
-          style={{ width: '100%', minHeight: 220, padding: 18, border: '1.5px solid #D5DDE9', borderRadius: 14, fontSize: 17, lineHeight: 1.6, resize: 'vertical', background: '#FBFCFE', boxSizing: 'border-box' }}
-          autoFocus
+        <div
+          onDragOver={onEnquiryDragOver}
+          onDragEnter={onEnquiryDragOver}
+          onDragLeave={onEnquiryDragLeave}
+          onDrop={onEnquiryDrop}
+          style={{
+            borderRadius: 14,
+            outline: dragOver ? '2px dashed #1A73E8' : '2px dashed transparent',
+            outlineOffset: 4,
+            transition: 'outline-color 0.15s ease'
+          }}
+        >
+          <textarea
+            id="ws-enq"
+            value={enquiry}
+            onChange={e => setEnquiry(e.target.value)}
+            placeholder="Example: Need 20 nos MS angle 50×50×6, 12 nos ball bearing 6205, delivery to Rajkot before 20th."
+            style={{ width: '100%', minHeight: 220, padding: 18, border: `1.5px solid ${dragOver ? '#1A73E8' : '#D5DDE9'}`, borderRadius: 14, fontSize: 17, lineHeight: 1.6, resize: 'vertical', background: dragOver ? '#F5F9FF' : '#FBFCFE', boxSizing: 'border-box' }}
+            autoFocus
+          />
+        </div>
+        {attachedFiles.length ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+            {attachedFiles.map((f) => (
+              <span
+                key={`${f.name}-${f.chars || 0}`}
+                style={{ fontSize: 12.5, fontWeight: 600, color: '#1A73E8', background: '#E7EEFB', borderRadius: 999, padding: '5px 12px' }}
+              >
+                {f.name}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <input
+          ref={attachRef}
+          id={attachInputId}
+          type="file"
+          multiple
+          accept={ENQUIRY_FILE_ACCEPT}
+          disabled={ingestBusy}
+          onChange={onAttachInputChange}
+          style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0 }}
         />
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 20 }}>
           <button
+            type="button"
             disabled={!canProceed}
             onClick={() => setStep(2)}
             style={{ ...wsPrimaryBtn, opacity: canProceed ? 1 : 0.45, fontSize: 16, padding: '0 28px', minHeight: 52 }}
           >
             Next →
           </button>
-          <button onClick={onAttach} style={{ ...wsSecondaryBtn, minHeight: 52 }}>
+          <label
+            htmlFor={attachInputId}
+            style={{
+              ...wsSecondaryBtn,
+              minHeight: 52,
+              opacity: ingestBusy ? 0.55 : 1,
+              cursor: ingestBusy ? 'wait' : 'pointer',
+              pointerEvents: ingestBusy ? 'none' : 'auto'
+            }}
+          >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-            Attach files or photos
-          </button>
-          <button onClick={() => window.alert('Voice input is coming soon.')} style={{ ...wsSecondaryBtn, minHeight: 52 }}>
+            {ingestBusy ? 'Reading…' : 'Attach files or photos'}
+          </label>
+          <button type="button" onClick={toggleVoice} style={{ ...wsSecondaryBtn, minHeight: 52, background: voiceState === 'listening' ? '#E7EEFB' : '#fff', borderColor: voiceState === 'listening' ? '#1A73E8' : '#D5DDE9' }}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-            Speak it
+            {voiceState === 'listening' ? 'Listening… tap to stop' : 'Speak it'}
           </button>
-          <button onClick={() => setStep(2)} style={{ ...wsSecondaryBtn, minHeight: 52 }}>
+          <button type="button" onClick={() => setStep(2)} style={{ ...wsSecondaryBtn, minHeight: 52, padding: '0 28px', whiteSpace: 'nowrap', minWidth: 210 }}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Fill it in myself
           </button>
         </div>
-        <div style={{ marginTop: 8, fontSize: 13.5, color: '#94a3b8' }}>
-          Tip: the more detail you paste, the better QuoteGen fills in the items automatically.
-        </div>
+        {ingestNote ? (
+          <div style={{ marginTop: 10, fontSize: 13.5, color: ingestNote.includes('Could not') || ingestNote.includes('Sign in') || ingestNote.includes('Cannot reach') ? '#B42318' : '#4A5568', lineHeight: 1.45 }}>{ingestNote}</div>
+        ) : (
+          <div style={{ marginTop: 8, fontSize: 13.5, color: '#94a3b8' }}>
+            Tip: attach or drop a PDF, Word, Excel, or a photo of a handwritten list — text is extracted into the box above, then Generate works like a paste.
+          </div>
+        )}
       </div>
     </div>
   )
 }
 
-function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone }) {
+function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone, onConverted, authUser = null }) {
   const tabs = [['all', 'All'], ['draft', 'Drafts'], ['completed', 'Completed']]
+  const filterOptions = [
+    ['all', 'All quotations'],
+    ['not_priced', 'Not priced yet'],
+    ['priced', 'Priced'],
+    ['updated_today', 'Updated today'],
+    ['updated_yesterday', 'Updated yesterday'],
+    ['this_week', 'This week'],
+    ['this_month', 'This month'],
+    ['custom_range', 'Custom range']
+  ]
+
+  const [filterOpen, setFilterOpen] = useState(false)
+  const [advFilter, setAdvFilter] = useState('all')
+  const [companyFilter, setCompanyFilter] = useState(null)
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
+  const filterWrapRef = useRef(null)
+
+  useEffect(() => {
+    if (!filterOpen) return undefined
+    const onDocClick = (e) => {
+      if (filterWrapRef.current && !filterWrapRef.current.contains(e.target)) setFilterOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [filterOpen])
+
+  const companyCounts = useMemo(() => {
+    const m = new Map()
+    for (const q of quotations) {
+      const raw = (q.customer?.company || q.customer?.name || '').trim()
+      const label = raw || 'No customer set'
+      m.set(label, (m.get(label) || 0) + 1)
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1])
+  }, [quotations])
+
+  const isPriced = (q) => Number(q.total) > 0
+
+  const parseDayInput = (value) => {
+    if (!value) return null
+    const t = Date.parse(value)
+    if (Number.isFinite(t)) return new Date(t)
+    const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(String(value).trim())
+    if (!m) return null
+    const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]))
+    return Number.isFinite(d.getTime()) ? d : null
+  }
+
+  const quoteUpdatedMs = (q) => {
+    const raw = q.updatedAt || q.createdAt || q.date || ''
+    const t = Date.parse(raw)
+    return Number.isFinite(t) ? t : 0
+  }
+
+  const matchesAdvFilter = (q) => {
+    if (advFilter === 'all') return true
+    if (advFilter === 'not_priced') return !isPriced(q)
+    if (advFilter === 'priced') return isPriced(q)
+    if (advFilter === 'custom_range') {
+      const from = parseDayInput(customFrom)
+      const to = parseDayInput(customTo)
+      if (!from && !to) return true
+      const updated = quoteUpdatedMs(q)
+      if (!updated) return false
+      const uDate = new Date(updated)
+      const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+      const uDay = startOfDay(uDate).getTime()
+      if (from && uDay < startOfDay(from).getTime()) return false
+      if (to) {
+        const toEnd = startOfDay(to)
+        toEnd.setDate(toEnd.getDate() + 1)
+        if (uDay >= toEnd.getTime()) return false
+      }
+      return true
+    }
+    const updated = quoteUpdatedMs(q)
+    if (!updated) return false
+    const uDate = new Date(updated)
+    const now = new Date()
+    const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+    const todayStart = startOfDay(now)
+    if (advFilter === 'updated_today') return uDate >= todayStart
+    if (advFilter === 'updated_yesterday') {
+      const y = new Date(todayStart)
+      y.setDate(y.getDate() - 1)
+      return uDate >= y && uDate < todayStart
+    }
+    if (advFilter === 'this_week') {
+      const w = new Date(todayStart)
+      w.setDate(w.getDate() - ((now.getDay() + 6) % 7))
+      return uDate >= w
+    }
+    if (advFilter === 'this_month') {
+      const m = new Date(now.getFullYear(), now.getMonth(), 1)
+      return uDate >= m
+    }
+    return true
+  }
+
+  const matchesCompanyFilter = (q) => {
+    if (!companyFilter) return true
+    const raw = (q.customer?.company || q.customer?.name || '').trim()
+    const label = raw || 'No customer set'
+    return label === companyFilter
+  }
+
+  const filterActive = advFilter !== 'all' || companyFilter
+    || (advFilter === 'custom_range' && (customFrom || customTo))
+
   const matches = (q) => {
     if (tab === 'draft' && q.docType === 'invoice') return false
     if (tab === 'completed' && q.docType !== 'invoice') return false
+    if (!matchesAdvFilter(q)) return false
+    if (!matchesCompanyFilter(q)) return false
     const hay = `${q.customer?.company || ''} ${q.customer?.name || ''} ${q.title || ''} ${q.number || ''}`.toLowerCase()
     return hay.includes(query.toLowerCase())
   }
@@ -6832,14 +7957,147 @@ function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone }) {
           <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by company or heading" style={{ width: '100%', minHeight: 54, padding: '0 16px 0 46px', border: '1.5px solid #D5DDE9', borderRadius: 14, fontSize: 16.5, background: '#fff' }} />
           <span style={{ position: 'absolute', left: 15, top: 15 }}><WsSearchIcon /></span>
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {tabs.map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{ minHeight: 54, padding: '0 20px', borderRadius: 14, fontSize: 16, fontWeight: 700, cursor: 'pointer', border: `1.5px solid ${tab === id ? '#1A73E8' : '#D5DDE9'}`, background: tab === id ? '#1A73E8' : '#fff', color: tab === id ? '#fff' : '#3D4859' }}>{label}</button>
           ))}
+          <div ref={filterWrapRef} style={{ position: 'relative' }}>
+            <button
+              type="button"
+              onClick={() => setFilterOpen(o => !o)}
+              style={{
+                minHeight: 54,
+                padding: '0 20px',
+                borderRadius: 14,
+                fontSize: 16,
+                fontWeight: 700,
+                cursor: 'pointer',
+                border: `1.5px solid ${filterActive || filterOpen ? '#1A73E8' : '#D5DDE9'}`,
+                background: filterOpen ? '#E7EEFB' : '#fff',
+                color: filterActive || filterOpen ? '#1A73E8' : '#3D4859',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+              Filter
+            </button>
+            {filterOpen && (
+              <div style={{
+                position: 'absolute',
+                top: 'calc(100% + 8px)',
+                right: 0,
+                zIndex: 50,
+                width: 280,
+                maxWidth: 'min(280px, calc(100vw - 32px))',
+                maxHeight: 'min(70vh, 560px)',
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                boxSizing: 'border-box',
+                background: '#fff',
+                border: '1px solid #E8EBF2',
+                borderRadius: 16,
+                boxShadow: '0 18px 40px -16px rgba(20,35,80,.28)',
+                padding: '12px 10px 14px'
+              }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.08em', color: '#9AA4B5', padding: '8px 10px 6px' }}>FILTERS</div>
+                <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                  {filterOptions.map(([id, label]) => {
+                    const active = advFilter === id && !companyFilter
+                    return (
+                      <div key={id}>
+                        <button
+                          type="button"
+                          onClick={() => { setAdvFilter(id); setCompanyFilter(null) }}
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            maxWidth: '100%',
+                            minWidth: 0,
+                            textAlign: 'left',
+                            border: 0,
+                            borderRadius: 10,
+                            padding: '10px 12px',
+                            fontSize: 14.5,
+                            fontWeight: active ? 700 : 500,
+                            color: active ? '#1A73E8' : '#0D1117',
+                            background: active ? '#E7EEFB' : 'transparent',
+                            cursor: 'pointer',
+                            boxSizing: 'border-box'
+                          }}
+                        >
+                          {label}
+                        </button>
+                        {id === 'custom_range' && advFilter === 'custom_range' && (
+                          <div style={{ display: 'grid', gap: 8, padding: '4px 10px 10px' }}>
+                            <input
+                              type="date"
+                              value={customFrom}
+                              onChange={(e) => setCustomFrom(e.target.value)}
+                              placeholder="dd-mm-yyyy"
+                              style={{ width: '100%', minHeight: 40, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, fontSize: 14, boxSizing: 'border-box' }}
+                            />
+                            <input
+                              type="date"
+                              value={customTo}
+                              onChange={(e) => setCustomTo(e.target.value)}
+                              placeholder="dd-mm-yyyy"
+                              style={{ width: '100%', minHeight: 40, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, fontSize: 14, boxSizing: 'border-box' }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.08em', color: '#9AA4B5', padding: '14px 10px 6px' }}>COMPANIES</div>
+                <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                  {companyCounts.map(([name, count]) => {
+                    const active = companyFilter === name
+                    return (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() => { setCompanyFilter(name); setAdvFilter('all') }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          justifyContent: 'space-between',
+                          gap: 12,
+                          width: '100%',
+                          maxWidth: '100%',
+                          minWidth: 0,
+                          textAlign: 'left',
+                          border: 0,
+                          borderRadius: 10,
+                          padding: '10px 12px',
+                          fontSize: 14.5,
+                          fontWeight: active ? 700 : 500,
+                          color: active ? '#1A73E8' : '#0D1117',
+                          background: active ? '#E7EEFB' : 'transparent',
+                          cursor: 'pointer',
+                          boxSizing: 'border-box'
+                        }}
+                      >
+                        <span style={{ minWidth: 0, flex: 1, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{name}</span>
+                        <span style={{ flex: '0 0 auto', fontSize: 14, fontWeight: 700, color: active ? '#1A73E8' : '#6B7688' }}>{count}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {quotations.length >= 200 ? (
+          <p style={{ margin: 0, fontSize: 13.5, color: '#6B7688' }}>
+            Showing the 200 most recently updated quotations. Older ones stay in the database but are outside this list.
+          </p>
+        ) : null}
         {companies.map(g => {
           const open = isOpen(g.name)
           return (
@@ -6861,7 +8119,7 @@ function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone }) {
               </button>
               {open && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 14, padding: '0 22px 22px' }}>
-                  {g.items.map(q => <WsQuoteCard key={q.id} q={q} onOpen={onOpen} onClone={onClone} />)}
+                  {g.items.map(q => <WsQuoteCard key={q.id} q={q} onOpen={onOpen} onClone={onClone} onConverted={onConverted} />)}
                 </div>
               )}
             </div>
@@ -6881,11 +8139,11 @@ function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone }) {
 function WsInsights({ stats, topClients }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
-      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 16 }}>
+      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 16 }}>
         {stats.map(c => (
-          <div key={c.label} style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 16, padding: 22 }}>
+          <div key={c.label} style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 16, padding: 22, overflow: 'hidden', minWidth: 0, boxSizing: 'border-box' }}>
             <div style={{ fontSize: 15, fontWeight: 650, color: '#6B7688' }}>{c.label}</div>
-            <div style={{ fontSize: 29, fontWeight: 800, letterSpacing: '-0.025em', marginTop: 6 }}>{c.value}</div>
+            <div style={wsStatValueStyle(c.value, { fontSize: 29, fontWeight: 800, letterSpacing: '-0.025em' })}>{c.value}</div>
             <div style={{ fontSize: 14, color: '#8A94A6', marginTop: 3 }}>{c.sub}</div>
           </div>
         ))}
@@ -7159,4 +8417,38 @@ function WsComingSoon({ title, body }) {
   )
 }
 
-createRoot(document.getElementById('root')).render(<App />)
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+
+  render() {
+    if (this.state.error) {
+      const message = this.state.error?.message || String(this.state.error)
+      return (
+        <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, fontFamily: 'system-ui, sans-serif', background: '#f5f7fa' }}>
+          <div style={{ maxWidth: 480, background: '#fff', border: '1px solid #dce3ef', borderRadius: 16, padding: 24 }}>
+            <div style={{ fontWeight: 800, fontSize: 18, marginBottom: 8 }}>QuoteGen hit a display error</div>
+            <p style={{ margin: 0, color: '#3d4859', lineHeight: 1.5 }}>Reload the page. If it stays blank, clear site data for localhost:5173 and sign in again.</p>
+            <pre style={{ marginTop: 14, padding: 12, background: '#f5f7fa', borderRadius: 8, fontSize: 12, overflow: 'auto' }}>{message}</pre>
+            <button type="button" onClick={() => window.location.reload()} style={{ marginTop: 14, border: 0, borderRadius: 10, padding: '10px 16px', background: '#1A73E8', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>
+              Reload
+            </button>
+          </div>
+        </main>
+      )
+    }
+    return this.props.children
+  }
+}
+
+createRoot(document.getElementById('root')).render(
+  <AppErrorBoundary>
+    <App />
+  </AppErrorBoundary>
+)

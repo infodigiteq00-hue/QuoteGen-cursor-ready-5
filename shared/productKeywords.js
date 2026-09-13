@@ -4,8 +4,12 @@
  *
  * Matching never rewrites the enquiry description. The standard name belongs
  * in the "Our suggested" column only.
+ *
+ * Temporarily off — the column caused lag + typing confusion next to Description.
+ * Flip SUGGESTED_COLUMN_ENABLED back to true to restore it.
  */
 
+export const SUGGESTED_COLUMN_ENABLED = false
 export const SUGGESTED_COLUMN_ID = 'ourSuggested'
 export const SUGGESTED_COLUMN = { id: SUGGESTED_COLUMN_ID, label: 'Our suggested', type: 'text' }
 
@@ -46,6 +50,10 @@ export function isSuggestedColumn(col) {
   return id === 'oursuggested' || label === 'oursuggested'
 }
 
+export function withoutSuggestedColumns(columns) {
+  return (columns || []).filter(c => !isSuggestedColumn(c))
+}
+
 function descriptionIndex(columns) {
   const list = columns || []
   const byId = list.findIndex(c => String(c?.id || '').toLowerCase() === 'description')
@@ -56,6 +64,7 @@ function descriptionIndex(columns) {
 /** Insert "Our suggested" immediately after the enquiry/description column. */
 export function ensureSuggestedColumn(columns) {
   const list = Array.isArray(columns) ? columns : []
+  if (!SUGGESTED_COLUMN_ENABLED) return withoutSuggestedColumns(list)
   if (list.some(isSuggestedColumn)) return list
   const next = [...list]
   const col = { ...SUGGESTED_COLUMN }
@@ -189,7 +198,7 @@ function itemEnquiryText(item, columns) {
  * alone unless it still matches the last auto-filled value.
  */
 export function applySuggestedName(item, columns, product) {
-  if (!item) return item
+  if (!SUGGESTED_COLUMN_ENABLED || !item) return item
   const colId = suggestedColumnId(columns)
   const name = standardProductName(product)
   if (!colId || !name) return item
@@ -202,6 +211,9 @@ export function applySuggestedName(item, columns, product) {
 
 /** Insert Our suggested and add the empty cell key without touching other fields. */
 export function attachSuggestedColumn(columns, items) {
+  if (!SUGGESTED_COLUMN_ENABLED) {
+    return { columns: withoutSuggestedColumns(columns), items: items || [] }
+  }
   const nextColumns = ensureSuggestedColumn(columns)
   const colId = suggestedColumnId(nextColumns)
   const nextItems = (items || []).map(item => {
@@ -212,6 +224,7 @@ export function attachSuggestedColumn(columns, items) {
 }
 
 export function fillSuggestedOnItems(items, columns, products) {
+  if (!SUGGESTED_COLUMN_ENABLED) return items || []
   if (!Array.isArray(items) || !items.length) return items || []
   const colId = suggestedColumnId(columns)
   if (!colId) return items
