@@ -12,7 +12,7 @@ import { registerPersistenceRoutes } from './persistence.js'
 import { registerRevisionRoutes } from './revisions.js'
 import { registerKnowledgeRoutes, autofillItemsFromKnowledge, retrieveKnowledgeContext, formatKnowledgePromptBlock } from './knowledge.js'
 import { registerHsnGstRoutes } from './hsnGst.js'
-import { registerQuoteAssetRoutes } from './quoteAssets.js'
+import { registerQuoteAssetRoutes, registerPublicQuoteAssetRoutes } from './quoteAssets.js'
 import { registerPdfRoutes } from './pdfExport.js'
 import { getSupabase, isSupabaseConfigured } from './db.js'
 import { aiFillableColumns, blankItemFor, normalizeColumnList } from '../shared/quoteColumns.js'
@@ -36,9 +36,8 @@ app.use((err, req, res, next) => {
 
 // OnlyOffice must reach files/callbacks without a browser session.
 registerOnlyOfficeRoutes(app)
-
-// OnlyOffice must reach files/callbacks without a browser session.
-registerOnlyOfficeRoutes(app)
+// Quote images in <img> / PDF Chrome cannot send Bearer tokens.
+registerPublicQuoteAssetRoutes(app)
 
 // Auth endpoints are public; everything else under /api requires a session.
 registerAuthRoutes(app)

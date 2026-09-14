@@ -114,11 +114,14 @@ export function storagePathFromUrl(src) {
   return bare ? bare[1].replace(/\/+$/, '') : ''
 }
 
-/** Prefer the logged-in proxy so a private/public-URL miss cannot blank the cell. */
+/** Prefer public Storage URLs for <img>; fall back to API proxy for older rows. */
 export function quoteAssetSrc(url, path) {
+  const text = String(url || '')
+  if (text.startsWith('data:') || text.startsWith('blob:')) return text
+  if (/^https?:\/\//i.test(text) && /quote-assets/i.test(text)) return text
   const key = String(path || '').trim() || storagePathFromUrl(url)
   if (key) return `/api/quote-assets/content?path=${encodeURIComponent(key)}`
-  return String(url || '')
+  return text
 }
 
 async function fetchAssetDataUrl(src) {

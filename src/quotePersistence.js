@@ -741,7 +741,7 @@ export async function uploadQuoteImage(file) {
     if (response.ok && data.url) {
       const path = data.path || null
       return {
-        url: path ? `/api/quote-assets/content?path=${encodeURIComponent(path)}` : data.url,
+        url: data.url || (path ? `/api/quote-assets/content?path=${encodeURIComponent(path)}` : ''),
         path,
         storage: data.storage || 'supabase'
       }
@@ -784,7 +784,7 @@ export async function uploadQuoteFile(file) {
     if (response.ok && data.url) {
       const path = data.path || null
       return {
-        url: path ? `/api/quote-assets/content?path=${encodeURIComponent(path)}` : data.url,
+        url: data.url || (path ? `/api/quote-assets/content?path=${encodeURIComponent(path)}` : ''),
         path,
         storage: data.storage || 'supabase'
       }

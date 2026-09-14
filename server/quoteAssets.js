@@ -94,6 +94,51 @@ function ownAssetPath(userId, path) {
   return path.startsWith(`quote-images/${userId}/`) || path.startsWith(`quote-files/${userId}/`)
 }
 
+/** Paths look like quote-images/<uuid>/file.png — random enough for a public bucket. */
+function isQuoteAssetStoragePath(path) {
+  return /^(quote-images|quote-files)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\//i.test(String(path || ''))
+}
+
+async function sendQuoteAssetContent(req, res, { requireUser = false } = {}) {
+  const requestId = `qa-get-${Date.now()}`
+  const path = String(req.query.path || '').trim()
+  if (!path) return res.status(400).json({ error: 'path is required.', code: 'VALIDATION_ERROR', requestId })
+  if (requireUser) {
+    if (!ownAssetPath(req.userId, path)) {
+      return res.status(403).json({ error: 'Not your file.', code: 'FORBIDDEN', requestId })
+    }
+  } else if (!isQuoteAssetStoragePath(path)) {
+    return res.status(400).json({ error: 'Invalid asset path.', code: 'VALIDATION_ERROR', requestId })
+  }
+  if (!isSupabaseConfigured()) {
+    return res.status(404).json({ error: 'File not found.', code: 'NOT_FOUND', requestId })
+  }
+  try {
+    const supabase = getSupabase()
+    const { data, error } = await supabase.storage.from(QUOTE_ASSET_BUCKET).download(path)
+    if (error || !data) {
+      return res.status(404).json({ error: 'File not found.', code: 'NOT_FOUND', requestId })
+    }
+    const buffer = Buffer.from(await data.arrayBuffer())
+    res.setHeader('Content-Type', data.type || 'application/octet-stream')
+    res.setHeader('Cache-Control', 'public, max-age=300')
+    res.send(buffer)
+  } catch (error) {
+    supabaseError(error, res, requestId)
+  }
+}
+
+/**
+ * Image GETs must work without a Bearer token: <img src> and headless Chrome
+ * (PDF export) cannot send Authorization. Paths include a user UUID + random id.
+ */
+export function registerPublicQuoteAssetRoutes(app) {
+  app.get('/api/quote-assets/content', (req, res) => sendQuoteAssetContent(req, res, { requireUser: false }))
+}
+
+export function registerQuoteAssetRoutes(app) {
+  app.post('/api/quote-assets/image', (req, res) => {
+
 function inlineOrFail(res, file, requestId, kind) {
   if (file.buffer.length > MAX_INLINE_BYTES) {
     return res.status(502).json({
@@ -201,30 +246,7 @@ export function registerQuoteAssetRoutes(app) {
     })
   })
 
-  app.get('/api/quote-assets/content', async (req, res) => {
-    const requestId = `qa-get-${Date.now()}`
-    const path = String(req.query.path || '').trim()
-    if (!path) return res.status(400).json({ error: 'path is required.', code: 'VALIDATION_ERROR', requestId })
-    if (!ownAssetPath(req.userId, path)) {
-      return res.status(403).json({ error: 'Not your file.', code: 'FORBIDDEN', requestId })
-    }
-    if (!isSupabaseConfigured()) {
-      return res.status(404).json({ error: 'File not found.', code: 'NOT_FOUND', requestId })
-    }
-    try {
-      const supabase = getSupabase()
-      const { data, error } = await supabase.storage.from(QUOTE_ASSET_BUCKET).download(path)
-      if (error || !data) {
-        return res.status(404).json({ error: 'File not found.', code: 'NOT_FOUND', requestId })
-      }
-      const buffer = Buffer.from(await data.arrayBuffer())
-      res.setHeader('Content-Type', data.type || 'application/octet-stream')
-      res.setHeader('Cache-Control', 'private, max-age=60')
-      res.send(buffer)
-    } catch (error) {
-      supabaseError(error, res, requestId)
-    }
-  })
+  app.get('/api/quote-assets/content', (req, res) => sendQuoteAssetContent(req, res, { requireUser: true }))
 
   app.delete('/api/quote-assets/image', async (req, res) => {
     const requestId = `qa-img-del-${Date.now()}`
