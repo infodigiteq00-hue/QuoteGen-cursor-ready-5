@@ -1848,7 +1848,8 @@ function App() {
     company: ['Company', 'Your letterhead and quotation numbering'],
     team: ['Team', 'People who can make quotations'],
     account: ['Account', 'Your own details'],
-    billing: ['Billing', 'Your plan']
+    billing: ['Billing', 'Your plan'],
+    'feature-interest': ['Feature interest', 'Who asked for upcoming features']
   }
   const [wsPageTitle, wsPageHint] = wsTitles[workspaceView] || wsTitles.home
 
@@ -1929,6 +1930,7 @@ function App() {
             paperStyle={paperStyle}
             setPaperStyle={setPaperStyle}
             isMobile={isMobile}
+            authUser={authUser}
           />
         )}
 
@@ -2033,6 +2035,12 @@ function App() {
 
         {workspaceView === 'account' && (
           <WsAccountSettings email={authUser.email} onSignOut={() => signOut()} />
+        )}
+
+        {workspaceView === 'feature-interest' && (
+          String(authUser.email || '').trim().toLowerCase() === 'info@digiteqsolution.com'
+            ? <WsFeatureInterestAdmin />
+            : <p style={{ color: '#B03A3A', fontSize: 15 }}>Super admin only.</p>
         )}
 
         {workspaceView === 'team' && <WsTeamComingSoon />}
@@ -6763,7 +6771,8 @@ const WS_ICONS = {
   back: 'M15 18l-6-6 6-6',
   arrowRight: 'M5 12h14M13 6l6 6-6 6',
   panelHide: 'M15 18l-6-6 6-6',
-  editor: 'M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z'
+  editor: 'M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z',
+  spark: 'M12 3l1.6 5.2L19 10l-5.4 1.8L12 17l-1.6-5.2L5 10l5.4-1.8L12 3zM18 15l.8 2.4L21 18l-2.2.8L18 21l-.8-2.2L15 18l2.2-.6L18 15z'
 }
 
 function WsIcon({ path, size = 20, strokeWidth = 2 }) {
@@ -6797,10 +6806,12 @@ function formatWsDate(raw) {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
+const SHOW_OPEN_EDITOR = false // hide Open editor entry points until OnlyOffice is ready
 const wsPrimaryBtn = { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, minHeight: 56, padding: '0 24px', border: 0, borderRadius: 14, background: '#1A73E8', color: '#fff', fontSize: 17, fontWeight: 700, cursor: 'pointer', boxShadow: '0 6px 16px rgba(29,99,237,.26)' }
 const wsSecondaryBtn = { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, minHeight: 56, padding: '0 24px', border: '1.5px solid #D5DDE9', borderRadius: 14, background: '#fff', fontSize: 17, fontWeight: 700, cursor: 'pointer', color: '#2d3748' }
 
 function WsSidebar({ view, onNav, onNewQuote, onOpenEditor, recentCount, authUserEmail, isMobile, mobileOpen, hidden, onClose, onHide }) {
+  const isSuperAdmin = String(authUserEmail || '').trim().toLowerCase() === 'info@digiteqsolution.com'
   const mainNav = [
     { id: 'home', label: 'Home', icon: WS_ICONS.home },
     { id: 'list', label: 'Recent quotations', icon: WS_ICONS.list, badge: recentCount || null },
@@ -6811,7 +6822,8 @@ function WsSidebar({ view, onNav, onNewQuote, onOpenEditor, recentCount, authUse
     { id: 'company', label: 'Company', icon: WS_ICONS.building },
     { id: 'team', label: 'Team', icon: WS_ICONS.users },
     { id: 'account', label: 'Account', icon: WS_ICONS.user },
-    { id: 'billing', label: 'Billing', icon: WS_ICONS.card }
+    { id: 'billing', label: 'Billing', icon: WS_ICONS.card },
+    ...(isSuperAdmin ? [{ id: 'feature-interest', label: 'Feature interest', icon: WS_ICONS.spark }] : [])
   ]
   // On mobile the fixed 262px rail would eat almost the whole screen, so it
   // becomes an off-canvas drawer instead: unmounted when closed, an overlay
@@ -6856,14 +6868,16 @@ function WsSidebar({ view, onNav, onNewQuote, onOpenEditor, recentCount, authUse
           <WsIcon path={WS_ICONS.plus} strokeWidth={2.6} />
           Make a new quote
         </button>
-        <button
-          type="button"
-          onClick={() => { onOpenEditor?.(); onClose?.() }}
-          style={{ ...wsSecondaryBtn, width: '100%', minHeight: 48, fontSize: 15 }}
-        >
-          <WsIcon path={WS_ICONS.editor} size={18} strokeWidth={2.2} />
-          Open editor
-        </button>
+        {SHOW_OPEN_EDITOR ? (
+          <button
+            type="button"
+            onClick={() => { onOpenEditor?.(); onClose?.() }}
+            style={{ ...wsSecondaryBtn, width: '100%', minHeight: 48, fontSize: 15 }}
+          >
+            <WsIcon path={WS_ICONS.editor} size={18} strokeWidth={2.2} />
+            Open editor
+          </button>
+        ) : null}
       </div>
 
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '4px 12px' }}>
@@ -7155,10 +7169,12 @@ function WsHome({ greetingWord, greetingName, stats, recent, topClients, onOpen,
             <WsIcon path={WS_ICONS.plus} strokeWidth={2.6} />
             Make a new quote
           </button>
-          <button onClick={onOpenEditor} style={wsSecondaryBtn}>
-            <WsIcon path={WS_ICONS.editor} size={18} strokeWidth={2.2} />
-            Open editor
-          </button>
+          {SHOW_OPEN_EDITOR ? (
+            <button onClick={onOpenEditor} style={wsSecondaryBtn}>
+              <WsIcon path={WS_ICONS.editor} size={18} strokeWidth={2.2} />
+              Open editor
+            </button>
+          ) : null}
           <button onClick={() => onNav('list')} style={wsSecondaryBtn}>Open Recent quotations</button>
         </div>
       </section>
@@ -7270,9 +7286,9 @@ function LayoutChoicePreview({ kind = 'default' }) {
   )
 }
 
-function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, initialStep = 1, loading, error, detailsOpen, setDetailsOpen, customer, changeCustomer, columns, setColumns, savedLayouts = [], activeLayoutId = '', persistenceConfigured, onSavedProfile, uploadTemplates, selectedTemplateId, setSelectedTemplateId, paperStyle, setPaperStyle, isMobile }) {
+function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, initialStep = 1, loading, error, detailsOpen, setDetailsOpen, customer, changeCustomer, columns, setColumns, savedLayouts = [], activeLayoutId = '', persistenceConfigured, onSavedProfile, uploadTemplates, selectedTemplateId, setSelectedTemplateId, paperStyle, setPaperStyle, isMobile, authUser = null }) {
   const [step, setStep] = React.useState(initialStep)
-  const [layoutChoice, setLayoutChoice] = React.useState(selectedTemplateId ? 'upload' : 'default') // 'default' | 'upload'
+  const [layoutChoice, setLayoutChoice] = React.useState('default') // 'default' | 'soon'
   const [keepMode, setKeepMode] = React.useState('save') // 'once' | 'save'
   const [layoutName, setLayoutName] = React.useState('')
   const [selectedSavedId, setSelectedSavedId] = React.useState(activeLayoutId || '')
@@ -7286,6 +7302,10 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
   const [attachedFiles, setAttachedFiles] = React.useState([])
   const [dragOver, setDragOver] = React.useState(false)
   const [voiceState, setVoiceState] = React.useState('idle')
+  const [interestBusy, setInterestBusy] = React.useState(false)
+  const [interestNote, setInterestNote] = React.useState('')
+  const [interestDone, setInterestDone] = React.useState(false)
+  const [interestTotal, setInterestTotal] = React.useState(null)
   const attachRef = React.useRef(null)
   const attachInputId = 'ws-enq-attach'
   const ENQUIRY_FILE_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,application/pdf,image/*,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain'
@@ -7491,10 +7511,56 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
     await action?.()
   }
 
-  // Keep layoutChoice in sync with selectedTemplateId
+  // Custom Word/Excel upload is gated as coming-soon on this screen.
   React.useEffect(() => {
-    if (selectedTemplateId) setLayoutChoice('upload')
-  }, [selectedTemplateId])
+    if (selectedTemplateId) setSelectedTemplateId('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  React.useEffect(() => {
+    if (layoutChoice !== 'soon') return undefined
+    let cancelled = false
+    fetch('/api/feature-interest/custom_upload')
+      .then(r => r.json().catch(() => ({})))
+      .then((data) => {
+        if (cancelled) return
+        if (data?.interested) {
+          setInterestDone(true)
+          setInterestNote('You’re already on the list for this account — thanks.')
+        }
+        if (typeof data?.total === 'number') setInterestTotal(data.total)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [layoutChoice])
+
+  const registerCustomUploadInterest = async () => {
+    if (interestBusy || interestDone) return
+    setInterestBusy(true)
+    setInterestNote('')
+    try {
+      const response = await fetch('/api/feature-interest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feature: 'custom_upload', email: authUser?.email || '' })
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(data.error || data.message || `Could not save interest (${response.status})`)
+      }
+      setInterestDone(true)
+      if (typeof data.total === 'number') setInterestTotal(data.total)
+      setInterestNote(
+        data.already
+          ? 'You’re already on the list for this account — thanks.'
+          : (data.message || 'Thanks — we recorded your interest.')
+      )
+    } catch (e) {
+      setInterestNote(e.message || 'Could not save interest')
+    } finally {
+      setInterestBusy(false)
+    }
+  }
 
   if (step === 2) {
     return (
@@ -7534,26 +7600,29 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
             </div>
           </button>
 
-          {/* Option 2: Your own file */}
+          {/* Option 2: custom upload — coming soon */}
           <button
             type="button"
-            onClick={() => setLayoutChoice('upload')}
+            onClick={() => { setLayoutChoice('soon'); setSelectedTemplateId('') }}
             style={{
-              border: `2px solid ${layoutChoice === 'upload' ? '#1A73E8' : '#e2e8f0'}`,
+              border: `2px solid ${layoutChoice === 'soon' ? '#1A73E8' : '#e2e8f0'}`,
               borderRadius: 18,
-              background: layoutChoice === 'upload' ? '#f0f5ff' : '#fff',
+              background: layoutChoice === 'soon' ? '#f0f5ff' : '#fff',
               padding: 0,
               cursor: 'pointer',
               textAlign: 'left',
               overflow: 'hidden',
-              boxShadow: layoutChoice === 'upload' ? '0 0 0 3px rgba(26,115,232,0.12)' : '0 1px 4px rgba(0,0,0,0.06)',
+              boxShadow: layoutChoice === 'soon' ? '0 0 0 3px rgba(26,115,232,0.12)' : '0 1px 4px rgba(0,0,0,0.06)',
               transition: 'all .15s',
             }}
           >
             <LayoutChoicePreview kind="upload" />
             <div style={{ padding: '14px 18px 18px' }}>
-              <div style={{ fontWeight: 800, fontSize: 15, color: '#1a202c' }}>Your own file</div>
-              <div style={{ fontSize: 13, color: '#718096', marginTop: 4, lineHeight: 1.5 }}>Upload a Word or Excel file. Same layout, just editable.</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ fontWeight: 800, fontSize: 15, color: '#1a202c' }}>Your own existing format</div>
+                <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#1A73E8', background: '#E7EEFB', borderRadius: 999, padding: '3px 8px' }}>Coming soon</span>
+              </div>
+              <div style={{ fontSize: 13, color: '#718096', marginTop: 4, lineHeight: 1.5 }}>Upload your format — QuoteGen fills it with AI.</div>
             </div>
           </button>
         </div>
@@ -7634,55 +7703,38 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
           </div>
         )}
 
-        {layoutChoice === 'upload' && (
-          <div style={{ marginTop: 20, border: '1.5px solid #e8edf3', borderRadius: 14, padding: 18, background: '#fff' }}>
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: '#3D4859', marginBottom: 12 }}>Pick your uploaded file</div>
-            {uploadTemplates.length === 0 ? (
-              <p style={{ fontSize: 14, color: '#94a3b8', margin: '0 0 12px' }}>No files uploaded yet. Add a Word or Excel quotation you already use.</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {uploadTemplates.map(tpl => (
-                  <button
-                    key={tpl.id}
-                    type="button"
-                    onClick={() => setSelectedTemplateId(tpl.id)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 12,
-                      border: `1.5px solid ${selectedTemplateId === tpl.id ? '#1A73E8' : '#e2e8f0'}`,
-                      borderRadius: 10, background: selectedTemplateId === tpl.id ? '#f0f5ff' : '#fff',
-                      padding: '10px 14px', cursor: 'pointer', textAlign: 'left', transition: 'all .12s'
-                    }}
-                  >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={selectedTemplateId === tpl.id ? '#1A73E8' : '#94a3b8'} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                      <polyline points="14 2 14 8 20 8"/>
-                    </svg>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: '#1a202c' }}>{tpl.name}</div>
-                      <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 1 }}>{tpl.type?.toUpperCase()}</div>
-                    </div>
-                    {selectedTemplateId === tpl.id && <span style={{ color: '#1A73E8', fontWeight: 800, fontSize: 16 }}>✓</span>}
-                  </button>
-                ))}
-              </div>
-            )}
+        {layoutChoice === 'soon' && (
+          <div style={{ marginTop: 20, border: '1.5px solid #e8edf3', borderRadius: 14, padding: 20, background: '#fff' }}>
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8', marginBottom: 8 }}>Feature — coming soon</div>
+            <p style={{ margin: '0 0 12px', fontSize: 15, color: '#3D4859', lineHeight: 1.55 }}>
+              Upload your own quotation format and QuoteGen will do your routine quotation work — manually by AI.
+            </p>
+            <p style={{ margin: '0 0 18px', fontSize: 15, color: '#1a202c', lineHeight: 1.55, fontWeight: 800 }}>
+              Your same existing formats, now filled automatically with AI.
+            </p>
+            <p style={{ margin: '0 0 12px', fontSize: 14, color: '#718096' }}>Interested?</p>
             <button
               type="button"
-              onClick={onUploadLayout}
+              disabled={interestBusy || interestDone}
+              onClick={registerCustomUploadInterest}
               style={{
-                marginTop: 12, width: '100%', minHeight: 46,
-                border: '1.5px dashed #1A73E8', borderRadius: 10, background: '#f8fbff',
-                color: '#1A73E8', fontSize: 14, fontWeight: 700, cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8
+                ...wsPrimaryBtn,
+                minHeight: 48,
+                opacity: (interestBusy || interestDone) ? 0.65 : 1,
+                cursor: (interestBusy || interestDone) ? 'default' : 'pointer'
               }}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="17 8 12 3 7 8"/>
-                <line x1="12" y1="3" x2="12" y2="15"/>
-              </svg>
-              Upload a new Word or Excel file
+              {interestBusy ? 'Sending…' : interestDone ? 'Interest recorded' : "Yes, I'm interested"}
             </button>
+            {interestNote && (
+              <p style={{ marginTop: 12, fontSize: 13.5, color: interestDone ? '#1A73E8' : '#B03A3A' }}>{interestNote}</p>
+            )}
+            {interestDone && interestTotal != null && (
+              <p style={{ marginTop: 6, fontSize: 12.5, color: '#94a3b8' }}>{interestTotal} account{interestTotal === 1 ? '' : 's'} on the waitlist so far.</p>
+            )}
+            <p style={{ marginTop: 16, fontSize: 13, color: '#94a3b8', lineHeight: 1.5 }}>
+              One “yes” per account. Meanwhile, pick <strong style={{ color: '#3D4859' }}>QuoteGen layout</strong> above to continue.
+            </p>
           </div>
         )}
 
@@ -7708,16 +7760,16 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
         <div style={{ marginTop: 24, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           {canProceed ? (
             <button
-              disabled={loading || layoutSaving || (layoutChoice === 'upload' && !selectedTemplateId && uploadTemplates.length > 0)}
-              onClick={() => continueWithLayout(onGenerate)}
-              style={{ ...wsPrimaryBtn, opacity: (loading || layoutSaving || (layoutChoice === 'upload' && !selectedTemplateId && uploadTemplates.length > 0)) ? 0.5 : 1, fontSize: 17, padding: '0 32px', minHeight: 52 }}
+              disabled={loading || layoutSaving || layoutChoice === 'soon'}
+              onClick={() => { setLayoutChoice('default'); continueWithLayout(onGenerate) }}
+              style={{ ...wsPrimaryBtn, opacity: (loading || layoutSaving || layoutChoice === 'soon') ? 0.5 : 1, fontSize: 17, padding: '0 32px', minHeight: 52 }}
             >
               {loading ? 'Understanding enquiry…' : 'Generate quotation →'}
             </button>
           ) : null}
           <button
-            onClick={() => continueWithLayout(onManual)}
-            disabled={loading || layoutSaving || (layoutChoice === 'upload' && !selectedTemplateId && uploadTemplates.length > 0)}
+            onClick={() => { setLayoutChoice('default'); continueWithLayout(onManual) }}
+            disabled={loading || layoutSaving || layoutChoice === 'soon'}
             style={{
               ...(canProceed ? wsSecondaryBtn : wsPrimaryBtn),
               minHeight: 52,
@@ -7725,7 +7777,7 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
               padding: canProceed ? '0 28px' : '0 32px',
               whiteSpace: 'nowrap',
               minWidth: canProceed ? 210 : undefined,
-              opacity: (loading || layoutSaving || (layoutChoice === 'upload' && !selectedTemplateId && uploadTemplates.length > 0)) ? 0.5 : 1
+              opacity: (loading || layoutSaving || layoutChoice === 'soon') ? 0.5 : 1
             }}
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -8190,6 +8242,76 @@ function WsInsights({ stats, topClients }) {
                 <div style={{ fontSize: 17, fontWeight: 800 }}>{money(c.value)}</div>
                 <div style={{ fontSize: 13.5, color: '#8A94A6' }}>{c.count} quotation{c.count === 1 ? '' : 's'}</div>
               </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function WsFeatureInterestAdmin() {
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState('')
+  const [total, setTotal] = React.useState(0)
+  const [voters, setVoters] = React.useState([])
+
+  const load = React.useCallback(() => {
+    setLoading(true)
+    setError('')
+    fetch('/api/feature-interest/custom_upload/voters')
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(data.error || data.message || `Could not load interest list (${r.status})`)
+        setTotal(data.total || 0)
+        setVoters(Array.isArray(data.voters) ? data.voters : [])
+      })
+      .catch((e) => setError(e.message || 'Could not load interest list'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  React.useEffect(() => { load() }, [load])
+
+  return (
+    <div style={{ maxWidth: 880, display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 26 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8' }}>Interested users for new features</div>
+            <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: '#1a202c' }}>1) Custom layout</div>
+            <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4 }}>Accounts that tapped “Yes, I’m interested” on Your own existing format.</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#6B7688' }}>Total</div>
+            <div style={{ fontSize: 36, fontWeight: 800, color: '#1A73E8', letterSpacing: '-0.03em', lineHeight: 1 }}>{loading ? '…' : total}</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={load}
+          disabled={loading}
+          style={{ marginTop: 16, minHeight: 42, padding: '0 16px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#3D4859', opacity: loading ? 0.6 : 1 }}
+        >
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
+        {error && (
+          <p style={{ marginTop: 14, borderRadius: 10, background: '#FDF2F2', border: '1px solid #E7CFCF', padding: '10px 14px', fontSize: 14, color: '#B03A3A' }}>{error}</p>
+        )}
+      </section>
+
+      <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 22 }}>
+        <div style={{ fontSize: 15, fontWeight: 750, marginBottom: 12 }}>Email IDs</div>
+        {!loading && voters.length === 0 && !error && (
+          <p style={{ margin: 0, fontSize: 14.5, color: '#94a3b8' }}>No interest clicks yet.</p>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {voters.map((v, i) => (
+            <div
+              key={`${v.userId || v.email}-${i}`}
+              style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 12, border: '1px solid #EDF1F7', background: '#FBFCFE' }}
+            >
+              <div style={{ fontSize: 15, fontWeight: 650, color: '#1a202c', wordBreak: 'break-all' }}>{v.email || '(no email)'}</div>
+              <div style={{ fontSize: 12.5, color: '#8A94A6' }}>{v.createdAt ? new Date(v.createdAt).toLocaleString() : ''}</div>
             </div>
           ))}
         </div>

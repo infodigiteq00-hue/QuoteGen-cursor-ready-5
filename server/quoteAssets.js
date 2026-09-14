@@ -99,6 +99,22 @@ function isQuoteAssetStoragePath(path) {
   return /^(quote-images|quote-files)\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\//i.test(String(path || ''))
 }
 
+function inlineOrFail(res, file, requestId, kind) {
+  if (file.buffer.length > MAX_INLINE_BYTES) {
+    return res.status(502).json({
+      error: `Could not store the ${kind} in Supabase Storage, and it is too large to embed inline (400 KB max). Try a smaller file.`,
+      code: 'STORAGE_ERROR',
+      requestId
+    })
+  }
+  return res.json({
+    url: dataUrlFromBuffer(file.buffer, file.mimetype),
+    path: null,
+    storage: 'inline',
+    requestId
+  })
+}
+
 async function sendQuoteAssetContent(req, res, { requireUser = false } = {}) {
   const requestId = `qa-get-${Date.now()}`
   const path = String(req.query.path || '').trim()
@@ -134,25 +150,6 @@ async function sendQuoteAssetContent(req, res, { requireUser = false } = {}) {
  */
 export function registerPublicQuoteAssetRoutes(app) {
   app.get('/api/quote-assets/content', (req, res) => sendQuoteAssetContent(req, res, { requireUser: false }))
-}
-
-export function registerQuoteAssetRoutes(app) {
-  app.post('/api/quote-assets/image', (req, res) => {
-
-function inlineOrFail(res, file, requestId, kind) {
-  if (file.buffer.length > MAX_INLINE_BYTES) {
-    return res.status(502).json({
-      error: `Could not store the ${kind} in Supabase Storage, and it is too large to embed inline (400 KB max). Try a smaller file.`,
-      code: 'STORAGE_ERROR',
-      requestId
-    })
-  }
-  return res.json({
-    url: dataUrlFromBuffer(file.buffer, file.mimetype),
-    path: null,
-    storage: 'inline',
-    requestId
-  })
 }
 
 export function registerQuoteAssetRoutes(app) {
