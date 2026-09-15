@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import {
   requestPasswordReset,
   resendConfirmation,
+  saveUserPhone,
   signIn,
   signUp,
   updatePassword,
@@ -9,6 +10,7 @@ import {
 } from './apiAuth.js'
 import { emailLinkError, supabaseConfigured } from './supabaseClient.js'
 import BrandMark from './BrandMark.jsx'
+import { INDIA_COUNTRY_CODE, isValidIndiaMobile, normalizeIndiaMobileDigits, toIndiaE164 } from '../shared/phone.js'
 
 function Field({ label, hint, ...props }) {
   return (
@@ -120,6 +122,7 @@ function LoginForm({ onSwitch, onNeedsConfirmation, onForgotPassword, prefillEma
 
 function SignupForm({ onNeedsConfirmation, onAlreadyRegistered, onSwitch, prefillEmail = '' }) {
   const [email, setEmail] = useState(prefillEmail || '')
+  const [mobile, setMobile] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [loading, setLoading] = useState(false)
@@ -128,16 +131,35 @@ function SignupForm({ onNeedsConfirmation, onAlreadyRegistered, onSwitch, prefil
   const submit = async (e) => {
     e.preventDefault()
     setError('')
+    const phoneDigits = normalizeIndiaMobileDigits(mobile)
+    if (!isValidIndiaMobile(phoneDigits)) {
+      setError('Enter a valid 10-digit Indian mobile number.')
+      return
+    }
     if (password !== confirm) {
       setError('Passwords do not match.')
       return
     }
     setLoading(true)
     try {
-      const result = await signUp(email.trim(), password)
+      const phoneE164 = toIndiaE164(phoneDigits)
+      const result = await signUp(email.trim(), password, { phoneDigits, phoneE164 })
       if (result.alreadyRegistered) {
         onAlreadyRegistered(email.trim())
         return
+      }
+      // Persist phone on user_profiles when we already have a session (email confirm off).
+      // If confirmation is required, metadata holds the number until first login sync.
+      if (result.session) {
+        try {
+          await saveUserPhone(phoneDigits)
+        } catch (phoneErr) {
+          console.warn('Could not save mobile on signup', phoneErr)
+        }
+      } else {
+        try {
+          sessionStorage.setItem('qg_pending_phone', phoneDigits)
+        } catch { /* private mode */ }
       }
       // With email confirmation on there is no session yet; with it off Supabase
       // signs the user straight in and onAuthStateChange takes over.
@@ -152,6 +174,24 @@ function SignupForm({ onNeedsConfirmation, onAlreadyRegistered, onSwitch, prefil
   return (
     <form onSubmit={submit} className="space-y-4">
       <Field label="Email" type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" />
+      <label className="block text-sm">
+        <span className="mb-1.5 block font-medium text-slate-700">Mobile number</span>
+        <div className="flex overflow-hidden rounded-xl border border-sand bg-white focus-within:border-moss focus-within:ring-4 focus-within:ring-blue-50">
+          <span className="flex items-center border-r border-sand bg-slate-50 px-3 text-sm font-semibold text-slate-600">{INDIA_COUNTRY_CODE}</span>
+          <input
+            type="tel"
+            inputMode="numeric"
+            autoComplete="tel-national"
+            required
+            maxLength={10}
+            value={mobile}
+            onChange={e => setMobile(normalizeIndiaMobileDigits(e.target.value).slice(0, 10))}
+            placeholder="9876543210"
+            className="w-full bg-transparent px-3 py-2.5 text-sm outline-none"
+          />
+        </div>
+        <span className="mt-1 block text-xs text-slate-400">10-digit Indian mobile. Country code {INDIA_COUNTRY_CODE} is fixed.</span>
+      </label>
       <Field label="Password" type="password" autoComplete="new-password" required minLength={8} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 8 characters" />
       <Field label="Confirm password" type="password" autoComplete="new-password" required value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Retype your password" />
       <Alert tone="error">{error}</Alert>

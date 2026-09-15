@@ -226,11 +226,15 @@ function saveBlob(blob, fileName) {
   const link = document.createElement('a')
   link.href = url
   link.download = fileName
-  link.style.display = 'none'
+  link.rel = 'noopener'
+  link.style.position = 'fixed'
+  link.style.left = '-9999px'
   document.body.appendChild(link)
-  link.click()
-  link.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 10000)
+  link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+  setTimeout(() => {
+    link.remove()
+    URL.revokeObjectURL(url)
+  }, 60_000)
 }
 
 function captureTargets() {
@@ -422,6 +426,45 @@ function stripUnsupportedCssFunctions(css) {
       i = j
     }
     out = result
+  }
+  return out
+}
+
+/**
+ * Browser @media print rules set sheets to height:auto and re-break tables —
+ * that fights the live A4 pack. PDF export must keep the preview pages as-is.
+ */
+function stripPrintMediaBlocks(css) {
+  const source = String(css || '')
+  let out = ''
+  let i = 0
+  while (i < source.length) {
+    const at = source.toLowerCase().indexOf('@media', i)
+    if (at < 0) {
+      out += source.slice(i)
+      break
+    }
+    out += source.slice(i, at)
+    const brace = source.indexOf('{', at)
+    if (brace < 0) {
+      out += source.slice(at)
+      break
+    }
+    const prelude = source.slice(at, brace)
+    let depth = 0
+    let j = brace
+    for (; j < source.length; j++) {
+      if (source[j] === '{') depth++
+      else if (source[j] === '}') {
+        depth--
+        if (depth === 0) {
+          j++
+          break
+        }
+      }
+    }
+    if (!/\bprint\b/i.test(prelude)) out += source.slice(at, j)
+    i = j
   }
   return out
 }
@@ -843,14 +886,31 @@ export async function buildPreviewExportHtml() {
   bakeFieldValues(source, clone)
   hideCaptureChrome(clone)
   await inlineImages(clone)
-  const { css } = collectStyles()
+  const { css: rawCss } = collectStyles()
+  // Drop @media print — it reflows sheets (height:auto) and breaks preview pagination.
+  const css = stripPrintMediaBlocks(stripUnsupportedCssFunctions(rawCss))
   const pageCss = `
-    @page { size: A4; margin: 0; }
-    html, body { margin: 0; padding: 0; background: #fff; }
+    @page { size: 210mm 297mm; margin: 0; }
+    @page qg-studio { size: 210mm 297mm; margin: 0; }
+    html, body { margin: 0; padding: 0; background: #fff; zoom: 1 !important; }
     .no-print { display: none !important; }
+    .qg-sheet-run-header.no-print,
+    .qg-sheet-run-footer.no-print { display: flex !important; }
     .qg-col-title, .qg-col-title--capture { display: inline !important; }
-    .qg-studio-canvas { padding: 0 !important; overflow: visible !important; background: #fff !important; }
-    .qg-studio-paper-frame { gap: 0 !important; width: 210mm !important; max-width: 210mm !important; zoom: 1 !important; }
+    .qg-studio-canvas {
+      padding: 0 !important;
+      overflow: visible !important;
+      background: #fff !important;
+      container-type: normal !important;
+      page: qg-studio;
+    }
+    .qg-studio-paper-frame {
+      gap: 0 !important;
+      width: 210mm !important;
+      max-width: 210mm !important;
+      zoom: 1 !important;
+      transform: none !important;
+    }
     .qg-studio-paper {
       width: 210mm !important;
       height: 297mm !important;
@@ -859,12 +919,16 @@ export async function buildPreviewExportHtml() {
       overflow: hidden !important;
       box-shadow: none !important;
       border-radius: 0 !important;
-      page-break-after: always;
-      break-after: page;
+      page-break-after: always !important;
+      break-after: page !important;
+      page-break-inside: avoid !important;
+      break-inside: avoid !important;
       display: flex !important;
       flex-direction: column !important;
+      zoom: 1 !important;
+      transform: none !important;
     }
-    .qg-studio-paper:last-child { page-break-after: auto; break-after: auto; }
+    .qg-studio-paper:last-child { page-break-after: auto !important; break-after: auto !important; }
     .qg-paper-plate,
     .qg-page-section,
     [data-qg-block="closing"] {
@@ -873,25 +937,30 @@ export async function buildPreviewExportHtml() {
       flex: 1 1 auto !important;
       min-height: 0 !important;
       overflow: hidden !important;
+      height: auto !important;
     }
     [data-qg-block="closing"] > .qg-footer-image-wrap {
       margin-top: auto !important;
-      margin-bottom: 0 !important;
+      margin-bottom: 10px !important;
       flex: 0 0 auto !important;
+    }
+    .qg-paper-plate {
+      padding-bottom: 6px !important;
+      box-sizing: border-box !important;
     }
     .qg-footer-image { object-fit: contain !important; width: 100% !important; height: 100% !important; }
     img { object-fit: contain !important; }
-    .qg-sheet-run-header, .qg-sheet-run-footer { display: flex !important; }
     .qg-col-title { color: inherit !important; white-space: nowrap !important; }
+    .quote-items-table { page-break-inside: avoid !important; }
+    .quote-items-table tr { page-break-inside: avoid !important; }
   `
   const baseHref = document.baseURI || ''
   return `<!doctype html>
-<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
+<html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap"/>
-<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->
 <base href="${baseHref.replace(/"/g, '&quot;')}"/>
 <style>${css}\n${pageCss}</style>
 </head>
@@ -922,7 +991,7 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
   if (!html?.trim()) throw new Error('nothing on screen to export')
 
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
-  const timer = controller ? setTimeout(() => controller.abort(), 60000) : null
+  const timer = controller ? setTimeout(() => controller.abort(), 90000) : null
   let response
   try {
     response = await fetch('/api/quotation-pdf', {
@@ -949,8 +1018,16 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
     throw new Error(detail || `PDF export failed (${response.status})`)
   }
 
+  const contentType = String(response.headers.get('content-type') || '')
   const blob = await response.blob()
   if (!blob?.size) throw new Error('the PDF came back empty')
-  saveBlob(blob, fileName)
-  return blob.size
+  if (contentType.includes('json')) {
+    throw new Error('PDF export returned an error payload instead of a file')
+  }
+  // Force a real PDF mime so the browser treats it as a downloadable file.
+  const pdfBlob = blob.type === 'application/pdf'
+    ? blob
+    : new Blob([blob], { type: 'application/pdf' })
+  saveBlob(pdfBlob, fileName.endsWith('.pdf') ? fileName : `${fileName}.pdf`)
+  return pdfBlob.size
 }

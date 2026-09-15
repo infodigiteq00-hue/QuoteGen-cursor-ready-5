@@ -197,8 +197,12 @@ html, body { margin: 0 !important; padding: 0 !important; background: #fff !impo
 }
 [data-qg-block="closing"] > .qg-footer-image-wrap {
   margin-top: auto !important;
-  margin-bottom: 0 !important;
+  margin-bottom: 10px !important;
   flex: 0 0 auto !important;
+}
+.qg-paper-plate {
+  padding-bottom: 6px !important;
+  box-sizing: border-box !important;
 }
 .qg-footer-image,
 img.qg-footer-image {
@@ -230,9 +234,23 @@ input, textarea, select, .qg-inline-field {
     min-height: 297mm !important;
     max-height: 297mm !important;
     overflow: hidden !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
+  .qg-studio-paper:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+  .quote-items-table { page-break-inside: avoid !important; }
   [data-qg-block="closing"] > .qg-footer-image-wrap {
     margin-top: auto !important;
+    margin-bottom: 10px !important;
+  }
+  .qg-paper-plate {
+    padding-bottom: 6px !important;
+    box-sizing: border-box !important;
   }
 }
 </style>`
@@ -302,11 +320,10 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
 
   if (!executablePath) {
     try {
-      chromium = (await import('@sparticuz/chromium')).default
+      const chromium = (await import('@sparticuz/chromium')).default
       try { chromium.setGraphicsMode = false } catch { /* older builds */ }
       executablePath = await chromium.executablePath()
       args = [...chromium.args]
-      headless = true
     } catch (error) {
       throw pdfError(
         `No Chrome or Chromium was found on the server (${error?.message || 'CHROME_MISSING'}).`,
@@ -341,7 +358,8 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
     page.setDefaultTimeout(timeoutMs)
     await page.setViewport(viewport)
     await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: timeoutMs })
-    await page.emulateMediaType('print')
+    // Screen media keeps the live A4 pack. Print media sets height:auto and reflows pages.
+    await page.emulateMediaType('screen')
     const pdf = await page.pdf(pdfOptionsFor(timeoutMs))
     return assertPdf(Buffer.from(pdf))
   } finally {

@@ -1277,6 +1277,27 @@ function App() {
     if (authUser) refreshLandingData()
   }, [authUser])
 
+  // After email confirmation / first login, flush mobile captured at signup.
+  useEffect(() => {
+    if (!authUser) return
+    let pending = ''
+    try {
+      pending = sessionStorage.getItem('qg_pending_phone') || ''
+    } catch { /* private mode */ }
+    if (!pending) return
+    fetch('/api/me/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: pending })
+    })
+      .then(async (r) => {
+        if (r.ok || r.status === 409) {
+          try { sessionStorage.removeItem('qg_pending_phone') } catch { /* ignore */ }
+        }
+      })
+      .catch(() => {})
+  }, [authUser])
+
   useEffect(() => {
     if (!authUser) return
     fetch('/api/upload-templates')
@@ -1849,7 +1870,8 @@ function App() {
     team: ['Team', 'People who can make quotations'],
     account: ['Account', 'Your own details'],
     billing: ['Billing', 'Your plan'],
-    'feature-interest': ['Feature interest', 'Who asked for upcoming features']
+    'feature-interest': ['Feature interest', 'Who asked for upcoming features'],
+    'users-admin': ['Users', 'Onboarded accounts and quotation usage']
   }
   const [wsPageTitle, wsPageHint] = wsTitles[workspaceView] || wsTitles.home
 
@@ -2040,6 +2062,12 @@ function App() {
         {workspaceView === 'feature-interest' && (
           String(authUser.email || '').trim().toLowerCase() === 'info@digiteqsolution.com'
             ? <WsFeatureInterestAdmin />
+            : <p style={{ color: '#B03A3A', fontSize: 15 }}>Super admin only.</p>
+        )}
+
+        {workspaceView === 'users-admin' && (
+          String(authUser.email || '').trim().toLowerCase() === 'info@digiteqsolution.com'
+            ? <WsUsersAdmin />
             : <p style={{ color: '#B03A3A', fontSize: 15 }}>Super admin only.</p>
         )}
 
@@ -6823,7 +6851,10 @@ function WsSidebar({ view, onNav, onNewQuote, onOpenEditor, recentCount, authUse
     { id: 'team', label: 'Team', icon: WS_ICONS.users },
     { id: 'account', label: 'Account', icon: WS_ICONS.user },
     { id: 'billing', label: 'Billing', icon: WS_ICONS.card },
-    ...(isSuperAdmin ? [{ id: 'feature-interest', label: 'Feature interest', icon: WS_ICONS.spark }] : [])
+    ...(isSuperAdmin ? [
+      { id: 'users-admin', label: 'Users', icon: WS_ICONS.users },
+      { id: 'feature-interest', label: 'Feature interest', icon: WS_ICONS.spark }
+    ] : [])
   ]
   // On mobile the fixed 262px rail would eat almost the whole screen, so it
   // becomes an off-canvas drawer instead: unmounted when closed, an overlay
@@ -8250,6 +8281,232 @@ function WsInsights({ stats, topClients }) {
   )
 }
 
+function WsUsageBarChart({ series, emptyLabel = 'No quotations in this range' }) {
+  const rows = Array.isArray(series) ? series : []
+  const max = Math.max(1, ...rows.map(r => Number(r.count) || 0))
+  if (!rows.length) {
+    return <p style={{ margin: 0, fontSize: 14, color: '#94a3b8' }}>{emptyLabel}</p>
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, minHeight: 140, paddingTop: 8 }}>
+      {rows.map((r) => {
+        const h = Math.max(4, Math.round(((Number(r.count) || 0) / max) * 120))
+        return (
+          <div key={r.label} title={`${r.label}: ${r.count}`} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#1A73E8' }}>{r.count || ''}</div>
+            <div style={{ width: '100%', maxWidth: 28, height: h, borderRadius: '6px 6px 2px 2px', background: r.count ? 'linear-gradient(180deg,#4C8DF6,#1A73E8)' : '#E8EDF3' }} />
+            <div style={{ fontSize: 9, color: '#8A94A6', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+              {String(r.label).slice(-5)}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function WsUsersAdmin() {
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState('')
+  const [note, setNote] = React.useState('')
+  const [total, setTotal] = React.useState(0)
+  const [users, setUsers] = React.useState([])
+  const [selectedId, setSelectedId] = React.useState('')
+  const [usageLoading, setUsageLoading] = React.useState(false)
+  const [usageError, setUsageError] = React.useState('')
+  const [usage, setUsage] = React.useState(null)
+  const [range, setRange] = React.useState('day')
+  const detailsRef = React.useRef(null)
+
+  const load = React.useCallback(() => {
+    setLoading(true)
+    setError('')
+    fetch('/api/admin/users')
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(data.error || data.message || `Could not load users (${r.status})`)
+        setTotal(data.total || 0)
+        setUsers(Array.isArray(data.users) ? data.users : [])
+        setNote(data.note || '')
+      })
+      .catch((e) => setError(e.message || 'Could not load users'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  React.useEffect(() => { load() }, [load])
+
+  React.useEffect(() => {
+    if (!selectedId) return
+    const t = setTimeout(() => {
+      detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }, 50)
+    return () => clearTimeout(t)
+  }, [selectedId, usageLoading, usage, usageError])
+
+  const openDetails = (userId) => {
+    setSelectedId(userId)
+    setUsage(null)
+    setUsageError('')
+    setUsageLoading(true)
+    setRange('day')
+    fetch(`/api/admin/users/${encodeURIComponent(userId)}/usage`)
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(data.error || data.message || `Could not load usage (${r.status})`)
+        setUsage(data)
+      })
+      .catch((e) => setUsageError(e.message || 'Could not load usage'))
+      .finally(() => setUsageLoading(false))
+  }
+
+  const series = usage?.series?.[range] || []
+
+  const detailsPanel = selectedId ? (
+    <div
+      ref={detailsRef}
+      style={{ marginTop: 10, background: '#fff', border: '1.5px solid #1A73E8', borderRadius: 16, padding: 20 }}
+    >
+      {usageLoading && <p style={{ margin: 0, color: '#6B7688' }}>Loading usage…</p>}
+      {usageError && (
+        <p style={{ margin: 0, borderRadius: 10, background: '#FDF2F2', border: '1px solid #E7CFCF', padding: '10px 14px', fontSize: 14, color: '#B03A3A' }}>{usageError}</p>
+      )}
+      {usage && !usageLoading && (
+        <>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, justifyContent: 'space-between', marginBottom: 18 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8' }}>Usage details</div>
+              <div style={{ fontSize: 20, fontWeight: 800, marginTop: 6, color: '#1a202c', wordBreak: 'break-all' }}>{usage.user?.email || '—'}</div>
+              <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 6 }}>Mobile: {usage.user?.phone || 'Not set'}</div>
+              <div style={{ fontSize: 13, color: '#8A94A6', marginTop: 4 }}>Password: not available (Auth stores hashes only)</div>
+            </div>
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+              {[
+                ['All time', usage.totals?.allTime],
+                ['30 days', usage.totals?.last30Days],
+                ['12 weeks', usage.totals?.last12Weeks],
+                ['12 months', usage.totals?.last12Months]
+              ].map(([label, value]) => (
+                <div key={label} style={{ minWidth: 88, padding: '10px 12px', borderRadius: 12, background: '#F5F9FF', border: '1px solid #E7EEFB' }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#6B7688' }}>{label}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: '#1A73E8' }}>{value ?? 0}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+            {[
+              ['day', 'Days'],
+              ['week', 'Weeks'],
+              ['month', 'Months']
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setRange(id)}
+                style={{
+                  minHeight: 36,
+                  padding: '0 14px',
+                  borderRadius: 999,
+                  border: range === id ? '0' : '1.5px solid #D5DDE9',
+                  background: range === id ? '#1A73E8' : '#fff',
+                  color: range === id ? '#fff' : '#3D4859',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <WsUsageBarChart series={series} />
+
+          <div style={{ marginTop: 22 }}>
+            <div style={{ fontSize: 15, fontWeight: 750, marginBottom: 10 }}>Recent quotations</div>
+            {(usage.recent || []).length === 0 ? (
+              <p style={{ margin: 0, fontSize: 14, color: '#94a3b8' }}>No quotations yet.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {usage.recent.map((q) => (
+                  <div key={q.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '10px 12px', borderRadius: 10, border: '1px solid #EDF1F7', background: '#FBFCFE' }}>
+                    <div style={{ fontSize: 14, fontWeight: 650, color: '#1a202c' }}>{q.number || q.title || q.id}</div>
+                    <div style={{ fontSize: 12.5, color: '#8A94A6', whiteSpace: 'nowrap' }}>{q.createdAt ? new Date(q.createdAt).toLocaleString() : ''}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  ) : null
+
+  return (
+    <div style={{ maxWidth: 980, display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 26 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8' }}>Super admin</div>
+            <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: '#1a202c' }}>Onboarded users</div>
+            <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4 }}>Accounts signed up for QuoteGen, with email, mobile, and quotation counts.</div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#6B7688' }}>Total signed up</div>
+            <div style={{ fontSize: 36, fontWeight: 800, color: '#1A73E8', letterSpacing: '-0.03em', lineHeight: 1 }}>{loading ? '…' : total}</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={load}
+          disabled={loading}
+          style={{ marginTop: 16, minHeight: 42, padding: '0 16px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#3D4859', opacity: loading ? 0.6 : 1 }}
+        >
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
+        {note && <p style={{ marginTop: 12, fontSize: 13, color: '#8A94A6' }}>{note}</p>}
+        {error && (
+          <p style={{ marginTop: 14, borderRadius: 10, background: '#FDF2F2', border: '1px solid #E7CFCF', padding: '10px 14px', fontSize: 14, color: '#B03A3A' }}>{error}</p>
+        )}
+      </section>
+
+      <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 22 }}>
+        <div style={{ fontSize: 15, fontWeight: 750, marginBottom: 12 }}>User list</div>
+        {!loading && users.length === 0 && !error && (
+          <p style={{ margin: 0, fontSize: 14.5, color: '#94a3b8' }}>No users yet.</p>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {users.map((u) => (
+            <div key={u.id}>
+              <div
+                style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderRadius: 12, border: '1px solid #EDF1F7', background: '#FBFCFE' }}
+              >
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#1a202c', wordBreak: 'break-all' }}>{u.email || '(no email)'}</div>
+                  <div style={{ marginTop: 4, fontSize: 13, color: '#6B7688' }}>
+                    {u.phone || 'Mobile not set'} · {u.quotationCount} quotation{u.quotationCount === 1 ? '' : 's'}
+                  </div>
+                  <div style={{ marginTop: 2, fontSize: 12, color: '#8A94A6' }}>
+                    Joined {u.createdAt ? new Date(u.createdAt).toLocaleString() : '—'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openDetails(u.id)}
+                  style={{ minHeight: 40, padding: '0 14px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', color: '#1A73E8' }}
+                >
+                  {selectedId === u.id ? (usageLoading ? 'Loading…' : 'Details') : 'Details'}
+                </button>
+              </div>
+              {selectedId === u.id ? detailsPanel : null}
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function WsFeatureInterestAdmin() {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState('')
@@ -8321,14 +8578,88 @@ function WsFeatureInterestAdmin() {
 }
 
 function WsAccountSettings({ email, onSignOut }) {
+  const [phone, setPhone] = React.useState('')
+  const [savedPhone, setSavedPhone] = React.useState('')
+  const [loading, setLoading] = React.useState(true)
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState('')
+  const [message, setMessage] = React.useState('')
+
+  React.useEffect(() => {
+    setLoading(true)
+    fetch('/api/me/profile')
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(data.error || 'Could not load profile')
+        const digits = data.profile?.phoneDigits || ''
+        setPhone(digits)
+        setSavedPhone(digits)
+      })
+      .catch((e) => setError(e.message || 'Could not load profile'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const savePhone = async (e) => {
+    e.preventDefault()
+    setError('')
+    setMessage('')
+    setSaving(true)
+    try {
+      const response = await fetch('/api/me/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone })
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || data.message || 'Could not save mobile')
+      const digits = data.profile?.phoneDigits || phone
+      setPhone(digits)
+      setSavedPhone(digits)
+      setMessage('Mobile number saved.')
+    } catch (err) {
+      setError(err.message || 'Could not save mobile')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
-    <div style={{ maxWidth: 880 }}>
+    <div style={{ maxWidth: 880, display: 'flex', flexDirection: 'column', gap: 16 }}>
       <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 26, display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center' }}>
         <div style={{ flex: 1, minWidth: 240 }}>
           <div style={{ fontSize: 17, fontWeight: 750 }}>Signed in as</div>
           <div style={{ fontSize: 15, color: '#6B7688', marginTop: 4 }}>{email}</div>
         </div>
         <button onClick={onSignOut} style={{ minHeight: 54, padding: '0 24px', border: '1.5px solid #E7CFCF', borderRadius: 13, background: '#fff', color: '#B03A3A', fontSize: 16.5, fontWeight: 700, cursor: 'pointer' }}>Sign out</button>
+      </section>
+
+      <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 26 }}>
+        <div style={{ fontSize: 17, fontWeight: 750, marginBottom: 6 }}>Mobile number</div>
+        <p style={{ margin: '0 0 14px', fontSize: 14, color: '#6B7688' }}>India (+91). Used for your account contact details.</p>
+        <form onSubmit={savePhone} style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <div style={{ display: 'flex', overflow: 'hidden', border: '1.5px solid #D5DDE9', borderRadius: 12, background: '#fff', minWidth: 240 }}>
+            <span style={{ display: 'flex', alignItems: 'center', padding: '0 12px', borderRight: '1px solid #E8EDF3', background: '#F7F9FC', fontSize: 14, fontWeight: 700, color: '#4C5768' }}>+91</span>
+            <input
+              type="tel"
+              inputMode="numeric"
+              maxLength={10}
+              disabled={loading || saving}
+              value={phone}
+              onChange={(e) => setPhone(String(e.target.value || '').replace(/\D/g, '').slice(0, 10))}
+              placeholder="9876543210"
+              style={{ border: 0, outline: 'none', padding: '12px 14px', fontSize: 15, minWidth: 160, background: 'transparent' }}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={loading || saving || phone === savedPhone || phone.length !== 10}
+            style={{ ...wsPrimaryBtn, minHeight: 46, padding: '0 18px', fontSize: 15, opacity: (loading || saving || phone === savedPhone || phone.length !== 10) ? 0.55 : 1 }}
+          >
+            {saving ? 'Saving…' : 'Save mobile'}
+          </button>
+        </form>
+        {error && <p style={{ marginTop: 12, fontSize: 14, color: '#B03A3A' }}>{error}</p>}
+        {message && <p style={{ marginTop: 12, fontSize: 14, color: '#1A73E8' }}>{message}</p>}
       </section>
     </div>
   )

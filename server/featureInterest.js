@@ -1,5 +1,6 @@
 import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { sendAdminEmail } from './mail.js'
+import { isSuperAdmin } from './superAdmin.js'
 
 const CUSTOM_UPLOAD_FEATURE = 'custom_upload'
 
@@ -12,15 +13,6 @@ function requireDb(res, requestId) {
     return null
   }
   return getSupabase()
-}
-
-function superAdminEmails() {
-  const raw = process.env.SUPER_ADMIN_EMAILS || 'info@digiteqsolution.com'
-  return raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
-}
-
-function isSuperAdmin(email) {
-  return superAdminEmails().includes(String(email || '').trim().toLowerCase())
 }
 
 function migrationRequired(res, requestId) {

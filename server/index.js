@@ -15,6 +15,8 @@ import { registerHsnGstRoutes } from './hsnGst.js'
 import { registerQuoteAssetRoutes, registerPublicQuoteAssetRoutes } from './quoteAssets.js'
 import { registerPdfRoutes } from './pdfExport.js'
 import { registerFeatureInterestRoutes } from './featureInterest.js'
+import { registerUserProfileRoutes } from './userProfile.js'
+import { registerAdminUserRoutes } from './adminUsers.js'
 import { getSupabase, isSupabaseConfigured } from './db.js'
 import { aiFillableColumns, blankItemFor, normalizeColumnList } from '../shared/quoteColumns.js'
 import { suggestFormulaFromAsk, validateFormulaDraft } from '../shared/formulaAssistant.js'
@@ -53,6 +55,8 @@ registerHsnGstRoutes(app)
 registerQuoteAssetRoutes(app)
 registerPdfRoutes(app)
 registerFeatureInterestRoutes(app)
+registerUserProfileRoutes(app)
+registerAdminUserRoutes(app)
 
 const DEFAULT_DATA_COLUMNS = [
   { id: 'description', label: 'Description' },

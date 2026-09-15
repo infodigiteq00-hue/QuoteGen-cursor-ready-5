@@ -159,16 +159,40 @@ export async function signIn(email, password) {
   return data
 }
 
-export async function signUp(email, password) {
+export async function signUp(email, password, { phoneDigits, phoneE164 } = {}) {
   assertConfigured()
+  const meta = {}
+  if (phoneDigits) meta.phone_digits = phoneDigits
+  if (phoneE164) meta.phone_e164 = phoneE164
+  if (phoneE164) meta.phone = phoneE164
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: { emailRedirectTo: emailRedirectTo() }
+    options: {
+      emailRedirectTo: emailRedirectTo(),
+      data: Object.keys(meta).length ? meta : undefined
+    }
   })
   if (error) throw new Error(authErrorMessage(error))
   const alreadyRegistered = isExistingConfirmedUser(data.user)
-  return { session: data.session, alreadyRegistered, needsConfirmation: !data.session && !alreadyRegistered }
+  return {
+    session: data.session,
+    user: data.user,
+    alreadyRegistered,
+    needsConfirmation: !data.session && !alreadyRegistered
+  }
+}
+
+/** Persist India mobile on user_profiles (service-role API). Call when a session exists. */
+export async function saveUserPhone(phoneDigits) {
+  const response = await fetch('/api/me/profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone: phoneDigits })
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.error || data.message || 'Could not save mobile number')
+  return data
 }
 
 export async function resendConfirmation(email) {

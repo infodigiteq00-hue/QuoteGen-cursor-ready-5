@@ -6,10 +6,10 @@ export const A4_HEIGHT_PX = 1123
 
 /** Keep body content clear of the sheet run header/footer chrome. */
 export const A4_CONTENT_TOP_MARGIN = 10
-/** Packer reserve under last content — larger than CSS inset so signatory never clips the plate. */
-export const A4_CONTENT_BOTTOM_MARGIN = 64
+/** Packer reserve under last content — leave room so signatory + brand footer aren’t clipped. */
+export const A4_CONTENT_BOTTOM_MARGIN = 80
 /** If closing almost fits, absorb this much overflow instead of a near-empty page. */
-export const A4_CLOSING_SQUEEZE_PX = 48
+export const A4_CLOSING_SQUEEZE_PX = 28
 
 function num(value, fallback = 0) {
   const n = Number(value)
