@@ -1,8 +1,12 @@
+# Prefer Nixpacks so Railway injects VITE_* env into the Vite build
+# (same as before). Dockerfile Chromium path can be re-enabled later.
 [build]
-builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
+builder = "NIXPACKS"
 
-[deploy]
-healthcheckPath = "/api/quotation-pdf/status"
-healthcheckTimeout = 30
-restartPolicyType = "ON_FAILURE"
+[phases.setup]
+nixPkgs = ["chromium", "nss", "dejavu_fonts"]
+
+[variables]
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
+PDF_USE_SPAWN = "0"
+PDF_TIMEOUT_MS = "45000"

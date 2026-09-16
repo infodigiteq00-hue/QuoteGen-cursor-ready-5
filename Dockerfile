@@ -1,5 +1,6 @@
-# Production image with a real Chromium for PDF export (Railway).
-# Local Mac still uses the system Chrome via CHROME_PATH / findChrome().
+# Optional Chromium image for PDF export (not used while railway.toml is on NIXPACKS).
+# When enabling: set builder = "DOCKERFILE" and ensure Railway has
+# VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY available at build time.
 FROM node:20-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -17,8 +18,13 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-# Need vite (devDependency) for `npm run build`, then prune for runtime.
 RUN npm ci
+
+# Vite bakes these into the browser bundle — must be present during build.
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
+    VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
 
 COPY . .
 RUN npm run build \
