@@ -1002,7 +1002,7 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
     })
   } catch (error) {
     if (error?.name === 'AbortError') {
-      throw new Error('Live PDF engine timed out. Wait for the new deploy to finish, hard-refresh, and try again.')
+      throw new Error('PDF is taking too long on the live server. Hard-refresh and try again — if it keeps hanging, the Chromium render is stuck (usually network fonts/images).')
     }
     throw error
   } finally {

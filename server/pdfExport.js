@@ -211,11 +211,15 @@ function stripPrintMediaBlocks(cssOrHtml) {
 
 function prepareExportHtml(html) {
   // Strip print reflow rules from every <style> block the client posted.
-  const cleaned = String(html || '').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, (block) => {
+  let cleaned = String(html || '').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, (block) => {
     const open = block.match(/^<style\b[^>]*>/i)?.[0] || '<style>'
     const inner = block.replace(/^<style\b[^>]*>/i, '').replace(/<\/style>$/i, '')
     return `${open}${stripPrintMediaBlocks(inner)}</style>`
   })
+  // External fonts/CSS can hang Chromium on Railway (outbound DNS/TLS stalls).
+  cleaned = cleaned
+    .replace(/<link\b[^>]*href=["']https?:\/\/[^"']+["'][^>]*>/gi, '')
+    .replace(/<script\b[^>]*src=["']https?:\/\/[^"']+["'][^>]*>\s*<\/script>/gi, '')
   const marked = cleaned.includes('qg-pdf-export-v2')
     ? cleaned
     : cleaned.replace(/<head([^>]*)>/i, '<head$1><!-- qg-pdf-export-v2: preview-pack screen media -->')
@@ -387,8 +391,11 @@ async function resolveChromium(systemBinary) {
     '--no-first-run',
     '--no-default-browser-check',
     '--force-color-profile=srgb',
-    '--single-process',
+    '--disable-background-networking',
+    '--disable-extensions',
+    '--disable-sync',
     '--disable-software-rasterizer'
+    // Do NOT use --single-process: it often deadlocks page.pdf() on Railway.
   ]
 
   if (systemBinary) {
@@ -458,6 +465,17 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
       const page = await browser.newPage()
       page.setDefaultTimeout(timeoutMs)
       await page.setViewport(viewport)
+      // Preview HTML is self-contained (images inlined). Block outbound net so
+      // fonts.googleapis / broken Storage URLs cannot hang the live render.
+      await page.setRequestInterception(true)
+      page.on('request', (req) => {
+        const url = req.url()
+        if (url.startsWith('file:') || url.startsWith('data:') || url.startsWith('blob:')) {
+          req.continue().catch(() => {})
+          return
+        }
+        req.abort('blockedbyclient').catch(() => {})
+      })
       // File URL is far more reliable than setContent() for multi‑MB preview HTML on Railway.
       await page.goto(pathToFileURL(htmlPath).href, {
         waitUntil: 'domcontentloaded',
@@ -584,6 +602,11 @@ export function registerPdfRoutes(app) {
     const started = Date.now()
     const status = pdfEngineStatus()
     try {
+      console.info(`[${requestId}] quotation PDF start`, {
+        user: req.userId,
+        htmlChars: html.length,
+        chromePath: status.chromePath || '(sparticuz)'
+      })
       const pdf = await renderHtmlToPdf(html)
       console.info(`[${requestId}] quotation PDF rendered`, {
         user: req.userId,
