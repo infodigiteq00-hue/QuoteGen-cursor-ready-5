@@ -717,7 +717,7 @@ export function QuoteStudioToolbar({
   watermarkEnabled = true, onWatermarkChange,
   saveFlash, saveStatusLabel,
   onSaveFlash,
-  onExport, pdfBusy
+  onExport, pdfBusy, pdfNote
 }) {
   const swatches = tableColorSwatches(logoPalette)
   const [fontDraft, setFontDraft] = React.useState(String(paperFontPx))
@@ -816,6 +816,15 @@ export function QuoteStudioToolbar({
         <PreviewPdfButton onExport={onExport} busy={pdfBusy} variant="header" />
         <ExportMenu onExport={onExport} busy={pdfBusy} label="Export" variant="header" />
       </div>
+      {pdfNote ? (
+        <div
+          role="alert"
+          className="basis-full mt-2 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-800"
+          style={{ wordBreak: 'break-word' }}
+        >
+          <strong style={{ fontWeight: 800 }}>PDF error:</strong> {pdfNote}
+        </div>
+      ) : null}
     </div>
   )
 }

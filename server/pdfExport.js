@@ -627,7 +627,9 @@ export function registerPdfRoutes(app) {
       res.status(error?.status || 500).json({
         error: error?.message || 'PDF generation failed.',
         code: error?.code || 'PDF_ERROR',
-        requestId
+        requestId,
+        chromePath: status.chromePath || null,
+        ms: Date.now() - started
       })
     }
   })

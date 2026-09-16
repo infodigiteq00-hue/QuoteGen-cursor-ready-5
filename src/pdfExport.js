@@ -1012,15 +1012,35 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
   if (!response.ok) {
     let detail = ''
     let code = ''
+    let requestId = ''
+    let chromePath = ''
     try {
       const payload = await response.json()
       detail = payload?.error || payload?.message || ''
       code = payload?.code || ''
+      requestId = payload?.requestId || ''
+      chromePath = payload?.chromePath || ''
     } catch { /* ignore */ }
+
+    let engineHint = ''
+    try {
+      const statusRes = await fetch('/api/quotation-pdf/status')
+      const status = await statusRes.json().catch(() => ({}))
+      if (status?.chromePath) chromePath = chromePath || status.chromePath
+      else if (!chromePath) chromePath = '(none — sparticuz fallback or missing)'
+    } catch { /* ignore */ }
+
+    const parts = [
+      detail || `PDF export failed (HTTP ${response.status})`,
+      code ? `code=${code}` : '',
+      requestId ? `id=${requestId}` : '',
+      chromePath ? `chrome=${chromePath}` : ''
+    ].filter(Boolean)
+
     if (code === 'CHROME_MISSING' || code === 'CHROME_SPAWN_FAILED') {
-      throw new Error(detail || 'Live server could not start Chrome for PDF. Redeploy with the Chromium Docker image.')
+      throw new Error(`${parts.join(' · ')} — live server could not start Chrome for PDF.`)
     }
-    throw new Error(detail || `PDF export failed (${response.status})`)
+    throw new Error(parts.join(' · '))
   }
 
   const contentType = String(response.headers.get('content-type') || '')

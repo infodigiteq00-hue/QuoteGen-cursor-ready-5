@@ -5398,7 +5398,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       await downloadQuotationPdf(quotationFileName(quote, 'pdf'))
     } catch (error) {
       if (kind === 'pdf' || kind === 'preview-pdf' || !kind) {
-        setPdfNote(`Could not build the PDF — ${error.message}`)
+        setPdfNote(error.message || 'Could not build the PDF')
       } else {
         setPdfNote(`Could not export ${kind === 'word' ? 'Word' : 'Excel'} — ${error.message}.`)
       }
@@ -6055,6 +6055,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       onSaveFlash={() => flashSave(saveStatusLabel(saveStatus))}
       onExport={handleExport}
       pdfBusy={pdfBusy}
+      pdfNote={pdfNote}
     />
 
     {advancedOpen && (
