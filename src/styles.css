@@ -1215,6 +1215,17 @@ body.qg-export-dock-on .qg-commands-fab {
   transform: translateY(-1px);
 }
 .qg-ready-export-btn:disabled { opacity: 0.65; cursor: wait; }
+.qg-ready-export-btn.qg-preview-pdf-btn {
+  background: #fff;
+  color: #1A73E8;
+  border: 1.5px solid #1A73E8;
+  box-shadow: none;
+}
+.qg-ready-export-btn.qg-preview-pdf-btn:hover:not(:disabled) {
+  background: #F5F9FF;
+  color: #1558b0;
+  transform: translateY(-1px);
+}
 
 /* ── Advanced tools panel ── */
 .qg-advanced-panel {

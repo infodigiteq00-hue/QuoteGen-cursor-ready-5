@@ -37,7 +37,7 @@ import { splitWordHtmlPages, joinWordHtmlPages } from '../shared/uploadWordPages
 import { lookupHsnGst, listQuotations, listProducts } from './quotePersistence.js'
 import { downloadQuotationPdf, quotationFileName } from './pdfExport.js'
 import { downloadFilledExcelSheets, downloadHtmlAsWord, downloadQuotationExcel, downloadQuotationWord } from './officeExport.js'
-import { ExportMenu } from './QuoteStudio.jsx'
+import { ExportMenu, PreviewPdfButton } from './QuoteStudio.jsx'
 import BrandMark from './BrandMark.jsx'
 import { resolvePaperTheme, accentForTableColor } from './quotePaperThemes.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
@@ -1539,6 +1539,7 @@ export default function UploadedTemplateQuote({
           <div className="flex items-center gap-2">
             <button onClick={onNew} className="hidden rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 sm:block">New quotation</button>
             <button onClick={onRetry} className="rounded-lg border border-sand px-3 py-2 text-sm font-medium text-moss">↻ Retry AI</button>
+            <PreviewPdfButton onExport={handleExport} busy={pdfBusy} variant="header" />
             <ExportMenu onExport={handleExport} busy={pdfBusy} label="Export" variant="header" />
           </div>
         </div>

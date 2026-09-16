@@ -620,7 +620,7 @@ export function ExportMenu({ onExport, busy, label = 'Export', variant = 'primar
   }, [open, opensUp])
 
   const formats = [
-    { id: 'pdf', name: 'PDF', hint: 'A4 pages — same layout as the preview' },
+    { id: 'pdf', name: 'Download preview in PDF', hint: 'Exact pages as on screen — light vector PDF' },
     { id: 'word', name: 'Word', hint: '.doc — A4, same layout as the preview' },
     { id: 'excel', name: 'Excel', hint: '.xlsx — A4, same layout as the preview' }
   ]
@@ -687,6 +687,26 @@ function clampFontSize(value, fallback) {
   const n = parseInt(String(value).trim(), 10)
   if (!Number.isFinite(n)) return fallback
   return Math.max(FONT_SIZE_MIN, Math.min(FONT_SIZE_MAX, n))
+}
+
+/* Quick one-click: live preview → lightweight vector PDF (not screenshots). */
+export function PreviewPdfButton({ onExport, busy, variant = 'header' }) {
+  const buttonClass = variant === 'footer'
+    ? 'qg-ready-export-btn qg-preview-pdf-btn'
+    : variant === 'header'
+      ? 'rounded-lg border border-[#1A73E8] bg-white px-4 py-2 text-sm font-semibold text-[#1A73E8] shadow-sm hover:bg-[#F5F9FF] disabled:opacity-60'
+      : 'rounded-xl border border-[#1A73E8] bg-white px-5 py-2 text-sm font-semibold text-[#1A73E8] shadow-sm hover:bg-[#F5F9FF] disabled:opacity-60'
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => onExport?.('pdf')}
+      className={buttonClass}
+      title="Download the quotation exactly as you see it in the preview"
+    >
+      {busy ? 'Preparing PDF…' : 'Download preview in PDF'}
+    </button>
+  )
 }
 
 export function QuoteStudioToolbar({
@@ -788,11 +808,12 @@ export function QuoteStudioToolbar({
           <span>px</span>
         </div>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={onSaveFlash}
           className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
           Save
         </button>
+        <PreviewPdfButton onExport={onExport} busy={pdfBusy} variant="header" />
         <ExportMenu onExport={onExport} busy={pdfBusy} label="Export" variant="header" />
       </div>
     </div>
@@ -841,7 +862,10 @@ export function QuoteStudioFooterBar({ onExport, pdfBusy, onHome }) {
         <button type="button" onClick={onHome} className="text-sm font-medium text-slate-500 hover:text-slate-700">
           ← Back to home
         </button>
-        <ExportMenu onExport={onExport} busy={pdfBusy} label="Ready to export" variant="footer" />
+        <div className="flex flex-wrap items-center gap-2">
+          <PreviewPdfButton onExport={onExport} busy={pdfBusy} variant="footer" />
+          <ExportMenu onExport={onExport} busy={pdfBusy} label="Ready to export" variant="footer" />
+        </div>
       </div>
     </>
   )

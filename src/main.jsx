@@ -5381,7 +5381,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     }
   }
 
-  /** PDF = Chrome print (untouched). Excel = live preview pages + Items. Word = editable HTML. */
+  /** Preview PDF = live A4 sheets as vector PDF. Excel/Word keep their own paths. */
   const handleExport = async (kind) => {
     setPdfBusy(true)
     setPdfNote('')
@@ -5394,9 +5394,10 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         await downloadQuotationExcel({ quote, profile, columns, totals: quoteTotals, theme: paperTheme, docLabel })
         return
       }
+      // pdf / preview-pdf — exact preview pages, light PDF (not PNG screenshots)
       await downloadQuotationPdf(quotationFileName(quote, 'pdf'))
     } catch (error) {
-      if (kind === 'pdf' || !kind) {
+      if (kind === 'pdf' || kind === 'preview-pdf' || !kind) {
         setPdfNote(`Could not build the PDF — ${error.message}`)
       } else {
         setPdfNote(`Could not export ${kind === 'word' ? 'Word' : 'Excel'} — ${error.message}.`)

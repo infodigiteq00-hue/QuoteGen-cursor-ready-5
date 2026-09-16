@@ -15,7 +15,7 @@ import { formatKeywords } from '../shared/productKeywords.js'
 
 const LOGO_BUCKET = 'company-assets'
 const MAX_LOGO_BYTES = 1.5 * 1024 * 1024
-const INLINE_IMAGE_MAX = 400 * 1024
+const INLINE_IMAGE_MAX = 1200 * 1024
 const logoUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_LOGO_BYTES }
@@ -87,8 +87,11 @@ async function displayImageUrl(supabase, url, path) {
 async function presentCompanyProfile(supabase, row) {
   const profile = mapCompanyProfile(row)
   if (!profile) return null
+  // Inline branding so PDF / preview never depend on private or flaky Storage URLs.
   profile.logoUrl = await displayImageUrl(supabase, profile.logoUrl, profile.logoPath)
   profile.bankQrUrl = await displayImageUrl(supabase, profile.bankQrUrl, profile.bankQrPath)
+  profile.headerImageUrl = await displayImageUrl(supabase, profile.headerImageUrl, profile.headerImagePath)
+  profile.footerImageUrl = await displayImageUrl(supabase, profile.footerImageUrl, profile.footerImagePath)
   return profile
 }
 
@@ -1054,7 +1057,7 @@ If something isn't specified, keep the current value.`
           .select('*')
           .single()
         if (error) throw error
-        res.json({ profile: mapCompanyProfile(data) })
+        res.json({ profile: await presentCompanyProfile(supabase, data) })
       } catch (error) {
         supabaseError(error, res, requestId)
       }
@@ -1082,7 +1085,7 @@ If something isn't specified, keep the current value.`
         .select('*')
         .single()
       if (error) throw error
-      res.json({ profile: mapCompanyProfile(data) })
+      res.json({ profile: await presentCompanyProfile(supabase, data) })
     } catch (error) {
       supabaseError(error, res, requestId)
     }

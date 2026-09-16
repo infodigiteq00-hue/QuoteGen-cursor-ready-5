@@ -150,6 +150,55 @@ function viewportForPage(size) {
   return { width, height, deviceScaleFactor: 1 }
 }
 
+/** Drop browser @media print blocks — they set height:auto and reflow A4 packs. */
+function stripPrintMediaBlocks(cssOrHtml) {
+  const source = String(cssOrHtml || '')
+  let out = ''
+  let i = 0
+  while (i < source.length) {
+    const at = source.toLowerCase().indexOf('@media', i)
+    if (at < 0) {
+      out += source.slice(i)
+      break
+    }
+    out += source.slice(i, at)
+    const brace = source.indexOf('{', at)
+    if (brace < 0) {
+      out += source.slice(at)
+      break
+    }
+    const prelude = source.slice(at, brace)
+    let depth = 0
+    let j = brace
+    for (; j < source.length; j++) {
+      if (source[j] === '{') depth++
+      else if (source[j] === '}') {
+        depth--
+        if (depth === 0) {
+          j++
+          break
+        }
+      }
+    }
+    if (!/\bprint\b/i.test(prelude)) out += source.slice(at, j)
+    i = j
+  }
+  return out
+}
+
+function prepareExportHtml(html) {
+  // Strip print reflow rules from every <style> block the client posted.
+  const cleaned = String(html || '').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, (block) => {
+    const open = block.match(/^<style\b[^>]*>/i)?.[0] || '<style>'
+    const inner = block.replace(/^<style\b[^>]*>/i, '').replace(/<\/style>$/i, '')
+    return `${open}${stripPrintMediaBlocks(inner)}</style>`
+  })
+  const marked = cleaned.includes('qg-pdf-export-v2')
+    ? cleaned
+    : cleaned.replace(/<head([^>]*)>/i, '<head$1><!-- qg-pdf-export-v2: preview-pack screen media -->')
+  return marked
+}
+
 /** Last-wins CSS: lock each studio sheet to one A4 page (same as live preview). */
 function withUprightPageCss(html, size) {
   const sizeDecl = size
@@ -421,7 +470,7 @@ function usePuppeteerPrint(binary) {
 export async function renderHtmlToPdf(html, { timeoutMs = RENDER_TIMEOUT_MS } = {}) {
   const binary = findChrome()
   const size = inferPageSizeMm(html)
-  const prepared = withUprightPageCss(html, size)
+  const prepared = withUprightPageCss(prepareExportHtml(html), size)
 
   let pdf
   try {
@@ -471,11 +520,12 @@ export function registerPdfRoutes(app) {
     try {
       const pdf = await renderHtmlToPdf(html)
       console.info(`[${requestId}] quotation PDF rendered`, {
-        user: req.userId, bytes: pdf.length, ms: Date.now() - started
+        user: req.userId, bytes: pdf.length, ms: Date.now() - started, engine: 'preview-v2'
       })
       res.setHeader('Content-Type', 'application/pdf')
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
       res.setHeader('Content-Length', String(pdf.length))
+      res.setHeader('X-QuoteGen-Pdf', 'preview-v2')
       res.send(pdf)
     } catch (error) {
       console.error(`[${requestId}] quotation PDF failed`, error?.code, error?.message)
