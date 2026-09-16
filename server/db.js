@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import WebSocket from 'ws'
 
 let cached = null
 
@@ -15,11 +16,15 @@ export function getSupabase() {
     throw err
   }
   if (!cached) {
+    // Railway/Nixpacks often runs Node 20. Newer supabase-js expects a WebSocket
+    // implementation in Node (native only on 22+), otherwise every DB call fails
+    // with "native WebSocket not found" and the app shows zero quotations.
     cached = createClient(
       process.env.SUPABASE_URL.trim(),
       process.env.SUPABASE_SERVICE_ROLE_KEY.trim(),
       {
-        auth: { persistSession: false, autoRefreshToken: false }
+        auth: { persistSession: false, autoRefreshToken: false },
+        realtime: { transport: WebSocket }
       }
     )
   }
