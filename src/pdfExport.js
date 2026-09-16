@@ -960,7 +960,6 @@ export async function buildPreviewExportHtml() {
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap"/>
 <base href="${baseHref.replace(/"/g, '&quot;')}"/>
 <style>${css}\n${pageCss}</style>
 </head>
@@ -991,7 +990,8 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
   if (!html?.trim()) throw new Error('nothing on screen to export')
 
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
-  const timer = controller ? setTimeout(() => controller.abort(), 90000) : null
+  // Live Railway proxy + Chrome usually finish under ~45s; fail loudly instead of spinning forever.
+  const timer = controller ? setTimeout(() => controller.abort(), 55000) : null
   let response
   try {
     response = await fetch('/api/quotation-pdf', {
@@ -1002,7 +1002,7 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
     })
   } catch (error) {
     if (error?.name === 'AbortError') {
-      throw new Error('PDF export timed out — try again with fewer images')
+      throw new Error('PDF export timed out on the server. Please try again in a moment (live Chrome may still be starting).')
     }
     throw error
   } finally {

@@ -5,3 +5,7 @@ nixPkgs = ["chromium", "nss", "dejavu_fonts"]
 
 [variables]
 PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
+# Prefer the Nix Chromium on PATH (set at runtime via findChrome / command -v).
+# Never force CLI --print-to-pdf on Railway — it hangs.
+PDF_USE_SPAWN = "0"
+PDF_TIMEOUT_MS = "45000"

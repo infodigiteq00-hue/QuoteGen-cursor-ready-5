@@ -82,6 +82,29 @@ export function findChrome() {
   return CHROME_CANDIDATES.find(path => existsSync(path)) || findChromeOnPath() || null
 }
 
+export function pdfEngineStatus() {
+  const binary = findChrome()
+  return {
+    chromePath: binary,
+    platform: process.platform,
+    useSpawnFallback: process.env.PDF_USE_SPAWN === '1',
+    timeoutMs: RENDER_TIMEOUT_MS,
+    engine: 'preview-v2'
+  }
+}
+
+function withHardTimeout(promise, timeoutMs, label) {
+  let timer
+  return Promise.race([
+    promise.finally(() => { if (timer) clearTimeout(timer) }),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(pdfError(`${label} timed out after ${Math.round(timeoutMs / 1000)}s.`, 'PDF_TIMEOUT', 504))
+      }, timeoutMs)
+    })
+  ])
+}
+
 /** Keep a client-supplied name usable as a download filename. */
 export function safeFileName(raw) {
   const cleaned = String(raw || '')
@@ -409,6 +432,8 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
     await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: timeoutMs })
     // Screen media keeps the live A4 pack. Print media sets height:auto and reflows pages.
     await page.emulateMediaType('screen')
+    // Don't wait on Google Fonts / remote assets — everything needed is already inlined.
+    await page.evaluate(() => document.fonts?.ready?.catch?.(() => {}) || null).catch(() => {})
     const pdf = await page.pdf(pdfOptionsFor(timeoutMs))
     return assertPdf(Buffer.from(pdf))
   } finally {
@@ -457,50 +482,50 @@ async function renderHtmlToPdfWithSpawn(html, timeoutMs, binary) {
 }
 
 function usePuppeteerPrint(binary) {
-  // Puppeteer CDP print is reliable on macOS/Linux; CLI --print-to-pdf often hangs.
+  // CLI --print-to-pdf often hangs forever on Linux (Railway). Only use spawn when forced.
   if (process.env.PDF_USE_SPAWN === '1' && binary) return false
   return true
 }
 
 /**
  * Print a standalone HTML document to PDF bytes.
- * Chrome applies print media itself, so the app's `@media print` rules —
- * including `@page { size: A4; margin: 10mm }` — drive the page geometry.
+ * Prefer Puppeteer CDP. Never silently fall back to CLI print on Linux — that hang
+ * is what left live users stuck on “Preparing PDF…”.
  */
 export async function renderHtmlToPdf(html, { timeoutMs = RENDER_TIMEOUT_MS } = {}) {
   const binary = findChrome()
   const size = inferPageSizeMm(html)
   const prepared = withUprightPageCss(prepareExportHtml(html), size)
+  const budget = Math.max(10_000, timeoutMs)
 
-  let pdf
-  try {
+  const run = async () => {
     if (usePuppeteerPrint(binary)) {
-      try {
-        pdf = await renderHtmlToPdfWithPuppeteer(prepared, timeoutMs, binary)
-      } catch (error) {
-        if (binary && error?.code !== 'CHROME_MISSING') {
-          pdf = await renderHtmlToPdfWithSpawn(prepared, timeoutMs, binary)
-        } else {
-          throw error
-        }
-      }
-    } else if (binary) {
-      pdf = await renderHtmlToPdfWithSpawn(prepared, timeoutMs, binary)
-    } else {
-      throw pdfError(
-        'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
-        'CHROME_MISSING',
-        503
-      )
+      return renderHtmlToPdfWithPuppeteer(prepared, budget, binary)
     }
+    if (binary) {
+      return renderHtmlToPdfWithSpawn(prepared, budget, binary)
+    }
+    throw pdfError(
+      'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
+      'CHROME_MISSING',
+      503
+    )
+  }
+
+  try {
+    const pdf = await withHardTimeout(run(), budget + 5_000, 'PDF render')
+    return normalizePdfRotation(pdf)
   } catch (error) {
     if (error?.code) throw error
     throw pdfError(`Could not render PDF: ${error?.message || error}`, 'CHROME_LAUNCH_FAILED', 503)
   }
-  return normalizePdfRotation(pdf)
 }
 
 export function registerPdfRoutes(app) {
+  app.get('/api/quotation-pdf/status', (req, res) => {
+    res.json({ ok: true, ...pdfEngineStatus(), requestId: `pdf-status-${Date.now()}` })
+  })
+
   app.post('/api/quotation-pdf', async (req, res) => {
     const requestId = `pdf-${Date.now()}`
     const html = typeof req.body?.html === 'string' ? req.body.html : ''
@@ -517,10 +542,15 @@ export function registerPdfRoutes(app) {
 
     const fileName = safeFileName(req.body?.fileName)
     const started = Date.now()
+    const status = pdfEngineStatus()
     try {
       const pdf = await renderHtmlToPdf(html)
       console.info(`[${requestId}] quotation PDF rendered`, {
-        user: req.userId, bytes: pdf.length, ms: Date.now() - started, engine: 'preview-v2'
+        user: req.userId,
+        bytes: pdf.length,
+        ms: Date.now() - started,
+        engine: 'preview-v2',
+        chromePath: status.chromePath || '(sparticuz)'
       })
       res.setHeader('Content-Type', 'application/pdf')
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
@@ -528,7 +558,9 @@ export function registerPdfRoutes(app) {
       res.setHeader('X-QuoteGen-Pdf', 'preview-v2')
       res.send(pdf)
     } catch (error) {
-      console.error(`[${requestId}] quotation PDF failed`, error?.code, error?.message)
+      console.error(`[${requestId}] quotation PDF failed`, error?.code, error?.message, {
+        chromePath: status.chromePath, ms: Date.now() - started
+      })
       res.status(error?.status || 500).json({
         error: error?.message || 'PDF generation failed.',
         code: error?.code || 'PDF_ERROR',
