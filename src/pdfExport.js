@@ -1002,7 +1002,7 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
     })
   } catch (error) {
     if (error?.name === 'AbortError') {
-      throw new Error('PDF export timed out on the server. Please try again in a moment (live Chrome may still be starting).')
+      throw new Error('Live PDF engine timed out. Wait for the new deploy to finish, hard-refresh, and try again.')
     }
     throw error
   } finally {
@@ -1011,10 +1011,15 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
 
   if (!response.ok) {
     let detail = ''
+    let code = ''
     try {
       const payload = await response.json()
-      detail = payload?.error || payload?.code || ''
+      detail = payload?.error || payload?.message || ''
+      code = payload?.code || ''
     } catch { /* ignore */ }
+    if (code === 'CHROME_MISSING' || code === 'CHROME_SPAWN_FAILED') {
+      throw new Error(detail || 'Live server could not start Chrome for PDF. Redeploy with the Chromium Docker image.')
+    }
     throw new Error(detail || `PDF export failed (${response.status})`)
   }
 

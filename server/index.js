@@ -13,7 +13,7 @@ import { registerRevisionRoutes } from './revisions.js'
 import { registerKnowledgeRoutes, autofillItemsFromKnowledge, retrieveKnowledgeContext, formatKnowledgePromptBlock } from './knowledge.js'
 import { registerHsnGstRoutes } from './hsnGst.js'
 import { registerQuoteAssetRoutes, registerPublicQuoteAssetRoutes } from './quoteAssets.js'
-import { registerPdfRoutes } from './pdfExport.js'
+import { registerPdfRoutes, registerPublicPdfRoutes, findChrome } from './pdfExport.js'
 import { registerFeatureInterestRoutes } from './featureInterest.js'
 import { registerUserProfileRoutes } from './userProfile.js'
 import { registerAdminUserRoutes } from './adminUsers.js'
@@ -41,6 +41,7 @@ app.use((err, req, res, next) => {
 registerOnlyOfficeRoutes(app)
 // Quote images in <img> / PDF Chrome cannot send Bearer tokens.
 registerPublicQuoteAssetRoutes(app)
+registerPublicPdfRoutes(app)
 
 // Auth endpoints are public; everything else under /api requires a session.
 registerAuthRoutes(app)
@@ -587,5 +588,6 @@ if (!process.env.VERCEL) {
     console.log(`QuoteGen API listening on http://localhost:${PORT}`)
     console.log(`Persistence: ${isSupabaseConfigured() ? 'Supabase configured' : 'Supabase not configured (APIs return 503; app still works)'}`)
     console.log(`Web UI: ${servingClient ? `serving ${DIST_DIR}` : 'not serving dist (run npm run build, or use Vite on 5173)'}`)
+    console.log(`PDF Chrome: ${findChrome() || '(will use @sparticuz/chromium fallback)'}`)
   })
 }

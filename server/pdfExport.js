@@ -365,21 +365,8 @@ function pdfOptionsFor(timeoutMs) {
  * (Railway, Vercel, containers) where Chromium treats a landscape viewport as
  * "rotate the sheet". Local Windows still uses spawn, which already works.
  */
-async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
+async function resolveChromium(systemBinary) {
   let puppeteer
-  let executablePath = systemBinary || null
-  let args = [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-gpu',
-    '--hide-scrollbars',
-    '--font-render-hinting=none',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--force-color-profile=srgb'
-  ]
-
   try {
     puppeteer = await import('puppeteer-core')
   } catch {
@@ -390,54 +377,104 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
     )
   }
 
-  if (!executablePath) {
-    try {
-      const chromium = (await import('@sparticuz/chromium')).default
-      try { chromium.setGraphicsMode = false } catch { /* older builds */ }
-      executablePath = await chromium.executablePath()
-      args = [...chromium.args]
-    } catch (error) {
-      throw pdfError(
-        `No Chrome or Chromium was found on the server (${error?.message || 'CHROME_MISSING'}).`,
-        'CHROME_MISSING',
-        503
-      )
-    }
+  const baseArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--hide-scrollbars',
+    '--font-render-hinting=none',
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--force-color-profile=srgb',
+    '--single-process',
+    '--disable-software-rasterizer'
+  ]
+
+  if (systemBinary) {
+    return { puppeteer, executablePath: systemBinary, args: baseArgs, source: 'system' }
   }
 
+  try {
+    const chromium = (await import('@sparticuz/chromium')).default
+    try { chromium.setGraphicsMode = false } catch { /* older builds */ }
+    const executablePath = await chromium.executablePath()
+    return {
+      puppeteer,
+      executablePath,
+      args: [...new Set([...(chromium.args || []), ...baseArgs])],
+      source: 'sparticuz'
+    }
+  } catch (error) {
+    throw pdfError(
+      `No Chrome or Chromium was found on the server (${error?.message || 'CHROME_MISSING'}).`,
+      'CHROME_MISSING',
+      503
+    )
+  }
+}
+
+async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
   const size = inferPageSizeMm(html)
   const viewport = viewportForPage(size)
-  args = [
-    ...args,
-    `--window-size=${viewport.width},${viewport.height}`,
-    '--font-render-hinting=none',
-    '--hide-scrollbars'
-  ]
-  let browser
-  try {
-    browser = await puppeteer.default.launch({
+
+  const tryLaunch = async (preferredBinary) => {
+    const resolved = await resolveChromium(preferredBinary)
+    const args = [
+      ...resolved.args,
+      `--window-size=${viewport.width},${viewport.height}`,
+      '--hide-scrollbars'
+    ]
+    const browser = await resolved.puppeteer.default.launch({
       args,
       defaultViewport: viewport,
-      executablePath,
+      executablePath: resolved.executablePath,
       headless: 'shell',
       protocolTimeout: timeoutMs + 10_000
     })
-  } catch (error) {
-    throw pdfError(`Could not start Chrome: ${error.message}`, 'CHROME_SPAWN_FAILED', 503)
+    return { browser, source: resolved.source, executablePath: resolved.executablePath }
   }
+
+  let browser
+  let meta = { source: 'unknown', executablePath: systemBinary || null }
   try {
-    const page = await browser.newPage()
-    page.setDefaultTimeout(timeoutMs)
-    await page.setViewport(viewport)
-    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: timeoutMs })
-    // Screen media keeps the live A4 pack. Print media sets height:auto and reflows pages.
-    await page.emulateMediaType('screen')
-    // Don't wait on Google Fonts / remote assets — everything needed is already inlined.
-    await page.evaluate(() => document.fonts?.ready?.catch?.(() => {}) || null).catch(() => {})
-    const pdf = await page.pdf(pdfOptionsFor(timeoutMs))
-    return assertPdf(Buffer.from(pdf))
+    try {
+      const launched = await tryLaunch(systemBinary)
+      browser = launched.browser
+      meta = launched
+    } catch (firstError) {
+      // System/Nix Chromium sometimes fails on Railway; try Lambda build next.
+      if (!systemBinary) throw firstError
+      console.warn('[pdf] system Chrome launch failed, trying @sparticuz/chromium', firstError?.message || firstError)
+      const launched = await tryLaunch(null)
+      browser = launched.browser
+      meta = launched
+    }
+
+    const dir = await mkdtemp(join(tmpdir(), 'quotegen-pdf-'))
+    const htmlPath = join(dir, 'quotation.html')
+    try {
+      await writeFile(htmlPath, html, 'utf8')
+      const page = await browser.newPage()
+      page.setDefaultTimeout(timeoutMs)
+      await page.setViewport(viewport)
+      // File URL is far more reliable than setContent() for multi‑MB preview HTML on Railway.
+      await page.goto(pathToFileURL(htmlPath).href, {
+        waitUntil: 'domcontentloaded',
+        timeout: timeoutMs
+      })
+      await page.emulateMediaType('screen')
+      const pdf = await page.pdf(pdfOptionsFor(timeoutMs))
+      console.info('[pdf] puppeteer render ok', { source: meta.source, executablePath: meta.executablePath })
+      return assertPdf(Buffer.from(pdf))
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+  } catch (error) {
+    if (error?.code) throw error
+    throw pdfError(`Could not start Chrome: ${error.message}`, 'CHROME_SPAWN_FAILED', 503)
   } finally {
-    await browser.close().catch(() => {})
+    if (browser) await browser.close().catch(() => {})
   }
 }
 
@@ -521,11 +558,14 @@ export async function renderHtmlToPdf(html, { timeoutMs = RENDER_TIMEOUT_MS } = 
   }
 }
 
-export function registerPdfRoutes(app) {
-  app.get('/api/quotation-pdf/status', (req, res) => {
+export function registerPublicPdfRoutes(app) {
+  // Unauthenticated so Railway healthchecks and ops can see Chrome status.
+  app.get('/api/quotation-pdf/status', (_req, res) => {
     res.json({ ok: true, ...pdfEngineStatus(), requestId: `pdf-status-${Date.now()}` })
   })
+}
 
+export function registerPdfRoutes(app) {
   app.post('/api/quotation-pdf', async (req, res) => {
     const requestId = `pdf-${Date.now()}`
     const html = typeof req.body?.html === 'string' ? req.body.html : ''
