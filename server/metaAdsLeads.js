@@ -224,13 +224,15 @@ export function registerPublicMetaAdsLeadRoutes(app) {
       return res.status(400).json({ error: 'Enter a valid email address.', code: 'VALIDATION', requestId })
     }
 
+    if (!process.env.RESEND_API_KEY?.trim()) {
+      console.error(`[${requestId}] RESEND_API_KEY missing — cannot email trial OTP`)
+      return res.status(503).json({
+        error: 'Verification email isn’t available right now. Tap “Do this later — continue” for now.',
+        requestId
+      })
+    }
     try {
       await ensureConfirmedMetaTrialUser(supabase, email, meta)
-      // generateLink never sends mail. Without Resend, let the browser ask
-      // Supabase to send its own sign-in email instead.
-      if (!process.env.RESEND_API_KEY?.trim()) {
-        return res.json({ ok: true, email, delivery: 'supabase', requestId })
-      }
       const { data, error } = await supabase.auth.admin.generateLink({
         type: 'magiclink',
         email,

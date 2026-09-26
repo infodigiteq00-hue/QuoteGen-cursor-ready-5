@@ -236,17 +236,6 @@ export async function requestEmailOtp(email, { phoneDigits, phoneE164, name, com
   if (!prepared.ok) {
     throw new Error(payload.error || payload.message || 'Could not send the verification code.')
   }
-  if (payload.delivery === 'supabase') {
-    const { error } = await supabase.auth.signInWithOtp({
-      email: em,
-      options: {
-        shouldCreateUser: false,
-        emailRedirectTo: `${window.location.origin}/trial-verify`
-      }
-    })
-    if (error) throw new Error(authErrorMessage(error))
-    return { ok: true, delivery: 'link' }
-  }
   return {
     ok: true,
     delivery: 'code',
