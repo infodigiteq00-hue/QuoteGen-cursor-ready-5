@@ -205,6 +205,14 @@
   margin-top: 16px;
 }
 
+.meta-guide-actions .meta-guide-primary {
+  margin-top: 0;
+}
+
+.meta-guide-actions > :only-child {
+  grid-column: 1 / -1;
+}
+
 .meta-guide-ghost {
   min-height: 48px;
   padding: 0 16px;
@@ -1571,19 +1579,6 @@ button.meta-guide-chip.is-on {
   line-height: 1.45;
 }
 
-.meta-guide-exit {
-  display: block;
-  margin: 18px auto 0;
-  border: 0;
-  background: none;
-  color: #9BB8E8;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-
 @media (max-width: 520px) {
   .meta-guide-actions {
     grid-template-columns: 1fr;
@@ -2174,6 +2169,70 @@ button.meta-guide-chip.is-on {
   color: #0D1117;
 }
 
+.meta-guide-pay-amount small {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: #6B7688;
+}
+
+.meta-guide-pay-was {
+  margin-right: 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #94A3B8;
+  text-decoration-thickness: 2px;
+  text-decoration-color: #E11D48;
+}
+
+.meta-guide-offer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 4px 0 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.meta-guide-offer.is-live {
+  background: #FFF1F2;
+  border: 1px solid #FECDD3;
+  color: #BE123C;
+}
+
+.meta-guide-offer.is-ended {
+  background: #F1F5F9;
+  border: 1px solid #E2E8F0;
+  color: #475569;
+}
+
+.meta-guide-offer-clock {
+  min-width: 64px;
+  padding: 3px 10px;
+  border-radius: 8px;
+  background: #E11D48;
+  color: #fff;
+  font-size: 17px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  animation: metaGuideOfferPulse 1s ease-in-out infinite;
+}
+
+@keyframes metaGuideOfferPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(225, 29, 72, 0.35); }
+  50% { box-shadow: 0 0 0 5px rgba(225, 29, 72, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .meta-guide-offer-clock {
+    animation: none;
+  }
+}
+
 .meta-guide-pay-note {
   margin: 2px 0 14px;
   font-size: 13px;
@@ -2358,6 +2417,41 @@ button.meta-guide-chip.is-on {
   font-size: 14.5px;
   line-height: 1.45;
   color: #9AA6BD;
+}
+
+.meta-guide-convert-offer .meta-guide-offer {
+  flex-wrap: wrap;
+  margin: 20px 0 0;
+  padding: 12px 14px;
+  font-size: 14px;
+}
+
+.meta-guide-convert-offer .meta-guide-offer.is-live {
+  background: rgba(225, 29, 72, 0.12);
+  border: 1px solid rgba(251, 113, 133, 0.35);
+  color: #FECDD3;
+}
+
+.meta-guide-convert-offer .meta-guide-offer.is-ended {
+  background: rgba(148, 163, 184, 0.1);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  color: #CBD5E1;
+}
+
+.meta-guide-convert-offer .meta-guide-offer s {
+  color: #94A3B8;
+  font-weight: 600;
+  text-decoration-color: #FB7185;
+}
+
+.meta-guide-convert-error {
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  color: #FDA4AF;
+}
+
+.meta-guide-convert-offer .meta-guide-offer + .meta-guide-convert-cta {
+  margin-top: 14px;
 }
 
 .meta-guide-convert-cta {

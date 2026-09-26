@@ -18,6 +18,7 @@ import { registerFeatureInterestRoutes } from './featureInterest.js'
 import { registerUserProfileRoutes } from './userProfile.js'
 import { registerAdminUserRoutes } from './adminUsers.js'
 import { registerPublicMetaAdsLeadRoutes, registerMetaAdsLeadRoutes } from './metaAdsLeads.js'
+import { registerPublicPhonePeRoutes } from './phonepe.js'
 import { getSupabase, isSupabaseConfigured } from './db.js'
 import { aiFillableColumns, blankItemFor, normalizeColumnList } from '../shared/quoteColumns.js'
 import { suggestFormulaFromAsk, validateFormulaDraft } from '../shared/formulaAssistant.js'
@@ -45,10 +46,13 @@ registerPublicQuoteAssetRoutes(app)
 registerPublicPdfRoutes(app)
 // Meta ads landing form — public lead capture before auth gate.
 registerPublicMetaAdsLeadRoutes(app)
+registerPublicPhonePeRoutes(app)
 
 // Auth endpoints are public; everything else under /api requires a session.
 registerAuthRoutes(app)
 app.use('/api', requireAuth)
+// Public trial routes also sit after the gate; requireAuth skips these paths.
+registerPublicMetaAdsLeadRoutes(app)
 
 registerOnlyOfficeAuthRoutes(app)
 registerUploadDocRoutes(app)

@@ -1626,8 +1626,8 @@ body.qg-export-dock-on .qg-commands-fab {
 }
 .meta-otp-slots {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 6px;
   margin: 6px 0 8px;
 }
 .meta-otp-slot {
@@ -1638,7 +1638,7 @@ body.qg-export-dock-on .qg-commands-fab {
   border-radius: 0;
   background: transparent;
   color: #fff;
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 700;
   text-align: center;
   outline: none;
@@ -1691,6 +1691,23 @@ body.qg-export-dock-on .qg-commands-fab {
   text-align: center;
   font-size: 12.5px;
   color: rgba(243, 246, 252, 0.55);
+  line-height: 1.45;
+}
+.meta-otp-link-sent {
+  margin: 10px 0 6px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(59, 139, 255, 0.35);
+  background: rgba(26, 115, 232, 0.12);
+  font-size: 14px;
+  line-height: 1.5;
+  color: #DCE7FA;
+}
+.meta-otp-hint {
+  margin: 14px 0 0;
+  text-align: center;
+  font-size: 12.5px;
+  color: rgba(243, 246, 252, 0.62);
   line-height: 1.45;
 }
 .meta-otp-login-link {

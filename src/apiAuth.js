@@ -215,26 +215,43 @@ export async function verifyEmailCode(email, token) {
 
 /**
  * Meta ads trial signup — passwordless email OTP.
- * Creates the user on first request when they don’t exist yet.
- * Requires the Magic Link email template to include {{ .Token }}.
+ * Server generates the code and emails it. Do not also call signInWithOtp
+ * (that is a second send and hits Supabase’s 60s rate limit).
  */
 export async function requestEmailOtp(email, { phoneDigits, phoneE164, name, company } = {}) {
   assertConfigured()
-  const meta = { source: 'meta_ads_landing' }
-  if (phoneDigits) meta.phone_digits = phoneDigits
-  if (phoneE164) meta.phone_e164 = phoneE164
-  if (phoneE164) meta.phone = phoneE164
-  if (name) meta.full_name = name
-  if (company) meta.company = company
-  const { error } = await supabase.auth.signInWithOtp({
-    email: String(email || '').trim().toLowerCase(),
-    options: {
-      shouldCreateUser: true,
-      data: meta
-    }
+  const em = String(email || '').trim().toLowerCase()
+  const prepared = await fetch('/api/meta-ads-trial/prepare-otp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: em,
+      phone: phoneDigits || '',
+      name: name || '',
+      company: company || '',
+      redirectTo: `${window.location.origin}/trial-verify`
+    })
   })
-  if (error) throw new Error(authErrorMessage(error))
-  return { ok: true }
+  const payload = await prepared.json().catch(() => ({}))
+  if (!prepared.ok) {
+    throw new Error(payload.error || payload.message || 'Could not send the verification code.')
+  }
+  if (payload.delivery === 'supabase') {
+    const { error } = await supabase.auth.signInWithOtp({
+      email: em,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: `${window.location.origin}/trial-verify`
+      }
+    })
+    if (error) throw new Error(authErrorMessage(error))
+    return { ok: true, delivery: 'link' }
+  }
+  return {
+    ok: true,
+    delivery: 'code',
+    otpLength: Number(payload.otpLength) || 8
+  }
 }
 
 /** Verify the 6-digit code from the Magic Link / OTP email template. */

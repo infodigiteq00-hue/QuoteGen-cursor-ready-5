@@ -34,3 +34,35 @@ export async function sendAdminEmail({ to, subject, text }) {
     return { ok: false, error: error?.message || 'Could not send email' }
   }
 }
+
+/** User-facing mail (trial OTP). Same Resend path as admin alerts. */
+export async function sendUserEmail({ to, subject, text, html }) {
+  const apiKey = process.env.RESEND_API_KEY?.trim()
+  const from = (process.env.MAIL_FROM || process.env.FEATURE_INTEREST_FROM || 'QuoteGen <onboarding@resend.dev>').trim()
+  const dest = String(to || '').trim()
+  if (!dest) return { ok: false, error: 'No recipient.' }
+  if (!apiKey) return { ok: false, error: 'RESEND_API_KEY is not set.' }
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from,
+        to: [dest],
+        subject: String(subject || 'QuoteGen'),
+        text: String(text || ''),
+        ...(html ? { html: String(html) } : {})
+      })
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      return { ok: false, error: data?.message || `Email provider returned ${response.status}` }
+    }
+    return { ok: true, id: data?.id || null }
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Could not send email' }
+  }
+}

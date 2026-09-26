@@ -238,14 +238,18 @@ function isOtpRateLimitError(message) {
  * Dark, minimal screen inspired by a simple verify UI (email instead of phone).
  */
 function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = '', leadCompany = '', onSwitchLogin }) {
+  const OTP_LENGTH = 8
+  const emptyDigits = () => Array.from({ length: OTP_LENGTH }, () => '')
   const [email, setEmail] = useState(prefillEmail || '')
-  const [digits, setDigits] = useState(['', '', '', '', '', ''])
+  const [digits, setDigits] = useState(emptyDigits)
+  const [otpLength, setOtpLength] = useState(OTP_LENGTH)
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
   const [skipping, setSkipping] = useState(false)
   const [error, setError] = useState('')
   const [cooldown, setCooldown] = useState(0)
   const [codeSent, setCodeSent] = useState(false)
+  const [delivery, setDelivery] = useState('code')
   const inputsRef = useRef([])
   const sentForRef = useRef('')
 
@@ -278,7 +282,7 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
     setSending(true)
     try {
       const phoneE164 = isValidIndiaMobile(phoneDigits) ? toIndiaE164(phoneDigits) : ''
-      await requestEmailOtp(em, {
+      const sent = await requestEmailOtp(em, {
         phoneDigits: isValidIndiaMobile(phoneDigits) ? phoneDigits : '',
         phoneE164,
         name: leadName,
@@ -287,8 +291,11 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
       if (isValidIndiaMobile(phoneDigits)) {
         try { sessionStorage.setItem('qg_pending_phone', phoneDigits) } catch { /* ignore */ }
       }
+      setDelivery(sent?.delivery === 'link' ? 'link' : 'code')
+      const len = Number(sent?.otpLength) || OTP_LENGTH
+      setOtpLength(len)
       markSent(em, 60)
-      setDigits(['', '', '', '', '', ''])
+      setDigits(Array.from({ length: len }, () => ''))
       return true
     } catch (err) {
       const message = err.message || 'Could not send the code. Please try again.'
@@ -306,9 +313,7 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
   }
 
   // Auto-send once when we land with a prefilled email — skip if we just sent.
-  // Disabled while allowSkipOtp is on so we don’t spam inboxes during pre-launch.
   useEffect(() => {
-    if (allowSkipOtp) return
     const em = String(prefillEmail || '').trim().toLowerCase()
     if (!em || sentForRef.current === em) return
     const prior = readMetaOtpSent(em)
@@ -363,13 +368,13 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
     }
     // Paste full code into one box
     if (value.length > 1) {
-      const chars = value.slice(0, 6).split('')
+      const chars = value.slice(0, otpLength).split('')
       setDigits((prev) => {
         const next = [...prev]
-        for (let i = 0; i < 6; i += 1) next[i] = chars[i] || ''
+        for (let i = 0; i < otpLength; i += 1) next[i] = chars[i] || ''
         return next
       })
-      const focusAt = Math.min(chars.length, 5)
+      const focusAt = Math.min(chars.length, otpLength - 1)
       inputsRef.current[focusAt]?.focus()
       return
     }
@@ -378,7 +383,7 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
       next[index] = value
       return next
     })
-    if (index < 5) inputsRef.current[index + 1]?.focus()
+    if (index < otpLength - 1) inputsRef.current[index + 1]?.focus()
   }
 
   const onDigitKeyDown = (index, e) => {
@@ -391,8 +396,8 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
     e.preventDefault()
     setError('')
     const em = email.trim().toLowerCase()
-    if (!/^\d{6}$/.test(otp)) {
-      setError('Enter the 6-digit code from your email.')
+    if (!/^\d+$/.test(otp) || otp.length !== otpLength) {
+      setError(`Enter the ${otpLength}-digit code from your email.`)
       return
     }
     if (!codeSent && sentForRef.current !== em) {
@@ -459,6 +464,12 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
             </div>
           </div>
 
+          {delivery === 'link' && codeSent ? (
+            <p className="meta-otp-link-sent">
+              We emailed a sign-in link to <strong>{email.trim()}</strong>. Open the mail “Your sign-in link” and tap <strong>Sign in</strong> — you’ll continue your trial from there.
+            </p>
+          ) : (
+          <>
           <div className="meta-otp-slots" role="group" aria-label="One-time password">
             {digits.map((d, i) => (
               <input
@@ -467,7 +478,7 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
                 type="text"
                 inputMode="numeric"
                 autoComplete={i === 0 ? 'one-time-code' : 'off'}
-                maxLength={6}
+                maxLength={otpLength}
                 value={d}
                 onChange={(e) => onDigitChange(i, e.target.value)}
                 onKeyDown={(e) => onDigitKeyDown(i, e)}
@@ -477,16 +488,22 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
             ))}
           </div>
 
+          <p className="meta-otp-hint">Enter the {otpLength}-digit code from the email.</p>
+          </>
+          )}
+
           {error && <p className="meta-otp-error">{error}</p>}
 
-          <button type="submit" className="meta-otp-submit" disabled={loading || sending || skipping}>
-            {loading ? 'Verifying…' : (
-              <>
-                Verify &amp; Login
-                <span className="meta-otp-submit-ico" aria-hidden="true">↗</span>
-              </>
-            )}
-          </button>
+          {!(delivery === 'link' && codeSent) && (
+            <button type="submit" className="meta-otp-submit" disabled={loading || sending || skipping}>
+              {loading ? 'Verifying…' : (
+                <>
+                  Verify &amp; Login
+                  <span className="meta-otp-submit-ico" aria-hidden="true">↗</span>
+                </>
+              )}
+            </button>
+          )}
         </form>
 
         {allowSkipOtp && (

@@ -18,8 +18,23 @@ function authUnavailable(res, requestId) {
   return supabaseError(err, res, requestId)
 }
 
+function isPublicApiRequest(req) {
+  const full = String(req.originalUrl || req.url || '').split('?')[0]
+  const mounted = String(req.path || '').split('?')[0]
+  const paths = [full, mounted, `/api${mounted}`]
+  return paths.some((p) => (
+    p === '/api/meta-ads-leads'
+    || p === '/meta-ads-leads'
+    || p.startsWith('/api/meta-ads-trial/')
+    || p.startsWith('/meta-ads-trial/')
+    || p.startsWith('/api/pay/phonepe/')
+    || p.startsWith('/pay/phonepe/')
+  ))
+}
+
 /** Attach req.userId / req.userEmail from a Bearer access token, or 401. */
 export async function requireAuth(req, res, next) {
+  if (isPublicApiRequest(req)) return next()
   const requestId = `auth-mw-${Date.now()}`
   if (!isSupabaseConfigured()) return authUnavailable(res, requestId)
   const header = req.headers.authorization || ''

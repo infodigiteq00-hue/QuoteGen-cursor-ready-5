@@ -659,7 +659,24 @@ function GuideModal({ title, onClose, children, className = '' }) {
 
 const PHONEPE_QR_SRC = '/phonepe-qr.png'
 const JOIN_PRICE = 199
+const REGULAR_PRICE = 699
 const JOIN_QUOTES = 20
+const OFFER_MS = 10 * 60 * 1000
+const OFFER_STARTED_KEY = 'qg_join_offer_started'
+
+function readOfferStart() {
+  try {
+    const at = Number(localStorage.getItem(OFFER_STARTED_KEY))
+    return Number.isFinite(at) && at > 0 ? at : null
+  } catch {
+    return null
+  }
+}
+
+function formatCountdown(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000))
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
 
 function trialExportColWidths(columns) {
   const sr = 36
@@ -887,8 +904,8 @@ export default function MetaTrialGuide({
   onGenerate,
   loading = false,
   error = '',
-  onExit,
   onEnterEditor,
+  onBack,
   companyProfile = null,
   trialLead = null,
   onSaveCompany,
@@ -916,6 +933,62 @@ export default function MetaTrialGuide({
   const [addressOpen, setAddressOpen] = useState(false)
   const [payOpen, setPayOpen] = useState(false)
   const [qrFailed, setQrFailed] = useState(false)
+  const [offerStartedAt, setOfferStartedAt] = useState(readOfferStart)
+  const [offerNow, setOfferNow] = useState(() => Date.now())
+  const offerLeftMs = offerStartedAt ? offerStartedAt + OFFER_MS - offerNow : OFFER_MS
+  const offerLive = offerLeftMs > 0
+  const payPrice = offerLive ? JOIN_PRICE : REGULAR_PRICE
+
+  useEffect(() => {
+    if (phase !== 'convert' || offerStartedAt) return
+    const at = Date.now()
+    try { localStorage.setItem(OFFER_STARTED_KEY, String(at)) } catch { /* private mode */ }
+    setOfferStartedAt(at)
+    setOfferNow(at)
+  }, [phase, offerStartedAt])
+
+  useEffect(() => {
+    if (!offerStartedAt || !offerLive) return undefined
+    const t = setInterval(() => setOfferNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [offerStartedAt, offerLive])
+
+  const [payBusy, setPayBusy] = useState(false)
+  const [payError, setPayError] = useState('')
+
+  const openPay = async () => {
+    if (payBusy) return
+    setPayError('')
+    setPayBusy(true)
+    const lead = usefulLead(trialLead) || readMetaAdsLead() || {}
+    try {
+      const response = await fetch('/api/pay/phonepe/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offerStartedAt,
+          name: lead.name || '',
+          company: lead.company || '',
+          phone: lead.phone || '',
+          email: lead.email || ''
+        })
+      })
+      const data = await response.json().catch(() => ({}))
+      if (response.ok && data?.redirectUrl) {
+        window.location.assign(data.redirectUrl)
+        return
+      }
+      if (data?.code === 'PHONEPE_NOT_CONFIGURED') {
+        setQrFailed(false)
+        setPayOpen(true)
+      } else {
+        setPayError(data?.error || 'Could not open PhonePe. Please try again.')
+      }
+    } catch {
+      setPayError('Could not open PhonePe. Check your connection and try again.')
+    }
+    setPayBusy(false)
+  }
   const [pdfBusy, setPdfBusy] = useState(false)
   const [ingestBusy, setIngestBusy] = useState(false)
   const [ingestNote, setIngestNote] = useState('')
@@ -1550,13 +1623,27 @@ export default function MetaTrialGuide({
               Join the QuoteGen club and enter the future of smart quotation making.
             </p>
             <p className="meta-guide-convert-meta">No more manual work — just paste, verify and send.</p>
+            {offerLive ? (
+              <div className="meta-guide-offer is-live" role="timer" aria-live="off">
+                <span className="meta-guide-offer-label">
+                  Special price <s>₹{REGULAR_PRICE}</s> ₹{JOIN_PRICE}/month — ends in
+                </span>
+                <span className="meta-guide-offer-clock">{formatCountdown(offerLeftMs)}</span>
+              </div>
+            ) : (
+              <div className="meta-guide-offer is-ended">
+                <span className="meta-guide-offer-label">The ₹{JOIN_PRICE} offer has ended</span>
+              </div>
+            )}
             <button
               type="button"
               className="meta-guide-primary meta-guide-convert-cta"
-              onClick={() => { setQrFailed(false); setPayOpen(true) }}
+              onClick={openPay}
+              disabled={payBusy}
             >
-              Join QuoteGen at <span>₹{JOIN_PRICE}</span>
+              {payBusy ? 'Opening PhonePe…' : 'Join QuoteGen Now'}
             </button>
+            {payError ? <p className="meta-guide-convert-error" role="alert">{payError}</p> : null}
           </div>
         </div>
 
@@ -1567,23 +1654,29 @@ export default function MetaTrialGuide({
             onClose={() => setPayOpen(false)}
           >
             <p className="meta-guide-pay-lead">
-              Scan to start at ₹{JOIN_PRICE} for {JOIN_QUOTES} quotations per month. Pay as you go for more.
+              {offerLive
+                ? <>Join now and pay just <strong>₹{JOIN_PRICE}/month</strong>. When the timer hits zero, the price goes up to ₹{REGULAR_PRICE}/month.</>
+                : <>QuoteGen is ₹{REGULAR_PRICE}/month for {JOIN_QUOTES} quotations. Pay as you go for more.</>}
             </p>
             <div className="meta-guide-pay-card">
               <p className="meta-guide-pay-kicker">Scan QR to pay</p>
-              <p className="meta-guide-pay-amount">₹{JOIN_PRICE}</p>
-              <p className="meta-guide-pay-note">{JOIN_QUOTES} quotations / month</p>
+              <p className="meta-guide-pay-amount">
+                {offerLive && <s className="meta-guide-pay-was">₹{REGULAR_PRICE}</s>}
+                ₹{payPrice}
+                <small> /month</small>
+              </p>
+              <p className="meta-guide-pay-note">{JOIN_QUOTES} quotations / month · pay as you go for more</p>
               <div className="meta-guide-pay-qr">
                 {!qrFailed ? (
                   <img
                     src={PHONEPE_QR_SRC}
-                    alt={`PhonePe QR code to pay ₹${JOIN_PRICE}`}
+                    alt={`PhonePe QR code to pay ₹${payPrice}`}
                     onError={() => setQrFailed(true)}
                   />
                 ) : (
                   <div className="meta-guide-pay-qr-fallback">
                     <strong>PhonePe QR</strong>
-                    <span>Scan with PhonePe to pay ₹{JOIN_PRICE}</span>
+                    <span>Scan with PhonePe to pay ₹{payPrice}</span>
                   </div>
                 )}
               </div>
@@ -1909,15 +2002,22 @@ export default function MetaTrialGuide({
 
             {showError && <p className="meta-guide-error">{showError}</p>}
 
-            <button
-              type="button"
-              className={`meta-guide-primary${!canNext || ingestBusy ? ' is-idle' : ''}`}
-              disabled={!canNext || ingestBusy}
-              onClick={() => { setLocalError(''); setStep(2) }}
-            >
-              Continue
-              <span aria-hidden="true">→</span>
-            </button>
+            <div className="meta-guide-actions">
+              {onBack && (
+                <button type="button" className="meta-guide-ghost" disabled={ingestBusy} onClick={onBack}>
+                  ← Back
+                </button>
+              )}
+              <button
+                type="button"
+                className={`meta-guide-primary${!canNext || ingestBusy ? ' is-idle' : ''}`}
+                disabled={!canNext || ingestBusy}
+                onClick={() => { setLocalError(''); setStep(2) }}
+              >
+                Continue
+                <span aria-hidden="true">→</span>
+              </button>
+            </div>
           </>
         ) : (
           <>
@@ -2014,12 +2114,6 @@ export default function MetaTrialGuide({
               Next we’ll map your enquiry into this layout — then open the full quotation.
             </p>
           </>
-        )}
-
-        {onExit && (
-          <button type="button" className="meta-guide-exit" onClick={onExit}>
-            Skip to workspace
-          </button>
         )}
       </div>
     </main>

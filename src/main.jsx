@@ -10,6 +10,7 @@ import AuthScreen from './AuthScreen.jsx'
 import MarketingLanding from './MarketingLanding.jsx'
 import MetaAdsLanding from './MetaAdsLanding.jsx'
 import MetaTrialGuide from './MetaTrialGuide.jsx'
+import PaymentStatus from './PaymentStatus.jsx'
 import WsConvertModal from './WsConvertModal.jsx'
 import BrandMark from './BrandMark.jsx'
 import { emailLinkError } from './supabaseClient.js'
@@ -70,7 +71,7 @@ import {
   LayoutStyleCards
 } from './QuoteStudio.jsx'
 import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId } from './quotePaperThemes.js'
-import { companySeedFromLead, readMetaAdsLead, writeMetaAdsLead } from './metaTrialLead.js'
+import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent } from './metaTrialLead.js'
 import { A4_WIDTH_PX, defaultA4Pages, measureA4Blocks, normalizeA4Pages, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
 import { applyProductToItem, clientsFromQuotations, matchProducts, productsFromHistory } from './suggestCatalog.js'
@@ -1118,6 +1119,7 @@ function App() {
   const [newQuoteSession, setNewQuoteSession] = useState(0)
   const [knowledgeOpen, setKnowledgeOpen] = useState(true)
   const [metaTrialDemo, setMetaTrialDemo] = useState(false)
+  const [metaLandingReturn, setMetaLandingReturn] = useState(false)
   const [metaTrialCompany, setMetaTrialCompany] = useState(false)
   const metaNextConsumedRef = useRef(false)
   const isMobile = useIsMobile()
@@ -1306,10 +1308,9 @@ function App() {
   // Resume Meta-ads OTP screen after refresh / HMR remount.
   useEffect(() => {
     if (authUser || guestAuthMode) return
-    let pending = false
+    const { pending } = readMetaTrialIntent()
     let lead = null
     try {
-      pending = sessionStorage.getItem('qg_meta_auth_pending') === '1'
       const raw = sessionStorage.getItem('qg_meta_ads_lead')
       if (raw) lead = JSON.parse(raw)
     } catch { /* private mode */ }
@@ -1329,24 +1330,9 @@ function App() {
     }
   }, [authUser, guestAuthMode])
 
-  // After Meta ads trial signup/login, honour the path they chose on the landing page.
-  useEffect(() => {
-    if (!authUser || metaNextConsumedRef.current) return
-    let next = ''
-    let resumeGuide = false
-    try {
-      next = sessionStorage.getItem('qg_meta_ads_next') || ''
-      resumeGuide = sessionStorage.getItem('qg_meta_guide') === '1'
-    } catch { /* private mode */ }
-    if (next !== 'demo' && next !== 'company') {
-      if (resumeGuide) setMetaTrialDemo(true)
-      return
-    }
-
-    metaNextConsumedRef.current = true
-    try {
-      sessionStorage.removeItem('qg_meta_ads_next')
-    } catch { /* ignore */ }
+  const startMetaTrialPath = (next) => {
+    clearMetaTrialIntent()
+    setMetaLandingReturn(false)
 
     const path = String(window.location.pathname || '/').replace(/\/+$/, '') || '/'
     if (path === '/metaadslanding' || path === '/meta-ads-landing' || path === '/trial-verify') {
@@ -1358,7 +1344,6 @@ function App() {
     setGuestPhone('')
     setGuestLeadName('')
     setGuestLeadCompany('')
-    try { sessionStorage.removeItem('qg_meta_auth_pending') } catch { /* ignore */ }
 
     if (next === 'company') {
       setMetaTrialDemo(false)
@@ -1387,6 +1372,22 @@ function App() {
     setNewQuoteStep(1)
     setNewQuoteSession((n) => n + 1)
     setWorkspaceView('home')
+  }
+
+  // After Meta ads trial signup/login, honour the path they chose on the landing page.
+  useEffect(() => {
+    if (!authUser || metaNextConsumedRef.current) return
+    const { next, pending } = readMetaTrialIntent()
+    let resumeGuide = false
+    try {
+      resumeGuide = sessionStorage.getItem('qg_meta_guide') === '1'
+    } catch { /* private mode */ }
+    if (!pending && next !== 'demo' && next !== 'company') {
+      if (resumeGuide) setMetaTrialDemo(true)
+      return
+    }
+    metaNextConsumedRef.current = true
+    startMetaTrialPath(next)
   }, [authUser])
 
   useEffect(() => {
@@ -1658,6 +1659,10 @@ function App() {
     await openQuoteInEditor(editorQuote, { id: quotation.id, template })
   }
 
+  if (String(window.location.pathname || '').replace(/\/+$/, '') === '/payment-status') {
+    return <PaymentStatus onContinue={() => window.location.assign('/')} />
+  }
+
   if (!authChecked) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-3.5 bg-mist">
@@ -1702,10 +1707,7 @@ function App() {
         <MetaAdsLanding
           onSignIn={() => setGuestAuthMode('login')}
           onContinueTrial={(choice, lead) => {
-            try {
-              sessionStorage.setItem('qg_meta_ads_next', choice)
-              sessionStorage.setItem('qg_meta_auth_pending', '1')
-            } catch { /* ignore */ }
+            writeMetaTrialIntent(choice)
             if (lead) writeMetaAdsLead(lead)
             setGuestEmail(lead?.email || '')
             setGuestPhone(lead?.phone || '')
@@ -1943,6 +1945,15 @@ function App() {
     )
   }
 
+  if (metaLandingReturn) {
+    return (
+      <MetaAdsLanding
+        initialLead={readMetaAdsLead() || {}}
+        onContinueTrial={(choice) => startMetaTrialPath(choice === 'company' ? 'company' : 'demo')}
+      />
+    )
+  }
+
   // Meta ads first-quote guide — full screen, no dashboard chrome.
   // Keep this above the quote editor so the reveal ceremony can finish first.
   if (metaTrialDemo) {
@@ -2000,10 +2011,10 @@ function App() {
           setMetaTrialDemo(false)
           try { sessionStorage.removeItem('qg_meta_guide') } catch { /* ignore */ }
         }}
-        onExit={() => {
+        onBack={() => {
           setMetaTrialDemo(false)
           try { sessionStorage.removeItem('qg_meta_guide') } catch { /* ignore */ }
-          setWorkspaceView('home')
+          setMetaLandingReturn(true)
         }}
       />
     )
@@ -9971,7 +9982,10 @@ class AppErrorBoundary extends React.Component {
   }
 }
 
-createRoot(document.getElementById('root')).render(
+// Dev hot-reload re-runs this module; reuse the root or the app mounts twice.
+const rootEl = document.getElementById('root')
+rootEl.__qgRoot = rootEl.__qgRoot || createRoot(rootEl)
+rootEl.__qgRoot.render(
   <AppErrorBoundary>
     <App />
   </AppErrorBoundary>

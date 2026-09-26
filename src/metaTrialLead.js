@@ -1,5 +1,42 @@
 export const META_ADS_LEAD_KEY = 'qg_meta_ads_lead'
 export const META_TRIAL_SEED_KEY = 'qg_trial_company_seed'
+export const META_NEXT_KEY = 'qg_meta_ads_next'
+export const META_PENDING_KEY = 'qg_meta_auth_pending'
+
+function writeStore(store, key, value) {
+  try { store.setItem(key, value) } catch { /* private mode */ }
+}
+
+function readStore(store, key) {
+  try { return store.getItem(key) || '' } catch { return '' }
+}
+
+function removeStore(store, key) {
+  try { store.removeItem(key) } catch { /* private mode */ }
+}
+
+export function writeMetaTrialIntent(choice) {
+  const next = choice === 'company' ? 'company' : 'demo'
+  writeStore(sessionStorage, META_NEXT_KEY, next)
+  writeStore(localStorage, META_NEXT_KEY, next)
+  writeStore(sessionStorage, META_PENDING_KEY, '1')
+  writeStore(localStorage, META_PENDING_KEY, '1')
+}
+
+export function readMetaTrialIntent() {
+  let next = readStore(sessionStorage, META_NEXT_KEY) || readStore(localStorage, META_NEXT_KEY)
+  const pending = readStore(sessionStorage, META_PENDING_KEY) === '1'
+    || readStore(localStorage, META_PENDING_KEY) === '1'
+  if (next !== 'demo' && next !== 'company') next = pending ? 'demo' : ''
+  return { next, pending: Boolean(next) }
+}
+
+export function clearMetaTrialIntent() {
+  removeStore(sessionStorage, META_NEXT_KEY)
+  removeStore(localStorage, META_NEXT_KEY)
+  removeStore(sessionStorage, META_PENDING_KEY)
+  removeStore(localStorage, META_PENDING_KEY)
+}
 
 function parseLead(raw) {
   if (!raw) return null

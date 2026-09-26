@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import logoUrl from './assets/landing/quotegen-logo.png'
-import { META_ADS_LEAD_KEY as LEAD_KEY, writeMetaAdsLead } from './metaTrialLead.js'
+import { META_ADS_LEAD_KEY as LEAD_KEY, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent } from './metaTrialLead.js'
 import './metaAdsLanding.css'
 
 const CTA_STYLE = { fontFamily: 'Archivo, Inter, system-ui, sans-serif', fontWeight: 400 }
@@ -64,20 +64,33 @@ function IconCheck() {
   )
 }
 
+function IconX() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true">
+      <path d="M18 6 6 18M6 6l12 12" />
+    </svg>
+  )
+}
+
+function IconWhatsApp() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M20.5 11.6c0 4.7-3.8 8.5-8.5 8.5-1.5 0-2.9-.4-4.1-1.1L3.5 20l.9-4.3A8.4 8.4 0 0 1 3.5 11.6C3.5 6.9 7.3 3.1 12 3.1s8.5 3.8 8.5 8.5Zm-3.3-3.1c-.2-.3-.7-.5-1.4-.5-.4 0-.7.1-1 .4l-.3.3c-.2.2-.5.3-.7.2-.8-.3-1.6.1-2.2.7s-1 1.5-1.3 2.3c-.1.3 0 .5.2.7l.3.3c.1.2.2.4.1.6-.3.8-.8 1.6-1.4 2.2-.2.2-.2.5 0 .7l.4.4c.2.2.4.3.6.2 1.4-.3 2.7-1 3.8-1.9 1.1-.9 1.9-2 2.3-3.2.1-.3 0-.5-.2-.7l-.3-.3c-.2-.2-.3-.5-.2-.7l.3-.3c.2-.3.3-.6.2-1 0-.3-.1-.6-.3-.8Z" />
+    </svg>
+  )
+}
+
 function digitsOnly(v) {
   return String(v || '').replace(/\D/g, '')
 }
 
-const NEXT_STEP_KEY = 'qg_meta_ads_next'
-const AUTH_PENDING_KEY = 'qg_meta_auth_pending'
-
-function TrialForm({ formRef, autoFocusName, onNextStep }) {
-  const [name, setName] = useState('')
-  const [phone, setPhone] = useState('')
-  const [email, setEmail] = useState('')
-  const [company, setCompany] = useState('')
+function TrialForm({ formRef, autoFocusName, onNextStep, initialLead = null }) {
+  const [name, setName] = useState(initialLead?.name || '')
+  const [phone, setPhone] = useState(initialLead?.phone || '')
+  const [email, setEmail] = useState(initialLead?.email || '')
+  const [company, setCompany] = useState(initialLead?.company || '')
   const [error, setError] = useState('')
-  const [done, setDone] = useState(false)
+  const [done, setDone] = useState(Boolean(initialLead))
   const [submitting, setSubmitting] = useState(false)
   const nameRef = useRef(null)
 
@@ -241,19 +254,23 @@ function TrialForm({ formRef, autoFocusName, onNextStep }) {
   )
 }
 
-export default function MetaAdsLanding({ onSignIn, onContinueTrial }) {
+export default function MetaAdsLanding({ onSignIn, onContinueTrial, initialLead = null }) {
   const formRef = useRef(null)
   const [focusForm, setFocusForm] = useState(0)
 
   // Fresh visit / refresh of the ads landing should start on the empty form —
   // not restore the post-submit “You’re in” screen from a prior attempt.
+  // A signed-in user coming Back from the trial guide lands on the choice card.
   useEffect(() => {
+    if (initialLead) {
+      document.getElementById('trial-form')?.scrollIntoView({ block: 'center' })
+      return
+    }
     try {
       sessionStorage.removeItem(LEAD_KEY)
-      sessionStorage.removeItem(NEXT_STEP_KEY)
-      sessionStorage.removeItem(AUTH_PENDING_KEY)
       sessionStorage.removeItem('qg_meta_otp_sent')
     } catch { /* ignore */ }
+    clearMetaTrialIntent()
   }, [])
 
   const goToForm = () => {
@@ -263,14 +280,12 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial }) {
   }
 
   const handleNextStep = (choice, lead) => {
-    try {
-      sessionStorage.setItem(NEXT_STEP_KEY, choice)
-      sessionStorage.setItem(AUTH_PENDING_KEY, '1')
-      if (lead) writeMetaAdsLead({ ...lead, submitted: true, next: choice })
-    } catch { /* ignore */ }
+    writeMetaTrialIntent(choice)
+    if (lead) writeMetaAdsLead({ ...lead, submitted: true, next: choice })
     // Leave the long landing URL so refresh / back doesn't dump them into the ads page again.
+    // Signed-in users (initialLead) skip verify and go straight back into the app.
     try {
-      window.history.pushState({}, '', '/trial-verify')
+      if (!initialLead) window.history.pushState({}, '', '/trial-verify')
       window.scrollTo(0, 0)
     } catch { /* ignore */ }
     onContinueTrial?.(choice, lead)
@@ -294,9 +309,11 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial }) {
               </svg>
               +91 90676 10118
             </a>
-            <button type="button" className="meta-btn meta-btn-signin" onClick={onSignIn}>
-              Sign in
-            </button>
+            {onSignIn && (
+              <button type="button" className="meta-btn meta-btn-signin" onClick={onSignIn}>
+                Sign in
+              </button>
+            )}
             <button
               type="button"
               className="meta-btn meta-btn-primary meta-btn-header"
@@ -331,10 +348,12 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial }) {
             </button>
           </div>
           <p className="meta-hero-note">No credit card required · Free to try</p>
-          <p className="meta-hero-signin">
-            Already have an account?{' '}
-            <button type="button" className="meta-text-link" onClick={onSignIn}>Sign In</button>
-          </p>
+          {onSignIn && (
+            <p className="meta-hero-signin">
+              Already have an account?{' '}
+              <button type="button" className="meta-text-link" onClick={onSignIn}>Sign In</button>
+            </p>
+          )}
           <div className="meta-stats">
             <div className="meta-stat">
               <div className="meta-stat-value">3,841</div>
@@ -385,23 +404,31 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial }) {
         </div>
       </section>
 
-      <section className="meta-section" id="outcome">
-        <div className="meta-shell meta-outcome-v2">
-          <div className="meta-outcome-head">
-            <p className="meta-outcome-eyebrow">Before vs after</p>
-            <h2>
-              Stop sending rough formats.
-              <span className="meta-outcome-accent"> Send professional quotations in minutes.</span>
-            </h2>
-            <p className="meta-outcome-lead">
-              Same numbers. Completely different impression — in about 2 minutes.
-            </p>
-          </div>
+      <section className="meta-section meta-section-outcome" id="outcome">
+        <div className="meta-compare-band">
+          <div className="meta-shell">
+            <div className="meta-compare-head">
+              <h2>Same Enquiry. <span>Different Results.</span></h2>
+              <p>
+                Turn messy enquiries into{' '}
+                <span className="meta-compare-mark">accurate, professional quotations</span>
+                {' '}— in seconds.
+              </p>
+            </div>
 
-          <div className="meta-transform" aria-hidden="true">
-            <div className="meta-transform-card is-before">
-              <div className="meta-transform-label">Typical reply today</div>
-              <pre className="meta-visual-messy">{`Sir please check our rates below —
+            <div className="meta-compare-stage" aria-hidden="true">
+              <div className="meta-compare-pane is-bad">
+                <div className="meta-compare-kicker is-bad">
+                  <span className="meta-compare-ico"><IconX /></span>
+                  Manual process
+                </div>
+                <p className="meta-compare-note">Prone to errors. Risky for your business.</p>
+                <div className="meta-wa-card">
+                  <div className="meta-wa-label">
+                    Typical reply today
+                    <span className="meta-wa-icon"><IconWhatsApp /></span>
+                  </div>
+                  <pre>{`Sir please check our rates below —
 
 1) 2" valve 12 nos = 48000
 2) flange 4 inch 8 nos ~ 18400
@@ -409,52 +436,91 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial }) {
 
 GST extra · delivery 7-10 days
 pls confirm`}</pre>
-            </div>
-
-            <div className="meta-transform-arrow" aria-hidden="true">
-              <span>→</span>
-            </div>
-
-            <div className="meta-transform-card is-after">
-              <div className="meta-transform-label good">With QuoteGen</div>
-              <div className="meta-quote-sheet-simple">
-                <div className="meta-q-head">
-                  <div className="meta-q-brand">Your Company</div>
-                  <div className="meta-q-meta">
-                    <span className="meta-q-label">QUOTATION</span>
-                    <span className="meta-q-no">QG-2026-0042</span>
-                  </div>
                 </div>
-                <table className="meta-quote-simple">
-                  <thead>
-                    <tr>
-                      <th>Item</th>
-                      <th>Qty</th>
-                      <th>Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td>2&quot; industrial valve</td>
-                      <td>12</td>
-                      <td>₹48,000</td>
-                    </tr>
-                    <tr>
-                      <td>4&quot; flange set</td>
-                      <td>8</td>
-                      <td>₹18,400</td>
-                    </tr>
-                    <tr>
-                      <td>Packing &amp; transport</td>
-                      <td>1</td>
-                      <td>₹3,500</td>
-                    </tr>
-                  </tbody>
-                </table>
+              </div>
+
+              <div className="meta-compare-arrow">
+                <span>→</span>
+              </div>
+
+              <div className="meta-compare-pane is-good">
+                <div className="meta-compare-kicker is-good">
+                  <span className="meta-compare-ico"><IconCheck /></span>
+                  With QuoteGen
+                </div>
+                <p className="meta-compare-note">Accurate calculations. Professional quotations. Assured profits.</p>
+                <article className="meta-quote-doc">
+                  <header className="meta-quote-doc-head">
+                    <div>
+                      <strong>Apex Industrial Co.</strong>
+                      <p>Precision Engineering · Industrial Solutions</p>
+                      <p>Plot 42, MIDC Industrial Area, Ahmedabad 380015, India</p>
+                    </div>
+                    <div className="meta-quote-doc-meta">
+                      <em>QUOTATION</em>
+                      <span>QTN/2026-00001</span>
+                      <small>Date: 06/12/2026</small>
+                      <small>Valid Until: 27/06/2026</small>
+                    </div>
+                  </header>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Item</th>
+                        <th>Description</th>
+                        <th>MOC</th>
+                        <th>Qty</th>
+                        <th>Unit</th>
+                        <th>Rate (₹)</th>
+                        <th>Amount (₹)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>1</td>
+                        <td>FRP Pump</td>
+                        <td>5 HP, Horizontal</td>
+                        <td>FRP</td>
+                        <td>2</td>
+                        <td>Nos</td>
+                        <td>35,000.00</td>
+                        <td>70,000.00</td>
+                      </tr>
+                      <tr>
+                        <td>2</td>
+                        <td>Butterfly Valve</td>
+                        <td>4&quot;, PN16</td>
+                        <td>CI</td>
+                        <td>4</td>
+                        <td>Nos</td>
+                        <td>5,000.00</td>
+                        <td>20,000.00</td>
+                      </tr>
+                      <tr>
+                        <td>3</td>
+                        <td>SS Pipe</td>
+                        <td>Schedule 40</td>
+                        <td>SS304</td>
+                        <td>10</td>
+                        <td>Mtr</td>
+                        <td>1,200.00</td>
+                        <td>12,000.00</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <footer className="meta-quote-doc-totals">
+                    <div><span>Subtotal</span><strong>₹1,02,000.00</strong></div>
+                    <div><span>Tax (18%)</span><strong>₹18,360.00</strong></div>
+                    <div className="is-grand"><span>Grand Total</span><strong>₹1,20,360.00</strong></div>
+                  </footer>
+                </article>
               </div>
             </div>
           </div>
+        </div>
 
+        <div className="meta-shell meta-outcome-v2">
           <div className="meta-outcome-cta">
             <p className="meta-outcome-impact">
               Create professional looking quotations in{' '}
@@ -490,21 +556,6 @@ pls confirm`}</pre>
           </div>
         </div>
       </section>
-
-      <div className="meta-mid-cta-light">
-        <div className="meta-shell">
-          <p>Ready to quote faster? Create your free trial workspace</p>
-          <button
-            type="button"
-            className="meta-btn meta-btn-primary meta-btn-lg"
-            onClick={goToForm}
-            style={CTA_STYLE}
-          >
-            <DemoCtaLabel />
-          </button>
-          <p style={{ margin: '12px 0 0', fontSize: 14, color: '#6B7688' }}>No credit card required · Free to try</p>
-        </div>
-      </div>
 
       <section className="meta-section" id="why">
         <div className="meta-shell meta-shell-center">
@@ -574,14 +625,16 @@ pls confirm`}</pre>
 
       <div className="meta-form-wrap">
         <div className="meta-shell">
-          <TrialForm formRef={formRef} autoFocusName={focusForm > 0} onNextStep={handleNextStep} />
+          <TrialForm formRef={formRef} autoFocusName={focusForm > 0} onNextStep={handleNextStep} initialLead={initialLead} />
         </div>
       </div>
 
       <footer className="meta-footer">
         <div className="meta-shell">
           <div>© {new Date().getFullYear()} QuoteGen by Digiteq Solution</div>
-          <button type="button" className="meta-link" onClick={onSignIn}>Already have an account? Sign In</button>
+          {onSignIn && (
+            <button type="button" className="meta-link" onClick={onSignIn}>Already have an account? Sign In</button>
+          )}
         </div>
       </footer>
     </div>

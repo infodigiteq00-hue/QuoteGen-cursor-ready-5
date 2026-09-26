@@ -1,5 +1,5 @@
 import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
-import { sendAdminEmail } from './mail.js'
+import { sendAdminEmail, sendUserEmail } from './mail.js'
 import { isSuperAdmin } from './superAdmin.js'
 
 function requireDb(res, requestId) {
@@ -41,6 +41,60 @@ function validateLead(lead) {
   if (lead.phone.length !== 10) return 'Enter a valid 10-digit mobile number.'
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lead.email)) return 'Enter a valid email address.'
   return ''
+}
+
+function trialUserMeta(body) {
+  const name = String(body?.name || '').trim()
+  const company = String(body?.company || '').trim()
+  const phoneDigits = digitsOnly(body?.phone).slice(0, 10)
+  const meta = { source: 'meta_ads_landing' }
+  if (name) meta.full_name = name
+  if (company) meta.company = company
+  if (phoneDigits.length === 10) {
+    meta.phone_digits = phoneDigits
+    meta.phone = `+91${phoneDigits}`
+    meta.phone_e164 = `+91${phoneDigits}`
+  }
+  return { email: String(body?.email || '').trim().toLowerCase(), meta, phoneDigits, name, company }
+}
+
+async function findAuthUserByEmail(supabase, email) {
+  const em = String(email || '').trim().toLowerCase()
+  for (let page = 1; page <= 10; page += 1) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 200 })
+    if (error) throw error
+    const users = data?.users || []
+    const match = users.find((u) => String(u.email || '').toLowerCase() === em)
+    if (match) return match
+    if (users.length < 200) return null
+  }
+  return null
+}
+
+/**
+ * New users + signInWithOtp would otherwise get the Confirm signup *link*
+ * (and log them straight into the app). Confirm the user first so Resend OTP
+ * uses the Magic Link / 6-digit template instead.
+ */
+async function ensureConfirmedMetaTrialUser(supabase, email, meta) {
+  const created = await supabase.auth.admin.createUser({
+    email,
+    email_confirm: true,
+    user_metadata: meta
+  })
+  if (created.data?.user && !created.error) return created.data.user
+  if (!/already|registered|exists/i.test(created.error?.message || '')) {
+    throw created.error
+  }
+  const existing = await findAuthUserByEmail(supabase, email)
+  if (!existing) throw created.error
+  const nextMeta = { ...(existing.user_metadata || {}), ...meta }
+  const { data, error } = await supabase.auth.admin.updateUserById(existing.id, {
+    email_confirm: true,
+    user_metadata: nextMeta
+  })
+  if (error) throw error
+  return data?.user || existing
 }
 
 /** Public — must be registered before requireAuth. */
@@ -127,34 +181,13 @@ export function registerPublicMetaAdsLeadRoutes(app) {
     if (!supabase) return
 
     const email = String(req.body?.email || '').trim().toLowerCase()
-    const name = String(req.body?.name || '').trim()
-    const company = String(req.body?.company || '').trim()
-    const phoneDigits = digitsOnly(req.body?.phone).slice(0, 10)
+    const { meta } = trialUserMeta(req.body)
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'Enter a valid email address.', code: 'VALIDATION', requestId })
     }
 
-    const meta = {
-      source: 'meta_ads_landing',
-      meta_trial_skip_otp: true
-    }
-    if (name) meta.full_name = name
-    if (company) meta.company = company
-    if (phoneDigits.length === 10) {
-      meta.phone_digits = phoneDigits
-      meta.phone = `+91${phoneDigits}`
-      meta.phone_e164 = `+91${phoneDigits}`
-    }
-
     try {
-      const created = await supabase.auth.admin.createUser({
-        email,
-        email_confirm: true,
-        user_metadata: meta
-      })
-      if (created.error && !/already|registered|exists/i.test(created.error.message || '')) {
-        throw created.error
-      }
+      await ensureConfirmedMetaTrialUser(supabase, email, { ...meta, meta_trial_skip_otp: true })
 
       const { data, error } = await supabase.auth.admin.generateLink({
         type: 'magiclink',
@@ -173,6 +206,99 @@ export function registerPublicMetaAdsLeadRoutes(app) {
       return res.json({ ok: true, email, tokenHash, requestId })
     } catch (error) {
       console.error(`[${requestId}] meta trial skip-verify failed`, error?.message)
+      supabaseError(error, res, requestId)
+    }
+  })
+
+  /**
+   * Issue a login OTP and email the digits. One generateLink call — do not
+   * also call signInWithOtp from the browser (that 429s as a second send).
+   */
+  app.post('/api/meta-ads-trial/prepare-otp', async (req, res) => {
+    const requestId = `mal-otp-${Date.now()}`
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+
+    const { email, meta } = trialUserMeta(req.body)
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Enter a valid email address.', code: 'VALIDATION', requestId })
+    }
+
+    try {
+      await ensureConfirmedMetaTrialUser(supabase, email, meta)
+      // generateLink never sends mail. Without Resend, let the browser ask
+      // Supabase to send its own sign-in email instead.
+      if (!process.env.RESEND_API_KEY?.trim()) {
+        return res.json({ ok: true, email, delivery: 'supabase', requestId })
+      }
+      const { data, error } = await supabase.auth.admin.generateLink({
+        type: 'magiclink',
+        email,
+        options: {
+          data: meta,
+          redirectTo: String(req.body?.redirectTo || '').trim() || undefined
+        }
+      })
+      if (error) {
+        if (/rate limit|after\s*\d+\s*seconds|security purposes/i.test(error.message || '')) {
+          return res.status(429).json({
+            error: 'A code was just sent to this email. Wait a minute, then tap Resend OTP.',
+            code: 'RATE_LIMIT',
+            requestId
+          })
+        }
+        throw error
+      }
+      const otp = String(data?.properties?.email_otp || '').trim()
+      if (!otp) {
+        return res.status(500).json({
+          error: 'Could not create a verification code. Try again.',
+          code: 'NO_OTP',
+          requestId
+        })
+      }
+      if (process.env.NODE_ENV !== 'production' || process.env.META_TRIAL_LOG_OTP === '1') {
+        console.log(`[${requestId}] trial OTP for ${email}: ${otp}`)
+      }
+      const mailed = await sendUserEmail({
+        to: email,
+        subject: `${otp} is your QuoteGen code`,
+        text: [
+          `Your QuoteGen verification code is ${otp}.`,
+          '',
+          'Type this code on the QuoteGen screen to continue.',
+          'Ignore any Confirm / Log in link in other emails from Supabase.',
+          '',
+          '— QuoteGen'
+        ].join('\n')
+      })
+      if (!mailed.ok) {
+        console.error(`[${requestId}] trial OTP email failed`, mailed.error)
+        const unverified = /not verified|verify your domain/i.test(mailed.error || '')
+        return res.status(502).json({
+          error: unverified
+            ? 'Email sending isn’t set up yet — the sender domain is not verified in Resend.'
+            : 'Could not email the code. Try again in a minute.',
+          code: 'MAIL_FAILED',
+          requestId
+        })
+      }
+      return res.json({
+        ok: true,
+        email,
+        delivery: 'code',
+        otpLength: otp.length,
+        requestId
+      })
+    } catch (error) {
+      console.error(`[${requestId}] meta trial prepare-otp failed`, error?.message)
+      if (/rate limit|after\s*\d+\s*seconds|security purposes/i.test(error.message || '')) {
+        return res.status(429).json({
+          error: 'A code was just sent to this email. Wait a minute, then tap Resend OTP.',
+          code: 'RATE_LIMIT',
+          requestId
+        })
+      }
       supabaseError(error, res, requestId)
     }
   })
