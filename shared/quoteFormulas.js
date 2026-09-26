@@ -31,6 +31,67 @@ export const FORMULA_PRESETS = [
   { id: 'rate_after_discount', title: 'Rate after discount', hint: 'Per-piece rate once discount is off' }
 ]
 
+/** One-click named amount columns (separate from the built-in Amount). */
+export const NAMED_AMOUNT_COLUMN_PRESETS = [
+  {
+    id: 'amount_before_discount',
+    label: 'Amount before discount',
+    preset: 'list_amount',
+    hint: 'Quantity × Rate'
+  },
+  {
+    id: 'amount_before_tax',
+    label: 'Amount before tax',
+    preset: 'before_tax',
+    hint: 'Quantity × Rate − discount'
+  },
+  {
+    id: 'amount_after_discount',
+    label: 'Amount after discount',
+    preset: 'after_discount',
+    hint: 'Same as before tax — Quantity × Rate − discount'
+  }
+]
+
+export function namedAmountPresetFromLabel(label) {
+  const text = String(label || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  if (!text) return null
+  if (/before/.test(text) && /discount/.test(text)) return 'list_amount'
+  if (/after/.test(text) && /discount/.test(text) && !/\btax\b|\bgst\b/.test(text)) return 'after_discount'
+  if (
+    (/before/.test(text) && (/\btax\b/.test(text) || /\bgst\b/.test(text)))
+    || /pre tax/.test(text)
+    || /pretax/.test(text)
+    || (/\btaxable\b/.test(text) && /\bamount\b/.test(text))
+  ) return 'before_tax'
+  if (
+    (/after/.test(text) && (/\btax\b/.test(text) || /\bgst\b/.test(text)))
+    || /final amount/.test(text)
+  ) return 'after_tax'
+  return null
+}
+
+export function buildNamedAmountColumn(preset, existing = []) {
+  const spec = typeof preset === 'string'
+    ? NAMED_AMOUNT_COLUMN_PRESETS.find((p) => p.id === preset || p.preset === preset)
+    : preset
+  if (!spec) return null
+  const taken = new Set((existing || []).map((c) => String(c.id || '').toLowerCase()))
+  let id = String(spec.id || 'amount_calc')
+  let n = 2
+  while (taken.has(id.toLowerCase())) {
+    id = `${spec.id}_${n++}`
+  }
+  const formula = normalizeFormula({ preset: spec.preset, tokens: tokensForPreset(spec.preset) })
+  return {
+    id,
+    label: spec.label,
+    type: 'text',
+    calculated: true,
+    formula
+  }
+}
+
 export function presetsForTable(columns) {
   const hasTax = (columns || []).some(c => columnType(c) === 'tax')
   const hasDisc = (columns || []).some(c => columnType(c) === 'discount')
@@ -318,27 +379,22 @@ function rewritePercentOpsToMoney(tokens, columns) {
 }
 
 /**
- * Formula to attach when a column is added. Only clearly named
- * Amount-before/after-tax columns get a shortcut without the Formula type —
- * vague labels like "including" / "exclusive" stay ordinary text cells.
- * Other columns only get a guess when `guessTokens` is set (the Formula type
- * or the "this column is a formula" checkbox) — same as before.
+ * Formula to attach when a column is added. Clearly named amount columns
+ * (before/after tax or discount) get a shortcut even without the Formula type.
+ * Vague labels stay ordinary text unless `guessTokens` is set.
  */
 export function formulaForAddedColumn(col, columns = [], { guessTokens = false } = {}) {
+  if (!col) return null
+  if (isImageColumn(col) || isAttachmentColumn(col) || isNestedColumn(col)) return null
+  const type = columnType(col)
+  if (type === 'tax' || type === 'discount') return null
+
+  const namedPreset = namedAmountPresetFromLabel(col?.label)
+  if (namedPreset) {
+    return normalizeFormula({ preset: namedPreset, tokens: tokensForPreset(namedPreset) })
+  }
+
   if (!canHaveFormula(col, columns)) return null
-  const text = String(col?.label || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
-  const namedBeforeTax = (/before/.test(text) && (/\btax\b/.test(text) || /\bgst\b/.test(text)))
-    || /pre tax/.test(text)
-    || /pretax/.test(text)
-    || (/\btaxable\b/.test(text) && /\bamount\b/.test(text))
-  const namedAfterTax = (/after/.test(text) && (/\btax\b/.test(text) || /\bgst\b/.test(text)))
-    || /final amount/.test(text)
-  if (namedBeforeTax) {
-    return normalizeFormula({ preset: 'before_tax', tokens: tokensForPreset('before_tax') })
-  }
-  if (namedAfterTax) {
-    return normalizeFormula({ preset: 'after_tax', tokens: tokensForPreset('after_tax') })
-  }
   if (!guessTokens) return null
   const guessed = defaultFormulaTokens(col, columns)
   if (!guessed.length) return null

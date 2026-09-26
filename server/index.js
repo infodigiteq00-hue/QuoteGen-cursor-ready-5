@@ -17,6 +17,7 @@ import { registerPdfRoutes, registerPublicPdfRoutes, findChrome } from './pdfExp
 import { registerFeatureInterestRoutes } from './featureInterest.js'
 import { registerUserProfileRoutes } from './userProfile.js'
 import { registerAdminUserRoutes } from './adminUsers.js'
+import { registerPublicMetaAdsLeadRoutes, registerMetaAdsLeadRoutes } from './metaAdsLeads.js'
 import { getSupabase, isSupabaseConfigured } from './db.js'
 import { aiFillableColumns, blankItemFor, normalizeColumnList } from '../shared/quoteColumns.js'
 import { suggestFormulaFromAsk, validateFormulaDraft } from '../shared/formulaAssistant.js'
@@ -42,6 +43,8 @@ registerOnlyOfficeRoutes(app)
 // Quote images in <img> / PDF Chrome cannot send Bearer tokens.
 registerPublicQuoteAssetRoutes(app)
 registerPublicPdfRoutes(app)
+// Meta ads landing form — public lead capture before auth gate.
+registerPublicMetaAdsLeadRoutes(app)
 
 // Auth endpoints are public; everything else under /api requires a session.
 registerAuthRoutes(app)
@@ -58,6 +61,7 @@ registerPdfRoutes(app)
 registerFeatureInterestRoutes(app)
 registerUserProfileRoutes(app)
 registerAdminUserRoutes(app)
+registerMetaAdsLeadRoutes(app)
 
 const DEFAULT_DATA_COLUMNS = [
   { id: 'description', label: 'Description' },

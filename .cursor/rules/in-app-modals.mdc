@@ -1,0 +1,16 @@
+---
+description: Prefer in-app themed modals over native browser dialogs
+alwaysApply: true
+---
+
+# Confirmations and dialogs
+
+Never use native browser dialogs (`window.confirm`, `window.alert`, `window.prompt`) for user-facing confirmations or messages. They look out of place next to the QuoteGen UI.
+
+Use an in-app modal instead:
+- Overlay: dimmed backdrop (`rgba(15,23,42,.42)`), centered white card, ~20px radius, soft shadow
+- Match existing patterns (`WsConvertModal`, Users admin controls): blue `#1A73E8`, slate text, rounded buttons
+- Destructive actions: clear title + short consequence text; primary Cancel; danger action styled for hover/confirm
+- Escape / backdrop click should cancel when the action is not in progress
+
+Apply this to every new confirm/delete/remove/overwrite flow without waiting for the user to ask.

@@ -213,6 +213,75 @@ export async function verifyEmailCode(email, token) {
   return data
 }
 
+/**
+ * Meta ads trial signup — passwordless email OTP.
+ * Creates the user on first request when they don’t exist yet.
+ * Requires the Magic Link email template to include {{ .Token }}.
+ */
+export async function requestEmailOtp(email, { phoneDigits, phoneE164, name, company } = {}) {
+  assertConfigured()
+  const meta = { source: 'meta_ads_landing' }
+  if (phoneDigits) meta.phone_digits = phoneDigits
+  if (phoneE164) meta.phone_e164 = phoneE164
+  if (phoneE164) meta.phone = phoneE164
+  if (name) meta.full_name = name
+  if (company) meta.company = company
+  const { error } = await supabase.auth.signInWithOtp({
+    email: String(email || '').trim().toLowerCase(),
+    options: {
+      shouldCreateUser: true,
+      data: meta
+    }
+  })
+  if (error) throw new Error(authErrorMessage(error))
+  return { ok: true }
+}
+
+/** Verify the 6-digit code from the Magic Link / OTP email template. */
+export async function verifyEmailLoginOtp(email, token) {
+  assertConfigured()
+  const { data, error } = await supabase.auth.verifyOtp({
+    email: String(email || '').trim().toLowerCase(),
+    token: String(token || '').trim(),
+    type: 'email'
+  })
+  if (error) throw new Error(authErrorMessage(error))
+  return data
+}
+
+/**
+ * Temporary pre-launch path: skip inbox OTP and open a real session
+ * via a server-issued magic-link token (no email sent).
+ * Disable with META_TRIAL_ALLOW_SKIP_OTP=0 on the API before go-live.
+ */
+export async function skipMetaTrialEmailOtp({ email, phoneDigits, name, company } = {}) {
+  assertConfigured()
+  const em = String(email || '').trim().toLowerCase()
+  if (!em) throw new Error('Enter a valid email address.')
+  const response = await fetch('/api/meta-ads-trial/skip-verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: em,
+      phone: phoneDigits || '',
+      name: name || '',
+      company: company || ''
+    })
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(payload.error || payload.message || 'Could not continue without verification.')
+  }
+  const tokenHash = String(payload.tokenHash || '').trim()
+  if (!tokenHash) throw new Error('Could not continue without verification.')
+  const { data, error } = await supabase.auth.verifyOtp({
+    token_hash: tokenHash,
+    type: 'email'
+  })
+  if (error) throw new Error(authErrorMessage(error))
+  return data
+}
+
 export async function requestPasswordReset(email) {
   assertConfigured()
   const { error } = await supabase.auth.resetPasswordForEmail(email, {

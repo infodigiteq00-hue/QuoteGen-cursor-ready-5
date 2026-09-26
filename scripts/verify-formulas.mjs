@@ -253,7 +253,12 @@ test('named Amount before/after tax columns attach a formula when marked calcula
   assert.equal(beforeFormula.preset, 'before_tax')
   assert.equal(afterFormula.preset, 'after_tax')
   assert.equal(formulaForAddedColumn({ id: 'spec', label: 'Specification', type: 'text' }, cols, { guessTokens: false }), null)
-  assert.equal(formulaForAddedColumn({ id: 'abt2', label: 'Amount Before Tax', type: 'text' }, cols, { guessTokens: false }), null)
+  const named = formulaForAddedColumn({ id: 'abt2', label: 'Amount Before Tax', type: 'text' }, cols, { guessTokens: false })
+  assert.equal(named?.preset, 'before_tax')
+  const beforeDisc = formulaForAddedColumn({ id: 'abd', label: 'Amount before discount', type: 'text' }, cols, { guessTokens: false })
+  assert.equal(beforeDisc?.preset, 'list_amount')
+  const afterDisc = formulaForAddedColumn({ id: 'aad', label: 'Amount after discount', type: 'text' }, cols, { guessTokens: false })
+  assert.equal(afterDisc?.preset, 'after_discount')
 })
 
 test('click-built Qty × Rate − Discount + Tax still uses 18% of 180, not leftover ₹18', () => {

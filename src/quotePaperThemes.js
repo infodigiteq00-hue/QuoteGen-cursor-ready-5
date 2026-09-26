@@ -1,6 +1,8 @@
 /** Visual themes for the default QuoteGen quotation paper (not uploaded templates). */
 
 export const DEFAULT_ACCENT = '#1A73E8'
+export const DEFAULT_PAPER_STYLE = 'formal'
+export const PAPER_STYLE_STORAGE_KEY = 'qg-paper-style'
 
 function tableTintFromAccent(accent) {
   return {
@@ -49,30 +51,56 @@ export const PAPER_THEMES = {
   formal: {
     id: 'formal',
     label: 'Formal quotation',
-    hint: 'Letterhead + navy table — classic industrial quote layout',
+    hint: 'Letterhead layout — classic quote with billing, notes & bank',
     themeClass: 'qg-theme-formal',
-    pageBg: '#e6e9ef',
+    pageBg: '#e7edf5',
     paperBg: '#ffffff',
-    text: '#1a2332',
-    muted: '#5c6879',
-    metaBarBg: '#f3f5f8',
+    text: '#1e293b',
+    muted: '#64748b',
+    metaBarBg: '#f7f9fc',
     fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
     titleFont: 'Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif',
-    ...tableTintFromAccent('#1e4a8c')
+    ...tableTintFromAccent(DEFAULT_ACCENT)
   }
 }
 
+export function isPaperStyleId(id) {
+  return Boolean(id && PAPER_THEMES[id])
+}
+
+export function readPreferredPaperStyle() {
+  try {
+    const stored = localStorage.getItem(PAPER_STYLE_STORAGE_KEY)
+    if (isPaperStyleId(stored)) return stored
+  } catch { /* private mode */ }
+  return DEFAULT_PAPER_STYLE
+}
+
+export function writePreferredPaperStyle(id) {
+  const next = isPaperStyleId(id) ? id : DEFAULT_PAPER_STYLE
+  try { localStorage.setItem(PAPER_STYLE_STORAGE_KEY, next) } catch { /* ignore */ }
+  return next
+}
+
 export function resolvePaperTheme(id, tableAccent) {
-  const base = PAPER_THEMES[id] || PAPER_THEMES.corporate
+  const base = PAPER_THEMES[id] || PAPER_THEMES.formal
   const chosen = /^#[0-9a-f]{6}$/i.test(tableAccent) ? tableAccent : DEFAULT_ACCENT
   const tint = tableTintFromAccent(chosen)
-  return {
+  const resolved = {
     ...base,
     ...tint,
     accent: chosen,
     labelColor: chosen,
     tableAccent: chosen
   }
+  // Formal matches the trial unlock sheet: pale header, ink labels, no navy bar.
+  if (base.id === 'formal') {
+    resolved.tableHeadBg = '#f7f9fc'
+    resolved.tableHeadText = '#3d6db5'
+    resolved.tableStripeBg = '#ffffff'
+    resolved.tableBorder = '#e8edf3'
+  }
+  return resolved
 }
 
 export function accentForTableColor(id, palette) {

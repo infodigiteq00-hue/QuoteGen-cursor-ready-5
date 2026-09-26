@@ -1,12 +1,15 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
+  requestEmailOtp,
   requestPasswordReset,
   resendConfirmation,
   saveUserPhone,
   signIn,
   signUp,
+  skipMetaTrialEmailOtp,
   updatePassword,
-  verifyEmailCode
+  verifyEmailCode,
+  verifyEmailLoginOtp
 } from './apiAuth.js'
 import { emailLinkError, supabaseConfigured } from './supabaseClient.js'
 import BrandMark from './BrandMark.jsx'
@@ -204,6 +207,310 @@ function SignupForm({ onNeedsConfirmation, onAlreadyRegistered, onSwitch, prefil
   )
 }
 
+const META_OTP_SENT_KEY = 'qg_meta_otp_sent'
+
+function readMetaOtpSent(email) {
+  try {
+    const raw = sessionStorage.getItem(META_OTP_SENT_KEY)
+    if (!raw) return null
+    const saved = JSON.parse(raw)
+    if (!saved?.email || saved.email !== email) return null
+    const ageMs = Date.now() - Number(saved.at || 0)
+    if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > 10 * 60 * 1000) return null
+    return { ...saved, ageMs, remainSec: Math.max(0, 60 - Math.floor(ageMs / 1000)) }
+  } catch {
+    return null
+  }
+}
+
+function writeMetaOtpSent(email) {
+  try {
+    sessionStorage.setItem(META_OTP_SENT_KEY, JSON.stringify({ email, at: Date.now() }))
+  } catch { /* ignore */ }
+}
+
+function isOtpRateLimitError(message) {
+  return /too many|rate limit|after\s*\d+\s*seconds|security purposes/i.test(String(message || ''))
+}
+
+/**
+ * Meta ads trial — email only + OTP. Mobile was already captured on the landing form.
+ * Dark, minimal screen inspired by a simple verify UI (email instead of phone).
+ */
+function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = '', leadCompany = '', onSwitchLogin }) {
+  const [email, setEmail] = useState(prefillEmail || '')
+  const [digits, setDigits] = useState(['', '', '', '', '', ''])
+  const [loading, setLoading] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [skipping, setSkipping] = useState(false)
+  const [error, setError] = useState('')
+  const [cooldown, setCooldown] = useState(0)
+  const [codeSent, setCodeSent] = useState(false)
+  const inputsRef = useRef([])
+  const sentForRef = useRef('')
+
+  // Pre-launch: OTP UI stays, but we don’t auto-blast email until go-live.
+  const allowSkipOtp = true
+
+  const phoneDigits = normalizeIndiaMobileDigits(prefillPhone || '').slice(0, 10)
+  const otp = digits.join('')
+
+  useEffect(() => {
+    if (cooldown <= 0) return undefined
+    const t = setTimeout(() => setCooldown((c) => c - 1), 1000)
+    return () => clearTimeout(t)
+  }, [cooldown])
+
+  const markSent = (em, remainSec = 60) => {
+    sentForRef.current = em
+    writeMetaOtpSent(em)
+    setCodeSent(true)
+    setCooldown(Math.max(0, remainSec))
+  }
+
+  const sendOtp = async ({ silent = false } = {}) => {
+    if (!silent) setError('')
+    const em = email.trim().toLowerCase()
+    if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+      if (!silent) setError('Enter a valid email address.')
+      return false
+    }
+    setSending(true)
+    try {
+      const phoneE164 = isValidIndiaMobile(phoneDigits) ? toIndiaE164(phoneDigits) : ''
+      await requestEmailOtp(em, {
+        phoneDigits: isValidIndiaMobile(phoneDigits) ? phoneDigits : '',
+        phoneE164,
+        name: leadName,
+        company: leadCompany
+      })
+      if (isValidIndiaMobile(phoneDigits)) {
+        try { sessionStorage.setItem('qg_pending_phone', phoneDigits) } catch { /* ignore */ }
+      }
+      markSent(em, 60)
+      setDigits(['', '', '', '', '', ''])
+      return true
+    } catch (err) {
+      const message = err.message || 'Could not send the code. Please try again.'
+      // Auto-send often hits Supabase’s “too many emails” after refresh / remount —
+      // treat that as “code already on the way”, not a hard failure.
+      if (silent && isOtpRateLimitError(message)) {
+        markSent(em, 60)
+        return true
+      }
+      if (!silent) setError(message)
+      return false
+    } finally {
+      setSending(false)
+    }
+  }
+
+  // Auto-send once when we land with a prefilled email — skip if we just sent.
+  // Disabled while allowSkipOtp is on so we don’t spam inboxes during pre-launch.
+  useEffect(() => {
+    if (allowSkipOtp) return
+    const em = String(prefillEmail || '').trim().toLowerCase()
+    if (!em || sentForRef.current === em) return
+    const prior = readMetaOtpSent(em)
+    if (prior) {
+      markSent(em, prior.remainSec || 60)
+      return
+    }
+    sendOtp({ silent: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const skipForNow = async () => {
+    setError('')
+    const em = email.trim().toLowerCase()
+    if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+      setError('Enter a valid email address.')
+      return
+    }
+    setSkipping(true)
+    try {
+      await skipMetaTrialEmailOtp({
+        email: em,
+        phoneDigits: isValidIndiaMobile(phoneDigits) ? phoneDigits : '',
+        name: leadName,
+        company: leadCompany
+      })
+      if (isValidIndiaMobile(phoneDigits)) {
+        try {
+          await saveUserPhone(phoneDigits)
+          sessionStorage.removeItem('qg_pending_phone')
+        } catch (phoneErr) {
+          console.warn('Could not save mobile after skip-verify', phoneErr)
+        }
+      }
+      try { sessionStorage.removeItem('qg_meta_auth_pending') } catch { /* ignore */ }
+    } catch (err) {
+      setError(err.message || 'Could not continue. Please try again.')
+    } finally {
+      setSkipping(false)
+    }
+  }
+
+  const onDigitChange = (index, raw) => {
+    const value = String(raw || '').replace(/\D/g, '')
+    if (!value) {
+      setDigits((prev) => {
+        const next = [...prev]
+        next[index] = ''
+        return next
+      })
+      return
+    }
+    // Paste full code into one box
+    if (value.length > 1) {
+      const chars = value.slice(0, 6).split('')
+      setDigits((prev) => {
+        const next = [...prev]
+        for (let i = 0; i < 6; i += 1) next[i] = chars[i] || ''
+        return next
+      })
+      const focusAt = Math.min(chars.length, 5)
+      inputsRef.current[focusAt]?.focus()
+      return
+    }
+    setDigits((prev) => {
+      const next = [...prev]
+      next[index] = value
+      return next
+    })
+    if (index < 5) inputsRef.current[index + 1]?.focus()
+  }
+
+  const onDigitKeyDown = (index, e) => {
+    if (e.key === 'Backspace' && !digits[index] && index > 0) {
+      inputsRef.current[index - 1]?.focus()
+    }
+  }
+
+  const verify = async (e) => {
+    e.preventDefault()
+    setError('')
+    const em = email.trim().toLowerCase()
+    if (!/^\d{6}$/.test(otp)) {
+      setError('Enter the 6-digit code from your email.')
+      return
+    }
+    if (!codeSent && sentForRef.current !== em) {
+      const ok = await sendOtp()
+      if (!ok) return
+      setError('Code sent — enter it below, then tap Verify again.')
+      return
+    }
+    setLoading(true)
+    try {
+      await verifyEmailLoginOtp(em, otp)
+      if (isValidIndiaMobile(phoneDigits)) {
+        try {
+          await saveUserPhone(phoneDigits)
+          sessionStorage.removeItem('qg_pending_phone')
+        } catch (phoneErr) {
+          console.warn('Could not save mobile after OTP login', phoneErr)
+        }
+      }
+    } catch (err) {
+      setError(err.message || 'That code didn’t work. Try again or resend.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const cooldownLabel = `00:${String(cooldown).padStart(2, '0')}`
+
+  return (
+    <main className="meta-otp-page">
+      <div className="meta-otp-shell">
+        <h1 className="meta-otp-welcome">
+          Welcome to <span>QuoteGen</span>
+        </h1>
+
+        <form onSubmit={verify} className="meta-otp-form">
+          <label className="meta-otp-label" htmlFor="meta-otp-email">Your email</label>
+          <input
+            id="meta-otp-email"
+            type="email"
+            autoComplete="email"
+            required
+            value={email}
+            onChange={(e) => {
+              setEmail(e.target.value)
+              setCodeSent(false)
+            }}
+            placeholder="you@company.com"
+            className="meta-otp-email"
+          />
+
+          <div className="meta-otp-row">
+            <span className="meta-otp-label">OTP</span>
+            <div className="meta-otp-resend">
+              <button
+                type="button"
+                className="meta-otp-resend-btn"
+                disabled={sending || cooldown > 0}
+                onClick={() => sendOtp()}
+              >
+                {sending ? 'Sending…' : 'Resend OTP'}
+              </button>
+              {cooldown > 0 && <span className="meta-otp-timer">{cooldownLabel}</span>}
+            </div>
+          </div>
+
+          <div className="meta-otp-slots" role="group" aria-label="One-time password">
+            {digits.map((d, i) => (
+              <input
+                key={i}
+                ref={(el) => { inputsRef.current[i] = el }}
+                type="text"
+                inputMode="numeric"
+                autoComplete={i === 0 ? 'one-time-code' : 'off'}
+                maxLength={6}
+                value={d}
+                onChange={(e) => onDigitChange(i, e.target.value)}
+                onKeyDown={(e) => onDigitKeyDown(i, e)}
+                className="meta-otp-slot"
+                aria-label={`Digit ${i + 1}`}
+              />
+            ))}
+          </div>
+
+          {error && <p className="meta-otp-error">{error}</p>}
+
+          <button type="submit" className="meta-otp-submit" disabled={loading || sending || skipping}>
+            {loading ? 'Verifying…' : (
+              <>
+                Verify &amp; Login
+                <span className="meta-otp-submit-ico" aria-hidden="true">↗</span>
+              </>
+            )}
+          </button>
+        </form>
+
+        {allowSkipOtp && (
+          <button
+            type="button"
+            className="meta-otp-skip"
+            disabled={skipping || loading || sending}
+            onClick={skipForNow}
+          >
+            {skipping ? 'Continuing…' : 'Do this later — continue'}
+          </button>
+        )}
+
+        <p className="meta-otp-terms">
+          By continuing you agree to our Terms. Password can be set later.
+        </p>
+        <button type="button" className="meta-otp-login-link" onClick={onSwitchLogin}>
+          Already have a password? Log in
+        </button>
+      </div>
+    </main>
+  )
+}
+
 /**
  * Post-signup screen. The confirmation email normally carries a link, which
  * brings the browser back to this origin and signs the user in automatically.
@@ -376,6 +683,10 @@ const COPY = {
     title: 'Create your account',
     blurb: 'We’ll email you a confirmation link to check it’s really you.'
   },
+  'meta-trial': {
+    title: 'Continue your free trial',
+    blurb: 'Confirm your email with a one-time code — no password needed yet.'
+  },
   confirm: {
     title: 'Confirm your email',
     blurb: 'One more step before you can log in.'
@@ -390,7 +701,15 @@ const COPY = {
   }
 }
 
-export default function AuthScreen({ recovery = false, onPasswordUpdated, initialMode, prefillEmail = '' }) {
+export default function AuthScreen({
+  recovery = false,
+  onPasswordUpdated,
+  initialMode,
+  prefillEmail = '',
+  prefillPhone = '',
+  leadName = '',
+  leadCompany = ''
+}) {
   const [mode, setMode] = useState(recovery ? 'reset' : (initialMode || 'login'))
   const [pendingEmail, setPendingEmail] = useState('')
   const [loginNotice, setLoginNotice] = useState('')
@@ -407,6 +726,20 @@ export default function AuthScreen({ recovery = false, onPasswordUpdated, initia
     setMode('login')
   }
 
+  const copy = COPY[mode] || COPY.login
+
+  if (mode === 'meta-trial') {
+    return (
+      <MetaTrialAuthPage
+        prefillEmail={prefillEmail}
+        prefillPhone={prefillPhone}
+        leadName={leadName}
+        leadCompany={leadCompany}
+        onSwitchLogin={() => { setLoginNotice(''); setMode('login') }}
+      />
+    )
+  }
+
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-mist px-5 py-10 text-ink">
       <div aria-hidden="true" className="pointer-events-none absolute inset-0">
@@ -420,8 +753,8 @@ export default function AuthScreen({ recovery = false, onPasswordUpdated, initia
           <span className="text-lg font-semibold tracking-tight">QuoteGen</span>
         </div>
         <div className="auth-card-in rounded-3xl bg-white p-6 shadow-soft ring-1 ring-black/[.03] sm:p-8">
-          <h1 className="mb-1 text-xl font-semibold">{COPY[mode].title}</h1>
-          <p className="mb-6 text-sm text-slate-500">{COPY[mode].blurb}</p>
+          <h1 className="mb-1 text-xl font-semibold">{copy.title}</h1>
+          <p className="mb-6 text-sm text-slate-500">{copy.blurb}</p>
 
           {!supabaseConfigured && (
             <div className="mb-5">

@@ -8,6 +8,8 @@ import NativeTemplateQuote from './NativeTemplateQuote.jsx'
 import KnowledgeBasePanel from './KnowledgeBasePanel.jsx'
 import AuthScreen from './AuthScreen.jsx'
 import MarketingLanding from './MarketingLanding.jsx'
+import MetaAdsLanding from './MetaAdsLanding.jsx'
+import MetaTrialGuide from './MetaTrialGuide.jsx'
 import WsConvertModal from './WsConvertModal.jsx'
 import BrandMark from './BrandMark.jsx'
 import { emailLinkError } from './supabaseClient.js'
@@ -67,7 +69,8 @@ import {
   QuoteToSubjectBlock,
   LayoutStyleCards
 } from './QuoteStudio.jsx'
-import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor } from './quotePaperThemes.js'
+import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId } from './quotePaperThemes.js'
+import { companySeedFromLead, readMetaAdsLead, writeMetaAdsLead } from './metaTrialLead.js'
 import { A4_WIDTH_PX, defaultA4Pages, measureA4Blocks, normalizeA4Pages, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
 import { applyProductToItem, clientsFromQuotations, matchProducts, productsFromHistory } from './suggestCatalog.js'
@@ -124,7 +127,9 @@ import {
   formulaForAddedColumn,
   formulaSentence,
   isFormulaColumn,
-  normalizeFormula
+  normalizeFormula,
+  NAMED_AMOUNT_COLUMN_PRESETS,
+  buildNamedAmountColumn
 } from '../shared/quoteFormulas.js'
 import {
   attachSuggestedColumn,
@@ -1053,6 +1058,13 @@ function App() {
   const [passwordRecovery, setPasswordRecovery] = useState(false)
   const [guestAuthMode, setGuestAuthMode] = useState(null)
   const [guestEmail, setGuestEmail] = useState('')
+  const [guestPhone, setGuestPhone] = useState('')
+  const [guestLeadName, setGuestLeadName] = useState('')
+  const [guestLeadCompany, setGuestLeadCompany] = useState('')
+  const [publicPath, setPublicPath] = useState(() => {
+    if (typeof window === 'undefined') return '/'
+    return String(window.location.pathname || '/').replace(/\/+$/, '') || '/'
+  })
   const [view, setView] = useState('home')
   const [customer, setCustomer] = useState({ name: '', company: '', gst: '', location: '', shippingSame: true, shippingLocation: '' })
   const [enquiry, setEnquiry] = useState('')
@@ -1094,12 +1106,20 @@ function App() {
   const [seriesOpen, setSeriesOpen] = useState(false)
   const [columnLayoutOpen, setColumnLayoutOpen] = useState(false)
   const [layoutPreview, setLayoutPreview] = useState(null)
-  const [paperStyle, setPaperStyle] = useState('corporate')
+  const [paperStyle, setPaperStyleState] = useState(() => readPreferredPaperStyle())
+  const rememberPaperStyle = (id) => {
+    const next = writePreferredPaperStyle(id)
+    setPaperStyleState(next)
+    return next
+  }
   const [uploadLayoutName, setUploadLayoutName] = useState('')
   const [uploadReturnTo, setUploadReturnTo] = useState('home')
   const [newQuoteStep, setNewQuoteStep] = useState(1)
   const [newQuoteSession, setNewQuoteSession] = useState(0)
   const [knowledgeOpen, setKnowledgeOpen] = useState(true)
+  const [metaTrialDemo, setMetaTrialDemo] = useState(false)
+  const [metaTrialCompany, setMetaTrialCompany] = useState(false)
+  const metaNextConsumedRef = useRef(false)
   const isMobile = useIsMobile()
 
   const quoteIdRef = useRef(null)
@@ -1273,6 +1293,102 @@ function App() {
     return () => { cancelled = true; clearTimeout(bootTimer); unsubscribe() }
   }, [])
 
+  // Keep SPA path in React state (pushState alone does not re-render).
+  useEffect(() => {
+    const syncPath = () => {
+      const next = String(window.location.pathname || '/').replace(/\/+$/, '') || '/'
+      setPublicPath(next)
+    }
+    window.addEventListener('popstate', syncPath)
+    return () => window.removeEventListener('popstate', syncPath)
+  }, [])
+
+  // Resume Meta-ads OTP screen after refresh / HMR remount.
+  useEffect(() => {
+    if (authUser || guestAuthMode) return
+    let pending = false
+    let lead = null
+    try {
+      pending = sessionStorage.getItem('qg_meta_auth_pending') === '1'
+      const raw = sessionStorage.getItem('qg_meta_ads_lead')
+      if (raw) lead = JSON.parse(raw)
+    } catch { /* private mode */ }
+    const path = String(window.location.pathname || '/').replace(/\/+$/, '') || '/'
+    const onVerifyPath = path === '/trial-verify'
+    if (!pending && !onVerifyPath) return
+    if (lead?.email) {
+      setGuestEmail(lead.email || '')
+      setGuestPhone(lead.phone || '')
+      setGuestLeadName(lead.name || '')
+      setGuestLeadCompany(lead.company || '')
+    }
+    setGuestAuthMode('meta-trial')
+    if (!onVerifyPath) {
+      try { window.history.replaceState({}, '', '/trial-verify') } catch { /* ignore */ }
+      setPublicPath('/trial-verify')
+    }
+  }, [authUser, guestAuthMode])
+
+  // After Meta ads trial signup/login, honour the path they chose on the landing page.
+  useEffect(() => {
+    if (!authUser || metaNextConsumedRef.current) return
+    let next = ''
+    let resumeGuide = false
+    try {
+      next = sessionStorage.getItem('qg_meta_ads_next') || ''
+      resumeGuide = sessionStorage.getItem('qg_meta_guide') === '1'
+    } catch { /* private mode */ }
+    if (next !== 'demo' && next !== 'company') {
+      if (resumeGuide) setMetaTrialDemo(true)
+      return
+    }
+
+    metaNextConsumedRef.current = true
+    try {
+      sessionStorage.removeItem('qg_meta_ads_next')
+    } catch { /* ignore */ }
+
+    const path = String(window.location.pathname || '/').replace(/\/+$/, '') || '/'
+    if (path === '/metaadslanding' || path === '/meta-ads-landing' || path === '/trial-verify') {
+      window.history.replaceState({}, '', '/')
+      setPublicPath('/')
+    }
+    setGuestAuthMode(null)
+    setGuestEmail('')
+    setGuestPhone('')
+    setGuestLeadName('')
+    setGuestLeadCompany('')
+    try { sessionStorage.removeItem('qg_meta_auth_pending') } catch { /* ignore */ }
+
+    if (next === 'company') {
+      setMetaTrialDemo(false)
+      setMetaTrialCompany(true)
+      setBrandingOpen(true)
+      setWorkspaceView('company')
+      return
+    }
+
+    // Demo quotation path — empty guided flow (OTP-style), no sample enquiry.
+    setMetaTrialCompany(false)
+    setMetaTrialDemo(true)
+    try { sessionStorage.setItem('qg_meta_guide', '1') } catch { /* ignore */ }
+    setCustomer({
+      name: '',
+      company: '',
+      gst: '',
+      location: '',
+      shippingSame: true,
+      shippingLocation: ''
+    })
+    setEnquiry('')
+    setShowDetails(true)
+    setError('')
+    setColumns(DEFAULT_DATA_COLUMNS)
+    setNewQuoteStep(1)
+    setNewQuoteSession((n) => n + 1)
+    setWorkspaceView('home')
+  }, [authUser])
+
   useEffect(() => {
     if (authUser) refreshLandingData()
   }, [authUser])
@@ -1406,6 +1522,7 @@ function App() {
     setNewQuoteSession(n => n + 1)
     setEnquiry('')
     setError('')
+    setMetaTrialDemo(false)
     setWorkspaceView('new')
   }
 
@@ -1554,14 +1671,50 @@ function App() {
   }
 
   if (!authUser) {
-    const needsAuthScreen = passwordRecovery || emailLinkError || hasAuthRedirectHash() || guestAuthMode
+    const path = publicPath
+    const isTrialVerify = path === '/trial-verify' || guestAuthMode === 'meta-trial'
+    const needsAuthScreen = passwordRecovery || emailLinkError || hasAuthRedirectHash() || guestAuthMode || isTrialVerify
     if (needsAuthScreen) {
       return (
         <AuthScreen
+          key={`auth-${guestAuthMode || (isTrialVerify ? 'meta-trial' : 'default')}-${guestEmail}-${guestPhone}`}
           recovery={passwordRecovery}
           onPasswordUpdated={() => setPasswordRecovery(false)}
-          initialMode={guestAuthMode === 'signup' ? 'signup' : undefined}
+          initialMode={
+            guestAuthMode === 'meta-trial' || isTrialVerify
+              ? 'meta-trial'
+              : guestAuthMode === 'signup'
+                ? 'signup'
+                : guestAuthMode === 'login'
+                  ? 'login'
+                  : undefined
+          }
           prefillEmail={guestEmail}
+          prefillPhone={guestPhone}
+          leadName={guestLeadName}
+          leadCompany={guestLeadCompany}
+        />
+      )
+    }
+    const isMetaAdsLanding = path === '/metaadslanding' || path === '/meta-ads-landing'
+    if (isMetaAdsLanding) {
+      return (
+        <MetaAdsLanding
+          onSignIn={() => setGuestAuthMode('login')}
+          onContinueTrial={(choice, lead) => {
+            try {
+              sessionStorage.setItem('qg_meta_ads_next', choice)
+              sessionStorage.setItem('qg_meta_auth_pending', '1')
+            } catch { /* ignore */ }
+            if (lead) writeMetaAdsLead(lead)
+            setGuestEmail(lead?.email || '')
+            setGuestPhone(lead?.phone || '')
+            setGuestLeadName(lead?.name || '')
+            setGuestLeadCompany(lead?.company || '')
+            setGuestAuthMode('meta-trial')
+            setPublicPath('/trial-verify')
+            try { window.scrollTo(0, 0) } catch { /* ignore */ }
+          }}
         />
       )
     }
@@ -1613,11 +1766,14 @@ function App() {
 
   const changeCustomer = (key, value) => setCustomer(c => ({ ...c, [key]: value }))
 
-  const makeQuote = async () => {
-    if (!enquiry.trim()) return setError('Paste the customer enquiry to generate a quotation.')
+  const makeQuote = async (overrides = {}) => {
+    const enquiryText = String(overrides.enquiry ?? enquiry).trim()
+    const colsOverride = Array.isArray(overrides.columns) ? overrides.columns : null
+    if (!enquiryText) return setError('Paste the customer enquiry to generate a quotation.')
     setLoading(true); setError('')
     try {
-      let colsForAi = columns
+      let colsForAi = colsOverride || columns
+      if (colsOverride) setColumns(colsOverride)
       let tplData = null
       let layoutRoles = []
       if (selectedTemplateId) {
@@ -1631,7 +1787,7 @@ function App() {
       const response = await fetch('/api/generate-quotation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enquiry, customer, columns: colsForAi, layoutRoles })
+        body: JSON.stringify({ enquiry: enquiryText, customer, columns: colsForAi, layoutRoles })
       })
       const data = await readApiResponse(response)
       if (!response.ok) throw new Error(data.error)
@@ -1647,10 +1803,10 @@ function App() {
         },
         number: quoteNumber,
         date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-        companyProfile: companyProfile || undefined,
+        companyProfile: companySeedFromLead(readMetaAdsLead(), companyProfile).profile || companyProfile || undefined,
         layoutRef: selectedTemplateId || 'default',
         uploadTemplateId: selectedTemplateId || null,
-        paperStyle: selectedTemplateId ? undefined : paperStyle,
+        paperStyle: selectedTemplateId ? undefined : readPreferredPaperStyle(),
         tableColorId: 'blue',
         watermarkEnabled: true,
         fields: {
@@ -1660,10 +1816,12 @@ function App() {
       }
 
       await openQuoteInEditor(built, { id: null, template: tplData || null })
+      return built
     } catch (e) {
       setError(e.message === 'Failed to fetch'
         ? 'Cannot reach the API server. Run npm run dev in the project folder and keep that terminal open.'
         : e.message || 'Something went wrong. Please retry.')
+      return null
     }
     finally { setLoading(false) }
   }
@@ -1692,10 +1850,10 @@ function App() {
         terms: {},
         number: quoteNumber,
         date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
-        companyProfile: companyProfile || undefined,
+        companyProfile: companySeedFromLead(readMetaAdsLead(), companyProfile).profile || companyProfile || undefined,
         layoutRef: selectedTemplateId || 'default',
         uploadTemplateId: selectedTemplateId || null,
-        paperStyle: selectedTemplateId ? undefined : paperStyle,
+        paperStyle: selectedTemplateId ? undefined : readPreferredPaperStyle(),
         tableColorId: 'blue',
         watermarkEnabled: true,
         fields: { validUntil: defaultValidUntil(15), referenceNo: '' }
@@ -1785,6 +1943,72 @@ function App() {
     )
   }
 
+  // Meta ads first-quote guide — full screen, no dashboard chrome.
+  // Keep this above the quote editor so the reveal ceremony can finish first.
+  if (metaTrialDemo) {
+    return (
+      <MetaTrialGuide
+        enquiry={enquiry}
+        setEnquiry={setEnquiry}
+        columns={columns}
+        loading={loading}
+        error={error}
+        companyProfile={companyProfile}
+        trialLead={readMetaAdsLead() || (guestEmail || guestPhone || guestLeadName || guestLeadCompany
+          ? { name: guestLeadName, company: guestLeadCompany, phone: guestPhone, email: guestEmail }
+          : null)}
+        onSaveCompany={async (partial) => {
+          const result = await saveCompanyProfile(partial)
+          if (result?.unavailable) {
+            setPersistenceConfigured(false)
+            return { ...(companyProfile || {}), ...partial }
+          }
+          if (result?.profile) {
+            setCompanyProfile(result.profile)
+            setCompanyDraft({})
+            setPersistenceConfigured(true)
+            return result.profile
+          }
+          return { ...(companyProfile || {}), ...partial }
+        }}
+        onPatchQuote={(patch) => {
+          setQuote((q) => {
+            if (!q) return q
+            const next = { ...q, ...patch }
+            if (patch.customer) next.customer = { ...(q.customer || {}), ...patch.customer }
+            return next
+          })
+          if (patch.customer) {
+            setCustomer((c) => ({ ...c, ...patch.customer }))
+          }
+        }}
+        onCompanyProfileSaved={(profile) => {
+          if (!profile) return
+          setCompanyProfile(profile)
+          setCompanyDraft({})
+          setPersistenceConfigured(true)
+        }}
+        onGenerate={async (nextColumns) => {
+          try {
+            await saveCompanyProfile({ columnLayout: nextColumns })
+          } catch { /* profile save is best-effort during trial */ }
+          return makeQuote({ columns: nextColumns, enquiry })
+        }}
+        onEnterEditor={() => {
+          const preferred = readPreferredPaperStyle()
+          setQuote((q) => (q ? { ...q, paperStyle: q.paperStyle || preferred } : q))
+          setMetaTrialDemo(false)
+          try { sessionStorage.removeItem('qg_meta_guide') } catch { /* ignore */ }
+        }}
+        onExit={() => {
+          setMetaTrialDemo(false)
+          try { sessionStorage.removeItem('qg_meta_guide') } catch { /* ignore */ }
+          setWorkspaceView('home')
+        }}
+      />
+    )
+  }
+
   if (quote) {
     return (
       <QuoteEditor
@@ -1810,6 +2034,7 @@ function App() {
         onRedo={redoEdit}
         onFooterFitChange={applyFooterFit}
         seriesSyncedRef={lastSeriesSyncedNumberRef}
+        onRememberPaperStyle={rememberPaperStyle}
       />
     )
   }
@@ -1871,6 +2096,7 @@ function App() {
     account: ['Account', 'Your own details'],
     billing: ['Billing', 'Your plan'],
     'feature-interest': ['Feature interest', 'Who asked for upcoming features'],
+    'meta-ads-leads': ['Meta ads leads', 'Trial form leads from /metaadslanding'],
     'users-admin': ['Users', 'Onboarded accounts and quotation usage']
   }
   const [wsPageTitle, wsPageHint] = wsTitles[workspaceView] || wsTitles.home
@@ -1950,9 +2176,11 @@ function App() {
             selectedTemplateId={selectedTemplateId}
             setSelectedTemplateId={setSelectedTemplateId}
             paperStyle={paperStyle}
-            setPaperStyle={setPaperStyle}
+            setPaperStyle={rememberPaperStyle}
             isMobile={isMobile}
             authUser={authUser}
+            trialDemo={metaTrialDemo}
+            onDismissTrialDemo={() => setMetaTrialDemo(false)}
           />
         )}
 
@@ -1984,12 +2212,41 @@ function App() {
         )}
 
         {workspaceView === 'company' && (
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
-            alignItems: 'start',
-            gap: isMobile ? 16 : 28
-          }}>
+          <>
+            {metaTrialCompany && (
+              <div style={{
+                marginBottom: 16,
+                borderRadius: 14,
+                border: '1px solid #C5D9F8',
+                background: 'linear-gradient(180deg, #F3F8FF 0%, #EEF4FC 100%)',
+                padding: '14px 16px',
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 12,
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <div>
+                  <div style={{ fontSize: 14.5, fontWeight: 750, color: '#1A73E8' }}>Set up your letterhead</div>
+                  <div style={{ fontSize: 13.5, color: '#3D4859', marginTop: 2 }}>
+                    Add your company name, logo, and bank details — then try a demo quotation anytime from New quotation.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setMetaTrialCompany(false)}
+                  style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, border: '1px solid #D5DDE9', background: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', color: '#3D4859' }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
+              alignItems: 'start',
+              gap: isMobile ? 16 : 28
+            }}>
             <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 20 }}>
               <CompanyBrandingPanel
                 open={brandingOpen}
@@ -2053,6 +2310,7 @@ function App() {
               />
             </div>
           </div>
+          </>
         )}
 
         {workspaceView === 'account' && (
@@ -2062,6 +2320,12 @@ function App() {
         {workspaceView === 'feature-interest' && (
           String(authUser.email || '').trim().toLowerCase() === 'info@digiteqsolution.com'
             ? <WsFeatureInterestAdmin />
+            : <p style={{ color: '#B03A3A', fontSize: 15 }}>Super admin only.</p>
+        )}
+
+        {workspaceView === 'meta-ads-leads' && (
+          String(authUser.email || '').trim().toLowerCase() === 'info@digiteqsolution.com'
+            ? <WsMetaAdsLeadsAdmin />
             : <p style={{ color: '#B03A3A', fontSize: 15 }}>Super admin only.</p>
         )}
 
@@ -4036,7 +4300,10 @@ function ColumnBuilder({ columns, setColumns }) {
     let nextColumns = insertColumnsBeforeUnit(columns, [col])
     const shouldOpen = openFormula || type === 'formula' || wantFormula
     const formula = formulaForAddedColumn(col, nextColumns, { guessTokens: shouldOpen })
-    if (formula) col.formula = formula
+    if (formula) {
+      col.formula = formula
+      col.calculated = true
+    }
     nextColumns = adaptAmountFormula(nextColumns).columns
     setColumns(nextColumns)
     setCustomName('')
@@ -4335,6 +4602,34 @@ function ColumnBuilder({ columns, setColumns }) {
                 </span>
               </label>
             )}
+
+            <div className="mt-3">
+              <p className="mb-1.5 text-xs font-medium text-slate-600">Amount formulas</p>
+              <div className="flex flex-wrap gap-1.5">
+                {NAMED_AMOUNT_COLUMN_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    title={preset.hint}
+                    onClick={() => {
+                      const col = buildNamedAmountColumn(preset, columns)
+                      if (!col || columnExists(col.label)) return
+                      let nextColumns = insertColumnsBeforeUnit(columns, [col])
+                      nextColumns = adaptAmountFormula(nextColumns).columns
+                      setColumns(nextColumns)
+                      setShowAdd(false)
+                      setCustomName('')
+                    }}
+                    className="rounded-lg border border-sand bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:border-moss hover:bg-blue-50 hover:text-moss"
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[11px] leading-tight text-slate-400">
+                Built-in Amount stays as Quantity × Rate. These are extra calculated columns.
+              </p>
+            </div>
 
             <button
               type="button"
@@ -5040,6 +5335,21 @@ function defaultWidthForColumn(col, fontPx = LAYOUT_FONT_PX) {
   return Math.max(content, minWidthForHeaderLabel(col?.label))
 }
 
+/** Same compact proportions as the Meta trial unlock / final-preview table. */
+function formalWidthForColumn(col) {
+  if (col?.id === 'description' || /desc|particular|item/i.test(String(col?.label || ''))) return 360
+  if (col?.id === 'unit' || /unit|uom/i.test(String(col?.label || ''))) return 64
+  if (col?.id === 'quantity' || /qty|quantity/i.test(String(col?.label || ''))) return 72
+  if (col?.id === 'rate' || /rate|price/i.test(String(col?.label || ''))) return 80
+  if (col?.id === 'amount' || /amount|total/i.test(String(col?.label || ''))) return 90
+  if (isImageColumn(col)) return 72
+  if (isAttachmentColumn(col)) return 88
+  if (columnType(col) === 'hsn') return 70
+  if (isNestedColumn(col)) return 70
+  if (columnType(col) === 'tax' || columnType(col) === 'discount') return 72
+  return 88
+}
+
 function isCompactColumn(col) {
   if (!col) return false
   if (col.id === 'unit' || col.id === 'quantity' || col.id === 'rate' || col.id === 'amount') return true
@@ -5079,7 +5389,7 @@ function contentWidthForNumericColumn(col, items, fontPx = LAYOUT_FONT_PX) {
   return widthForNumericText(longest, fontPx)
 }
 
-function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, totals, saveStatus = 'idle', onNew, onHome, onRetry, onRestored, onConvertToInvoice, companyProfile, persistenceConfigured, onColumnsChange, canUndo, canRedo, onUndo, onRedo, onFooterFitChange, seriesSyncedRef }) {
+function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, totals, saveStatus = 'idle', onNew, onHome, onRetry, onRestored, onConvertToInvoice, companyProfile, persistenceConfigured, onColumnsChange, canUndo, canRedo, onUndo, onRedo, onFooterFitChange, seriesSyncedRef, onRememberPaperStyle }) {
   const [autofilling, setAutofilling] = useState(false)
   const [autofillNote, setAutofillNote] = useState('')
   const [hsnNote, setHsnNote] = useState('')
@@ -5113,7 +5423,9 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [saveFlash, setSaveFlash] = useState('')
-  const [paperStyle, setPaperStyleLocal] = useState(quote.paperStyle || quote.companyProfile?.paperStyle || 'corporate')
+  const [paperStyle, setPaperStyleLocal] = useState(() => (
+    quote.paperStyle || quote.companyProfile?.paperStyle || readPreferredPaperStyle()
+  ))
   const [watermarkEnabled, setWatermarkEnabledLocal] = useState(quote.watermarkEnabled !== false)
   const [logoColorBusy, setLogoColorBusy] = useState(false)
   const [logoColorNote, setLogoColorNote] = useState('')
@@ -5124,8 +5436,11 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const suggestedFillSigRef = useRef('')
 
   const setPaperStyle = (id) => {
+    if (!isPaperStyleId(id)) return
     setPaperStyleLocal(id)
     update(['paperStyle'], id)
+    onRememberPaperStyle?.(id)
+    writePreferredPaperStyle(id)
   }
 
   const setWatermarkEnabled = (enabled) => {
@@ -5136,6 +5451,11 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   useEffect(() => {
     setWatermarkEnabledLocal(quote.watermarkEnabled !== false)
   }, [quote.watermarkEnabled, quoteId])
+
+  useEffect(() => {
+    const next = quote.paperStyle || quote.companyProfile?.paperStyle || readPreferredPaperStyle()
+    if (isPaperStyleId(next)) setPaperStyleLocal(next)
+  }, [quote.paperStyle, quote.companyProfile?.paperStyle, quoteId])
 
   const tableColorId = quote.tableColorId || 'blue'
   const chosenAccent = accentForTableColor(tableColorId, quote.logoPalette)
@@ -5539,11 +5859,28 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       if (type === 'formula' || openFormula) col.calculated = true
       const shouldGuess = openFormula || type === 'formula'
       const formula = formulaForAddedColumn(col, [...cols, col], { guessTokens: shouldGuess })
-      if (formula) col.formula = formula
+      if (formula) {
+        col.formula = formula
+        col.calculated = true
+      }
       added = col
       return { columns: insertTypedColumns(cols, [col]), items: its.map(item => withColumnKeys(item, col)) }
     })
-    if ((openFormula || type === 'formula') && added && canHaveFormula(added, [...columns, added])) setFormulaColId(added.id)
+    if ((openFormula || type === 'formula' || added?.calculated) && added && canHaveFormula(added, [...columns, added])) {
+      if (openFormula || type === 'formula') setFormulaColId(added.id)
+    }
+  }
+
+  const quickAddNamedAmountColumn = (preset) => {
+    let added = null
+    mutateColumns((cols, its) => {
+      const col = buildNamedAmountColumn(preset, cols)
+      if (!col) return { columns: cols, items: its }
+      added = col
+      return { columns: insertTypedColumns(cols, [col]), items: its.map(item => withColumnKeys(item, col)) }
+    })
+    setDockAddColumnOpen(false)
+    return added
   }
 
   const saveColumnFormula = (colId, formula) => {
@@ -5747,9 +6084,8 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     })
   }
 
-  // Drag a column header onto another column's header to swap the two —
-  // the simplest possible "replace this column with that one" gesture for
-  // someone who has never used a spreadsheet's column-reorder before.
+  // Drag a column header onto another header to move it there — the
+  // dropped-on columns shift over instead of swapping places.
   const [dragColId, setDragColId] = useState(null)
   const [dropColId, setDropColId] = useState(null)
   const [editingColId, setEditingColId] = useState(null)
@@ -5784,15 +6120,13 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     })
   }
 
-  const swapColumns = (fromId, toId) => {
+  const moveQuoteColumns = (fromId, toId) => {
     if (!fromId || !toId || fromId === toId) return
     mutateColumns((cols) => {
       const from = cols.findIndex(c => c.id === fromId)
       const to = cols.findIndex(c => c.id === toId)
       if (from === -1 || to === -1) return { columns: cols }
-      const nextColumns = [...cols]
-      ;[nextColumns[from], nextColumns[to]] = [nextColumns[to], nextColumns[from]]
-      return { columns: nextColumns }
+      return { columns: moveColumn(cols, from, to) }
     })
   }
 
@@ -5803,9 +6137,11 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const [columnWidths, setColumnWidths] = useState({})
   const resizeStateRef = useRef(null)
   const imageFitRef = useRef({})
+  const isFormalPaper = paperStyle === 'formal'
   const defaultColWidthForKey = (key) => {
     const col = columns.find(c => c.id === key || `${c.id}__rate` === key)
-    return col ? defaultWidthForColumn(col, LAYOUT_FONT_PX) : Math.max(60, Math.round(110 * (LAYOUT_FONT_PX / 14)))
+    if (!col) return Math.max(60, Math.round(110 * (LAYOUT_FONT_PX / 14)))
+    return isFormalPaper ? formalWidthForColumn(col) : defaultWidthForColumn(col, LAYOUT_FONT_PX)
   }
   const getColWidthRaw = (key) => columnWidths[key] || defaultColWidthForKey(key)
   const fitImageColumn = (colId, rowIndex, contentWidth) => {
@@ -5839,18 +6175,33 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }
-  const SR_NO_COL_WIDTH = minWidthForHeaderLabel('Sr. No.', 22)
-  const ROW_ACTIONS_COL_WIDTH = 40
+  const SR_NO_COL_WIDTH = isFormalPaper ? 36 : minWidthForHeaderLabel('Sr. No.', 22)
+  const ROW_ACTIONS_COL_WIDTH = isFormalPaper ? 28 : 40
   const getColWidth = (key) => {
     const base = getColWidthRaw(key)
     const col = columns.find(c => c.id === key || `${c.id}__rate` === key)
+    if (isFormalPaper && !columnWidths[key]) return base
     return Math.max(base, contentWidthForNumericColumn(col, items, LAYOUT_FONT_PX))
   }
-  const tableTotalWidthPx = SR_NO_COL_WIDTH + ROW_ACTIONS_COL_WIDTH + columns.reduce((sum, col) => (
+  const rawColsWidth = columns.reduce((sum, col) => (
     sum + getColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id)
   ), 0)
+  let tableTotalWidthPx = SR_NO_COL_WIDTH + ROW_ACTIONS_COL_WIDTH + rawColsWidth
+  const formalColWidths = {}
+  if (isFormalPaper) {
+    const descCol = columns.find(c => c.id === 'description' || /desc|particular|item/i.test(String(c?.label || '')))
+    const descKey = descCol ? (isNestedColumn(descCol) ? `${descCol.id}__rate` : descCol.id) : null
+    const others = tableTotalWidthPx - (descKey && !columnWidths[descKey] ? getColWidth(descKey) : 0)
+    if (descKey && !columnWidths[descKey]) {
+      const leftover = Math.max(220, A4_PRINTABLE_PX - others)
+      formalColWidths[descKey] = leftover
+      tableTotalWidthPx = others + leftover
+    }
+    tableTotalWidthPx = A4_PRINTABLE_PX
+  }
+  const resolvedColWidth = (key) => formalColWidths[key] || getColWidth(key)
   const paperWidthPx = A4_WIDTH_PX
-  const tableFitZoom = Math.min(1, A4_PRINTABLE_PX / Math.max(1, tableTotalWidthPx - ROW_ACTIONS_COL_WIDTH))
+  const tableFitZoom = isFormalPaper ? 1 : Math.min(1, A4_PRINTABLE_PX / Math.max(1, tableTotalWidthPx - ROW_ACTIONS_COL_WIDTH))
   const tableFitsPaper = tableTotalWidthPx + 24 <= paperWidthPx
   // "Shrink font" only helps columns still at their default (font-scaled)
   // width — a column the user has manually dragged to a fixed pixel width no
@@ -6210,6 +6561,20 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                       >
                         Formula (fx)
                       </button>
+                      <div className="mb-1 rounded-lg border border-sand bg-slate-50/80 px-2 py-1.5">
+                        <p className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">Amount formulas</p>
+                        {NAMED_AMOUNT_COLUMN_PRESETS.map((preset) => (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            title={preset.hint}
+                            onClick={() => quickAddNamedAmountColumn(preset)}
+                            className="mb-0.5 flex w-full items-center rounded-lg border border-transparent px-2 py-1.5 text-left text-[12.5px] font-medium text-slate-700 transition hover:border-sand hover:bg-white"
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
                       {ADDABLE_COLUMN_TYPES.map(option => (
                         option.type === 'tax' || option.type === 'discount' ? (
                           <div key={option.type} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-slate-50">
@@ -6347,17 +6712,17 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         ) : null}
         <div className="quote-items-scroll overflow-x-auto" style={{ overflow: 'hidden' }}>
           <div data-qg-table-zoom={tableFitZoom} style={tableFitZoom < 1 ? { zoom: tableFitZoom, width: tableTotalWidthPx } : undefined}>
-          <table className="quote-items-table qg-studio-table text-left" style={{ tableLayout: 'fixed', width: `${tableTotalWidthPx}px`, minWidth: `${tableTotalWidthPx}px`, maxWidth: 'none', fontSize: `${paperFontPx}px` }}>
+          <table className="quote-items-table qg-studio-table text-left" style={{ tableLayout: 'fixed', width: isFormalPaper ? '100%' : `${tableTotalWidthPx}px`, minWidth: isFormalPaper ? '100%' : `${tableTotalWidthPx}px`, maxWidth: isFormalPaper ? '100%' : 'none', fontSize: `${paperFontPx}px` }}>
             <colgroup>
               <col style={{ width: `${SR_NO_COL_WIDTH}px` }} />
               {columns.map(col => (
-                    <col key={col.id} style={{ width: `${getColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id)}px` }} />
+                    <col key={col.id} style={{ width: `${resolvedColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id)}px` }} />
                   ))}
               <col style={{ width: `${ROW_ACTIONS_COL_WIDTH}px` }} />
             </colgroup>
             <thead data-qg-block="thead">
               <tr className="border-y uppercase tracking-wide" style={{ borderColor: 'var(--qg-table-border, #d2e3fc)' }}>
-                <th className="qg-cell-compact p-3">Sr. No.</th>
+                <th className="qg-cell-compact p-3">{isFormalPaper ? 'Sr.' : 'Sr. No.'}</th>
                 {columns.map(col => (
                     <th
                       key={col.id}
@@ -6365,9 +6730,9 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                       onDragStart={(e) => { if (e.target.closest?.('[data-resize-handle]')) { e.preventDefault(); return }; setDragColId(col.id) }}
                       onDragOver={(e) => { e.preventDefault(); setDropColId(col.id) }}
                       onDragLeave={() => setDropColId(prev => (prev === col.id ? null : prev))}
-                      onDrop={(e) => { e.preventDefault(); swapColumns(dragColId, col.id); setDragColId(null); setDropColId(null) }}
+                      onDrop={(e) => { e.preventDefault(); moveQuoteColumns(dragColId, col.id); setDragColId(null); setDropColId(null) }}
                       onDragEnd={() => { setDragColId(null); setDropColId(null) }}
-                      title={`${col.label} — click to rename, drag to swap`}
+                      title={`${col.label} — click to rename, drag to move`}
                       className={`group relative cursor-grab p-3 active:cursor-grabbing ${isCompactColumn(col) ? 'qg-cell-compact' : ''} ${isHighlightColumn(col) ? 'qg-highlight' : ''} ${col.id === 'amount' || isNestedColumn(col) || isFormulaColumn(col) ? 'text-right' : ''} ${dragColId === col.id ? 'opacity-40' : ''} ${dropColId === col.id && dragColId !== col.id ? 'bg-blue-50 ring-2 ring-inset ring-moss' : ''} ${formulaColId === col.id ? 'z-20' : ''}`}
                     >
                       <span className="inline-flex max-w-full flex-wrap items-center gap-0.5">
@@ -6626,10 +6991,10 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
           </div>
         </section>
         <footer className="mt-8 qg-signatory-block">
-          {profile?.bankName || profile?.bankAccountNo || profile?.bankQrUrl ? (
+          {profile?.bankName || profile?.bankAccountNo || profile?.bankQrUrl || paperStyle === 'formal' ? (
             <>
               <hr className="qg-section-rule" />
-              <CompanyBankDetails profile={profile} className="mb-8" />
+              <CompanyBankDetails profile={profile} className="mb-8" showEmpty={paperStyle === 'formal'} />
             </>
           ) : null}
           <hr className="qg-section-rule" />
@@ -6855,6 +7220,7 @@ function WsSidebar({ view, onNav, onNewQuote, onOpenEditor, recentCount, authUse
     { id: 'billing', label: 'Billing', icon: WS_ICONS.card },
     ...(isSuperAdmin ? [
       { id: 'users-admin', label: 'Users', icon: WS_ICONS.users },
+      { id: 'meta-ads-leads', label: 'Meta ads leads', icon: WS_ICONS.list },
       { id: 'feature-interest', label: 'Feature interest', icon: WS_ICONS.spark }
     ] : [])
   ]
@@ -7319,7 +7685,7 @@ function LayoutChoicePreview({ kind = 'default' }) {
   )
 }
 
-function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, initialStep = 1, loading, error, detailsOpen, setDetailsOpen, customer, changeCustomer, columns, setColumns, savedLayouts = [], activeLayoutId = '', persistenceConfigured, onSavedProfile, uploadTemplates, selectedTemplateId, setSelectedTemplateId, paperStyle, setPaperStyle, isMobile, authUser = null }) {
+function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, initialStep = 1, loading, error, detailsOpen, setDetailsOpen, customer, changeCustomer, columns, setColumns, savedLayouts = [], activeLayoutId = '', persistenceConfigured, onSavedProfile, uploadTemplates, selectedTemplateId, setSelectedTemplateId, paperStyle, setPaperStyle, isMobile, authUser = null, trialDemo = false, onDismissTrialDemo }) {
   const [step, setStep] = React.useState(initialStep)
   const [layoutChoice, setLayoutChoice] = React.useState('default') // 'default' | 'soon'
   const [keepMode, setKeepMode] = React.useState('save') // 'once' | 'save'
@@ -7598,6 +7964,20 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
   if (step === 2) {
     return (
       <div style={{ maxWidth: 680, margin: '0 auto' }}>
+        {trialDemo && (
+          <div style={{
+            marginBottom: 16,
+            borderRadius: 14,
+            border: '1px solid #C5D9F8',
+            background: 'linear-gradient(180deg, #F3F8FF 0%, #EEF4FC 100%)',
+            padding: '14px 16px'
+          }}>
+            <div style={{ fontSize: 14.5, fontWeight: 750, color: '#1A73E8' }}>Almost there</div>
+            <div style={{ fontSize: 13.5, color: '#3D4859', marginTop: 2 }}>
+              Pick QuoteGen layout, then hit <strong>Generate quotation</strong> — watch the sample enquiry become a proper quote.
+            </div>
+          </div>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 28 }}>
           <button onClick={() => setStep(1)} style={{ border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', padding: '8px 16px', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#3D4859' }}>← Back</button>
           <div>
@@ -7824,6 +8204,34 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
   // Step 1 — just the enquiry box
   return (
     <div style={{ maxWidth: 680, margin: '0 auto' }}>
+      {trialDemo && (
+        <div style={{
+          marginBottom: 16,
+          borderRadius: 14,
+          border: '1px solid #C5D9F8',
+          background: 'linear-gradient(180deg, #F3F8FF 0%, #EEF4FC 100%)',
+          padding: '14px 16px',
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 12,
+          alignItems: 'center',
+          justifyContent: 'space-between'
+        }}>
+          <div>
+            <div style={{ fontSize: 14.5, fontWeight: 750, color: '#1A73E8' }}>Demo quotation</div>
+            <div style={{ fontSize: 13.5, color: '#3D4859', marginTop: 2 }}>
+              Sample enquiry is ready below — tap <strong>Next</strong>, then <strong>Generate quotation</strong> to see QuoteGen turn it into a proper quote.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onDismissTrialDemo?.()}
+            style={{ minHeight: 36, padding: '0 12px', borderRadius: 10, border: '1px solid #D5DDE9', background: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', color: '#3D4859' }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <div style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: '32px 34px' }}>
         <label htmlFor="ws-enq" style={{ display: 'block', fontSize: 21, fontWeight: 800, marginBottom: 6, color: '#1a202c' }}>
           Paste the client's enquiry
@@ -8312,12 +8720,19 @@ function WsUsersAdmin() {
   const [error, setError] = React.useState('')
   const [note, setNote] = React.useState('')
   const [total, setTotal] = React.useState(0)
+  const [activeCount, setActiveCount] = React.useState(0)
+  const [nearingLimits, setNearingLimits] = React.useState([])
   const [users, setUsers] = React.useState([])
   const [selectedId, setSelectedId] = React.useState('')
   const [usageLoading, setUsageLoading] = React.useState(false)
   const [usageError, setUsageError] = React.useState('')
   const [usage, setUsage] = React.useState(null)
   const [range, setRange] = React.useState('day')
+  const [actionBusy, setActionBusy] = React.useState('')
+  const [actionMsg, setActionMsg] = React.useState('')
+  const [limitCount, setLimitCount] = React.useState('')
+  const [limitPeriod, setLimitPeriod] = React.useState('month')
+  const [removeTarget, setRemoveTarget] = React.useState(null) // { id, email }
   const detailsRef = React.useRef(null)
 
   const load = React.useCallback(() => {
@@ -8328,6 +8743,8 @@ function WsUsersAdmin() {
         const data = await r.json().catch(() => ({}))
         if (!r.ok) throw new Error(data.error || data.message || `Could not load users (${r.status})`)
         setTotal(data.total || 0)
+        setActiveCount(data.activeCount ?? (Array.isArray(data.users) ? data.users.filter((u) => (u.accountStatus || 'active') === 'active').length : 0))
+        setNearingLimits(Array.isArray(data.nearingLimits) ? data.nearingLimits : [])
         setUsers(Array.isArray(data.users) ? data.users : [])
         setNote(data.note || '')
       })
@@ -8338,6 +8755,15 @@ function WsUsersAdmin() {
   React.useEffect(() => { load() }, [load])
 
   React.useEffect(() => {
+    if (!removeTarget) return undefined
+    const onKey = (e) => {
+      if (e.key === 'Escape') cancelRemoveUser()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [removeTarget, actionBusy])
+
+  React.useEffect(() => {
     if (!selectedId) return
     const t = setTimeout(() => {
       detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
@@ -8345,23 +8771,211 @@ function WsUsersAdmin() {
     return () => clearTimeout(t)
   }, [selectedId, usageLoading, usage, usageError])
 
+  const syncLimitFields = (userLike) => {
+    if (userLike?.quoteLimitCount != null && userLike?.quoteLimitPeriod) {
+      setLimitCount(String(userLike.quoteLimitCount))
+      setLimitPeriod(userLike.quoteLimitPeriod)
+    } else {
+      setLimitCount('')
+      setLimitPeriod('month')
+    }
+  }
+
   const openDetails = (userId) => {
     setSelectedId(userId)
     setUsage(null)
     setUsageError('')
     setUsageLoading(true)
     setRange('day')
+    setActionMsg('')
+    const listed = users.find((u) => u.id === userId)
+    syncLimitFields(listed)
     fetch(`/api/admin/users/${encodeURIComponent(userId)}/usage`)
       .then(async (r) => {
         const data = await r.json().catch(() => ({}))
         if (!r.ok) throw new Error(data.error || data.message || `Could not load usage (${r.status})`)
         setUsage(data)
+        syncLimitFields(data.user)
       })
       .catch((e) => setUsageError(e.message || 'Could not load usage'))
       .finally(() => setUsageLoading(false))
   }
 
+  const patchControls = async (userId, body, busyKey) => {
+    setActionBusy(busyKey)
+    setActionMsg('')
+    try {
+      const r = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/controls`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(data.error || data.message || `Update failed (${r.status})`)
+      const nextUsers = users.map((u) => (
+        u.id === userId
+          ? {
+              ...u,
+              accountStatus: data.user?.accountStatus ?? u.accountStatus,
+              quoteLimitCount: data.user?.quoteLimitCount ?? null,
+              quoteLimitPeriod: data.user?.quoteLimitPeriod ?? null,
+              currentPeriodUsed: data.user?.currentPeriodUsed ?? u.currentPeriodUsed,
+              adminNote: data.user?.adminNote ?? u.adminNote,
+              statusUpdatedAt: data.user?.statusUpdatedAt ?? u.statusUpdatedAt
+            }
+          : u
+      ))
+      setUsers(nextUsers)
+      setActiveCount(nextUsers.filter((u) => (u.accountStatus || 'active') === 'active').length)
+      setNearingLimits(nextUsers.filter((u) => {
+        if ((u.accountStatus || 'active') !== 'active') return false
+        if (u.quoteLimitCount == null || u.quoteLimitCount <= 0 || !u.quoteLimitPeriod) return false
+        if (u.currentPeriodUsed == null) return false
+        return (u.currentPeriodUsed / u.quoteLimitCount) >= 0.8
+      }).map((u) => ({
+        id: u.id,
+        email: u.email,
+        used: u.currentPeriodUsed,
+        limit: u.quoteLimitCount,
+        period: u.quoteLimitPeriod,
+        pct: Math.min(100, Math.round((u.currentPeriodUsed / u.quoteLimitCount) * 100))
+      })))
+      if (usage?.user?.id === userId) {
+        setUsage((prev) => prev ? {
+          ...prev,
+          user: {
+            ...prev.user,
+            accountStatus: data.user?.accountStatus ?? prev.user.accountStatus,
+            quoteLimitCount: data.user?.quoteLimitCount ?? null,
+            quoteLimitPeriod: data.user?.quoteLimitPeriod ?? null,
+            adminNote: data.user?.adminNote ?? prev.user.adminNote,
+            statusUpdatedAt: data.user?.statusUpdatedAt ?? prev.user.statusUpdatedAt
+          },
+          totals: {
+            ...prev.totals,
+            currentPeriodUsed: data.user?.currentPeriodUsed ?? prev.totals?.currentPeriodUsed,
+            currentPeriodLabel: data.user?.quoteLimitPeriod
+              ? (data.user.quoteLimitPeriod === 'day' ? 'today' : data.user.quoteLimitPeriod === 'year' ? 'this year' : 'this month')
+              : null
+          }
+        } : prev)
+        syncLimitFields(data.user)
+      }
+      setActionMsg('Saved.')
+      return data
+    } catch (e) {
+      setActionMsg(e.message || 'Could not update')
+      throw e
+    } finally {
+      setActionBusy('')
+    }
+  }
+
+  const askRemoveUser = (userId) => {
+    const listed = users.find((u) => u.id === userId)
+    const email = listed?.email
+      || (usage?.user?.id === userId ? usage.user.email : '')
+      || ''
+    if (isProtectedSuperAdmin(listed) || isProtectedSuperAdmin({ email })) {
+      setActionMsg('Super admin cannot be removed.')
+      return
+    }
+    setSelectedId(userId)
+    setRemoveTarget({ id: userId, email })
+    setActionMsg('')
+  }
+
+  const cancelRemoveUser = () => {
+    if (actionBusy === 'remove' || actionBusy === 'hardRemove') return
+    setRemoveTarget(null)
+  }
+
+  const confirmRemoveUser = async (hard = false) => {
+    if (!removeTarget?.id) return
+    const userId = removeTarget.id
+    setActionBusy(hard ? 'hardRemove' : 'remove')
+    setActionMsg('')
+    try {
+      const url = `/api/admin/users/${encodeURIComponent(userId)}${hard ? '?hard=1' : ''}`
+      const r = await fetch(url, { method: 'DELETE' })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(data.error || data.message || `Remove failed (${r.status})`)
+      if (hard) {
+        setUsers((prev) => prev.filter((u) => u.id !== userId))
+        setTotal((n) => Math.max(0, n - 1))
+        setActiveCount((n) => Math.max(0, n - (users.find((u) => u.id === userId)?.accountStatus === 'active' ? 1 : 0)))
+        setNearingLimits((prev) => prev.filter((u) => u.id !== userId))
+        if (selectedId === userId) {
+          setSelectedId('')
+          setUsage(null)
+        }
+        setActionMsg('User permanently deleted.')
+      } else {
+        setUsers((prev) => prev.map((u) => (
+          u.id === userId ? { ...u, accountStatus: 'removed' } : u
+        )))
+        setActiveCount((n) => Math.max(0, n - (users.find((u) => u.id === userId)?.accountStatus === 'active' ? 1 : 0)))
+        setNearingLimits((prev) => prev.filter((u) => u.id !== userId))
+        if (usage?.user?.id === userId) {
+          setUsage((prev) => prev ? { ...prev, user: { ...prev.user, accountStatus: 'removed' } } : prev)
+        }
+        setActionMsg('User removed (sign-in banned).')
+      }
+      setRemoveTarget(null)
+    } catch (e) {
+      setActionMsg(e.message || 'Could not remove user')
+    } finally {
+      setActionBusy('')
+    }
+  }
+
   const series = usage?.series?.[range] || []
+  const statusOf = (u) => String(u?.accountStatus || 'active').toLowerCase()
+  const isProtectedSuperAdmin = (u) => !!(u?.isSuperAdmin || String(u?.email || '').trim().toLowerCase() === 'info@digiteqsolution.com')
+  const statusBadge = (status, userLike) => {
+    if (isProtectedSuperAdmin(userLike)) {
+      return (
+        <span style={{
+          display: 'inline-block',
+          marginLeft: 8,
+          padding: '2px 8px',
+          borderRadius: 999,
+          fontSize: 11,
+          fontWeight: 750,
+          background: '#EEF2FF',
+          border: '1px solid #C7D2FE',
+          color: '#4338CA',
+          verticalAlign: 'middle'
+        }}
+        >
+          Super admin
+        </span>
+      )
+    }
+    const s = String(status || 'active').toLowerCase()
+    const colors = s === 'paused'
+      ? { bg: '#FFF7ED', border: '#FDBA74', color: '#C2410C', label: 'Paused' }
+      : s === 'removed'
+        ? { bg: '#FDF2F2', border: '#E7CFCF', color: '#B03A3A', label: 'Removed' }
+        : { bg: '#ECFDF5', border: '#A7F3D0', color: '#047857', label: 'Active' }
+    return (
+      <span style={{
+        display: 'inline-block',
+        marginLeft: 8,
+        padding: '2px 8px',
+        borderRadius: 999,
+        fontSize: 11,
+        fontWeight: 750,
+        background: colors.bg,
+        border: `1px solid ${colors.border}`,
+        color: colors.color,
+        verticalAlign: 'middle'
+      }}
+      >
+        {colors.label}
+      </span>
+    )
+  }
 
   const detailsPanel = selectedId ? (
     <div
@@ -8377,7 +8991,10 @@ function WsUsersAdmin() {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, justifyContent: 'space-between', marginBottom: 18 }}>
             <div>
               <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8' }}>Usage details</div>
-              <div style={{ fontSize: 20, fontWeight: 800, marginTop: 6, color: '#1a202c', wordBreak: 'break-all' }}>{usage.user?.email || '—'}</div>
+              <div style={{ fontSize: 20, fontWeight: 800, marginTop: 6, color: '#1a202c', wordBreak: 'break-all' }}>
+                {usage.user?.email || '—'}
+                {statusBadge(usage.user?.accountStatus, usage.user)}
+              </div>
               <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 6 }}>Mobile: {usage.user?.phone || 'Not set'}</div>
               <div style={{ fontSize: 13, color: '#8A94A6', marginTop: 4 }}>Password: not available (Auth stores hashes only)</div>
             </div>
@@ -8394,6 +9011,118 @@ function WsUsersAdmin() {
                 </div>
               ))}
             </div>
+          </div>
+
+          <div style={{ marginBottom: 18, padding: 16, borderRadius: 12, border: '1px solid #E7EEFB', background: '#F8FAFC' }}>
+            <div style={{ fontSize: 15, fontWeight: 750, marginBottom: 10 }}>Account controls</div>
+            {isProtectedSuperAdmin(usage.user) ? (
+              <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5, color: '#6B7688' }}>
+                This is the super admin account. It cannot be paused, limited, removed, or permanently deleted.
+              </p>
+            ) : (
+              <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+              {statusOf(usage.user) !== 'active' ? (
+                <button
+                  type="button"
+                  disabled={!!actionBusy}
+                  onClick={() => patchControls(selectedId, { accountStatus: 'active' }, 'resume')}
+                  style={{ minHeight: 38, padding: '0 14px', borderRadius: 10, border: '0', background: '#047857', color: '#fff', fontSize: 13.5, fontWeight: 700, cursor: actionBusy ? 'wait' : 'pointer', opacity: actionBusy ? 0.7 : 1 }}
+                >
+                  {actionBusy === 'resume' ? 'Resuming…' : 'Resume'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!!actionBusy}
+                  onClick={() => patchControls(selectedId, { accountStatus: 'paused' }, 'pause')}
+                  style={{ minHeight: 38, padding: '0 14px', borderRadius: 10, border: '1.5px solid #FDBA74', background: '#FFF7ED', color: '#C2410C', fontSize: 13.5, fontWeight: 700, cursor: actionBusy ? 'wait' : 'pointer', opacity: actionBusy ? 0.7 : 1 }}
+                >
+                  {actionBusy === 'pause' ? 'Pausing…' : 'Pause'}
+                </button>
+              )}
+              {statusOf(usage.user) !== 'removed' && (
+                <button
+                  type="button"
+                  disabled={!!actionBusy}
+                  onClick={() => askRemoveUser(selectedId)}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = '#FDF2F2'
+                    e.currentTarget.style.borderColor = '#E7CFCF'
+                    e.currentTarget.style.color = '#B03A3A'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = '#fff'
+                    e.currentTarget.style.borderColor = '#D5DDE9'
+                    e.currentTarget.style.color = '#3D4859'
+                  }}
+                  style={{ minHeight: 38, padding: '0 14px', borderRadius: 10, border: '1.5px solid #D5DDE9', background: '#fff', color: '#3D4859', fontSize: 13.5, fontWeight: 700, cursor: actionBusy ? 'wait' : 'pointer', opacity: actionBusy ? 0.7 : 1 }}
+                >
+                  {actionBusy === 'remove' ? 'Removing…' : 'Remove'}
+                </button>
+              )}
+            </div>
+            <div style={{ fontSize: 13.5, color: '#6B7688', marginBottom: 10 }}>
+              Quote limit
+              {usage.user?.quoteLimitCount != null && usage.user?.quoteLimitPeriod
+                ? ` — ${usage.user.quoteLimitCount} / ${usage.user.quoteLimitPeriod}`
+                  + (usage.totals?.currentPeriodUsed != null ? ` (used ${usage.totals.currentPeriodUsed} ${usage.totals.currentPeriodLabel || ''})` : '')
+                : ' — unlimited'}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                placeholder="e.g. 50"
+                value={limitCount}
+                onChange={(e) => setLimitCount(e.target.value)}
+                style={{ width: 100, minHeight: 38, padding: '0 10px', borderRadius: 10, border: '1.5px solid #D5DDE9', fontSize: 14 }}
+              />
+              <select
+                value={limitPeriod}
+                onChange={(e) => setLimitPeriod(e.target.value)}
+                style={{ minHeight: 38, padding: '0 10px', borderRadius: 10, border: '1.5px solid #D5DDE9', fontSize: 14, background: '#fff' }}
+              >
+                <option value="day">per day</option>
+                <option value="month">per month</option>
+                <option value="year">per year</option>
+              </select>
+              <button
+                type="button"
+                disabled={!!actionBusy || limitCount === ''}
+                onClick={() => patchControls(selectedId, {
+                  quoteLimitCount: Number(limitCount),
+                  quoteLimitPeriod: limitPeriod
+                }, 'limit')}
+                style={{ minHeight: 38, padding: '0 14px', borderRadius: 10, border: '0', background: '#1A73E8', color: '#fff', fontSize: 13.5, fontWeight: 700, cursor: actionBusy || limitCount === '' ? 'not-allowed' : 'pointer', opacity: actionBusy || limitCount === '' ? 0.6 : 1 }}
+              >
+                {actionBusy === 'limit' ? 'Saving…' : 'Set limit'}
+              </button>
+              <button
+                type="button"
+                disabled={!!actionBusy}
+                onClick={() => patchControls(selectedId, { clearQuoteLimit: true }, 'clearLimit')}
+                style={{ minHeight: 38, padding: '0 14px', borderRadius: 10, border: '1.5px solid #D5DDE9', background: '#fff', color: '#3D4859', fontSize: 13.5, fontWeight: 700, cursor: actionBusy ? 'wait' : 'pointer' }}
+              >
+                {actionBusy === 'clearLimit' ? 'Clearing…' : 'Clear limit'}
+              </button>
+            </div>
+            <p style={{ margin: '10px 0 0', fontSize: 12.5, color: '#8A94A6' }}>
+              Limits reset automatically at the start of each day / calendar month / calendar year (UTC). Pause blocks new quotes; Remove also bans sign-in.
+            </p>
+              </>
+            )}
+            {actionMsg && (
+              <p style={{
+                margin: '10px 0 0',
+                fontSize: 13.5,
+                color: /saved|removed|resum|deleted/i.test(actionMsg) && !/could not|failed|cannot/i.test(actionMsg) ? '#047857' : '#B03A3A'
+              }}
+              >
+                {actionMsg}
+              </p>
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
@@ -8447,17 +9176,80 @@ function WsUsersAdmin() {
   return (
     <div style={{ maxWidth: 980, display: 'flex', flexDirection: 'column', gap: 18 }}>
       <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 26 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start', justifyContent: 'space-between' }}>
+          <div style={{ minWidth: 200, flex: 1 }}>
             <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8' }}>Super admin</div>
             <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: '#1a202c' }}>Onboarded users</div>
-            <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4 }}>Accounts signed up for QuoteGen, with email, mobile, and quotation counts.</div>
+            <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4 }}>Pause, remove, or set quote limits per day / month / year.</div>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#6B7688' }}>Total signed up</div>
-            <div style={{ fontSize: 36, fontWeight: 800, color: '#1A73E8', letterSpacing: '-0.03em', lineHeight: 1 }}>{loading ? '…' : total}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+            <div style={{ minWidth: 110, padding: '12px 14px', borderRadius: 14, background: '#F5F9FF', border: '1px solid #E7EEFB', textAlign: 'right' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7688' }}>Total signed up</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: '#1A73E8', letterSpacing: '-0.03em', lineHeight: 1.1, marginTop: 4 }}>{loading ? '…' : total}</div>
+            </div>
+            <div style={{ minWidth: 110, padding: '12px 14px', borderRadius: 14, background: '#ECFDF5', border: '1px solid #A7F3D0', textAlign: 'right' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7688' }}>Active users</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: '#047857', letterSpacing: '-0.03em', lineHeight: 1.1, marginTop: 4 }}>{loading ? '…' : activeCount}</div>
+            </div>
+            <div style={{
+              minWidth: 110,
+              padding: '12px 14px',
+              borderRadius: 14,
+              background: nearingLimits.length ? '#FFF7ED' : '#F8FAFC',
+              border: nearingLimits.length ? '1px solid #FDBA74' : '1px solid #E8EDF3',
+              textAlign: 'right'
+            }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7688' }}>Nearing limits</div>
+              <div style={{
+                fontSize: 32,
+                fontWeight: 800,
+                color: nearingLimits.length ? '#C2410C' : '#94A3B8',
+                letterSpacing: '-0.03em',
+                lineHeight: 1.1,
+                marginTop: 4
+              }}
+              >
+                {loading ? '…' : nearingLimits.length}
+              </div>
+            </div>
           </div>
         </div>
+        {!loading && nearingLimits.length > 0 && (
+          <div style={{ marginTop: 16, padding: 14, borderRadius: 14, background: '#FFF7ED', border: '1px solid #FDBA74' }}>
+            <div style={{ fontSize: 13, fontWeight: 750, color: '#C2410C', marginBottom: 8 }}>
+              At or above 80% of assigned quota
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {nearingLimits.map((n) => (
+                <button
+                  key={n.id}
+                  type="button"
+                  onClick={() => openDetails(n.id)}
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 8,
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '10px 12px',
+                    borderRadius: 10,
+                    border: '1px solid #FED7AA',
+                    background: '#fff',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#1a202c', wordBreak: 'break-all' }}>{n.email || n.id}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: '#C2410C', whiteSpace: 'nowrap' }}>
+                    {n.used}/{n.limit} per {n.period} · {n.pct}%
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <button
           type="button"
           onClick={load}
@@ -8484,27 +9276,189 @@ function WsUsersAdmin() {
                 style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderRadius: 12, border: '1px solid #EDF1F7', background: '#FBFCFE' }}
               >
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: '#1a202c', wordBreak: 'break-all' }}>{u.email || '(no email)'}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#1a202c', wordBreak: 'break-all' }}>
+                    {u.email || '(no email)'}
+                    {statusBadge(u.accountStatus, u)}
+                  </div>
                   <div style={{ marginTop: 4, fontSize: 13, color: '#6B7688' }}>
                     {u.phone || 'Mobile not set'} · {u.quotationCount} quotation{u.quotationCount === 1 ? '' : 's'}
+                    {u.quoteLimitCount != null && u.quoteLimitPeriod
+                      ? ` · limit ${u.currentPeriodUsed != null ? `${u.currentPeriodUsed}/` : ''}${u.quoteLimitCount}/${u.quoteLimitPeriod}`
+                      : ''}
+                    {u.quoteLimitCount != null && u.quoteLimitCount > 0 && u.currentPeriodUsed != null && (u.currentPeriodUsed / u.quoteLimitCount) >= 0.8
+                      ? ' · nearing limit'
+                      : ''}
                   </div>
                   <div style={{ marginTop: 2, fontSize: 12, color: '#8A94A6' }}>
                     Joined {u.createdAt ? new Date(u.createdAt).toLocaleString() : '—'}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => openDetails(u.id)}
-                  style={{ minHeight: 40, padding: '0 14px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', color: '#1A73E8' }}
-                >
-                  {selectedId === u.id ? (usageLoading ? 'Loading…' : 'Details') : 'Details'}
-                </button>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {!isProtectedSuperAdmin(u) && (statusOf(u) === 'active' ? (
+                    <button
+                      type="button"
+                      disabled={!!actionBusy}
+                      onClick={() => patchControls(u.id, { accountStatus: 'paused' }, `pause-${u.id}`)}
+                      style={{ minHeight: 40, padding: '0 12px', border: '1.5px solid #FDBA74', borderRadius: 10, background: '#FFF7ED', fontSize: 13, fontWeight: 700, cursor: 'pointer', color: '#C2410C' }}
+                    >
+                      Pause
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!!actionBusy}
+                      onClick={() => patchControls(u.id, { accountStatus: 'active' }, `resume-${u.id}`)}
+                      style={{ minHeight: 40, padding: '0 12px', border: '0', borderRadius: 10, background: '#047857', fontSize: 13, fontWeight: 700, cursor: 'pointer', color: '#fff' }}
+                    >
+                      Resume
+                    </button>
+                  ))}
+                  {!isProtectedSuperAdmin(u) && statusOf(u) !== 'removed' && (
+                    <button
+                      type="button"
+                      disabled={!!actionBusy}
+                      onClick={() => askRemoveUser(u.id)}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = '#FDF2F2'
+                        e.currentTarget.style.borderColor = '#E7CFCF'
+                        e.currentTarget.style.color = '#B03A3A'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = '#fff'
+                        e.currentTarget.style.borderColor = '#D5DDE9'
+                        e.currentTarget.style.color = '#3D4859'
+                      }}
+                      style={{ minHeight: 40, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', color: '#3D4859' }}
+                    >
+                      Remove
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => openDetails(u.id)}
+                    style={{ minHeight: 40, padding: '0 14px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 13.5, fontWeight: 700, cursor: 'pointer', color: '#1A73E8' }}
+                  >
+                    {selectedId === u.id ? (usageLoading ? 'Loading…' : 'Details') : 'Details'}
+                  </button>
+                </div>
               </div>
               {selectedId === u.id ? detailsPanel : null}
             </div>
           ))}
         </div>
       </section>
+
+      {removeTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ws-remove-user-title"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) cancelRemoveUser() }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 220,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+            background: 'rgba(15,23,42,.42)',
+            backdropFilter: 'blur(2px)'
+          }}
+        >
+          <div style={{
+            width: 'min(480px, 100%)',
+            background: '#fff',
+            borderRadius: 20,
+            boxShadow: '0 28px 60px -24px rgba(20,35,80,.45)',
+            border: '1px solid #E8EBF2',
+            padding: '22px 24px 20px'
+          }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#B03A3A' }}>Remove user</div>
+            <h2 id="ws-remove-user-title" style={{ margin: '8px 0 0', fontSize: 20, fontWeight: 800, letterSpacing: '-.02em', color: '#0D1117' }}>
+              Remove this account?
+            </h2>
+            <p style={{ margin: '10px 0 0', fontSize: 14.5, lineHeight: 1.55, color: '#6B7688' }}>
+              {removeTarget.email ? (
+                <>
+                  Choose how to handle{' '}
+                  <span style={{ fontWeight: 700, color: '#1a202c', wordBreak: 'break-all' }}>{removeTarget.email}</span>.
+                </>
+              ) : (
+                'Choose how to remove this account.'
+              )}
+            </p>
+            <div style={{ display: 'grid', gap: 10, marginTop: 18 }}>
+              <button
+                type="button"
+                disabled={!!actionBusy}
+                onClick={() => confirmRemoveUser(false)}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '14px 16px',
+                  borderRadius: 12,
+                  border: '1.5px solid #E7CFCF',
+                  background: '#FDF2F2',
+                  cursor: actionBusy ? 'wait' : 'pointer',
+                  opacity: actionBusy && actionBusy !== 'remove' ? 0.55 : 1
+                }}
+              >
+                <div style={{ fontSize: 15, fontWeight: 750, color: '#B03A3A' }}>
+                  {actionBusy === 'remove' ? 'Removing…' : 'Remove (can restore)'}
+                </div>
+                <div style={{ marginTop: 4, fontSize: 13, lineHeight: 1.45, color: '#6B7688' }}>
+                  Blocks sign-in and new quotes. You can Resume later.
+                </div>
+              </button>
+              <button
+                type="button"
+                disabled={!!actionBusy}
+                onClick={() => confirmRemoveUser(true)}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '14px 16px',
+                  borderRadius: 12,
+                  border: '1.5px solid #D5DDE9',
+                  background: '#fff',
+                  cursor: actionBusy ? 'wait' : 'pointer',
+                  opacity: actionBusy && actionBusy !== 'hardRemove' ? 0.55 : 1
+                }}
+              >
+                <div style={{ fontSize: 15, fontWeight: 750, color: '#0D1117' }}>
+                  {actionBusy === 'hardRemove' ? 'Deleting…' : 'Permanently delete'}
+                </div>
+                <div style={{ marginTop: 4, fontSize: 13, lineHeight: 1.45, color: '#6B7688' }}>
+                  Deletes the Auth account. They must sign up again. This cannot be undone.
+                </div>
+              </button>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                type="button"
+                disabled={!!actionBusy}
+                onClick={cancelRemoveUser}
+                style={{
+                  minHeight: 42,
+                  padding: '0 16px',
+                  borderRadius: 10,
+                  border: '1.5px solid #D5DDE9',
+                  background: '#fff',
+                  color: '#3D4859',
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: actionBusy ? 'wait' : 'pointer',
+                  opacity: actionBusy ? 0.6 : 1
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -8574,6 +9528,97 @@ function WsFeatureInterestAdmin() {
             </div>
           ))}
         </div>
+      </section>
+    </div>
+  )
+}
+
+function WsMetaAdsLeadsAdmin() {
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState('')
+  const [total, setTotal] = React.useState(0)
+  const [leads, setLeads] = React.useState([])
+
+  const load = React.useCallback(() => {
+    setLoading(true)
+    setError('')
+    fetch('/api/meta-ads-leads')
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(data.error || data.message || `Could not load leads (${r.status})`)
+        setTotal(data.total || 0)
+        setLeads(Array.isArray(data.leads) ? data.leads : [])
+      })
+      .catch((e) => setError(e.message || 'Could not load leads'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  React.useEffect(() => { load() }, [load])
+
+  return (
+    <div style={{ maxWidth: 1080, display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 26 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8' }}>Meta ads landing</div>
+            <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: '#1a202c' }}>Trial form leads</div>
+            <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4 }}>
+              Captured from <code style={{ fontSize: 13 }}>/metaadslanding</code> — name, phone, email, company.
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#6B7688' }}>Total</div>
+            <div style={{ fontSize: 36, fontWeight: 800, color: '#1A73E8', letterSpacing: '-0.03em', lineHeight: 1 }}>{loading ? '…' : total}</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={load}
+          disabled={loading}
+          style={{ marginTop: 16, minHeight: 42, padding: '0 16px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#3D4859', opacity: loading ? 0.6 : 1 }}
+        >
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
+        {error && (
+          <p style={{ marginTop: 14, borderRadius: 10, background: '#FDF2F2', border: '1px solid #E7CFCF', padding: '10px 14px', fontSize: 14, color: '#B03A3A' }}>{error}</p>
+        )}
+      </section>
+
+      <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 22, overflow: 'auto' }}>
+        <div style={{ fontSize: 15, fontWeight: 750, marginBottom: 12 }}>Leads</div>
+        {!loading && leads.length === 0 && !error && (
+          <p style={{ margin: 0, fontSize: 14.5, color: '#94a3b8' }}>No leads yet. Submit the form on /metaadslanding to test.</p>
+        )}
+        {leads.length > 0 && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: '#6B7688', fontSize: 12, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Name</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Phone</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Email</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Company</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leads.map((lead) => (
+                <tr key={lead.id}>
+                  <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', fontWeight: 650, color: '#1a202c' }}>{lead.name}</td>
+                  <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', whiteSpace: 'nowrap' }}>
+                    <a href={`tel:+91${lead.phone}`} style={{ color: '#1A73E8', textDecoration: 'none', fontWeight: 600 }}>+91 {lead.phone}</a>
+                  </td>
+                  <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', wordBreak: 'break-all' }}>
+                    <a href={`mailto:${lead.email}`} style={{ color: '#1A73E8', textDecoration: 'none' }}>{lead.email}</a>
+                  </td>
+                  <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#3D4859' }}>{lead.company || '—'}</td>
+                  <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#8A94A6', whiteSpace: 'nowrap', fontSize: 13 }}>
+                    {lead.createdAt ? new Date(lead.createdAt).toLocaleString() : ''}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </section>
     </div>
   )

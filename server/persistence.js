@@ -3,6 +3,7 @@ import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { computeQuoteTotals } from '../shared/quoteColumns.js'
 import { normalizeFooterFit } from '../shared/footerFit.js'
 import { createAiClient } from './hsnGst.js'
+import { assertCanCreateQuotation } from './accountAccess.js'
 import {
   DEFAULT_INVOICE_SERIES_TYPE,
   INVOICE_SERIES_TYPES,
@@ -1252,6 +1253,13 @@ If something isn't specified, keep the current value.`
     const supabase = requireDb(res, requestId)
     if (!supabase) return
     try {
+      const blocked = await assertCanCreateQuotation(supabase, {
+        userId: req.userId,
+        userEmail: req.userEmail
+      })
+      if (blocked) {
+        return res.status(blocked.status).json({ ...blocked.body, requestId })
+      }
       const fields = { ...quotationWriteFields(req.body || {}), user_id: req.userId }
       const { data, error } = await supabase
         .from('quotations')
@@ -1299,6 +1307,13 @@ If something isn't specified, keep the current value.`
     const supabase = requireDb(res, requestId)
     if (!supabase) return
     try {
+      const blocked = await assertCanCreateQuotation(supabase, {
+        userId: req.userId,
+        userEmail: req.userEmail
+      })
+      if (blocked) {
+        return res.status(blocked.status).json({ ...blocked.body, requestId })
+      }
       const { data: source, error: readError } = await supabase
         .from('quotations')
         .select('*')

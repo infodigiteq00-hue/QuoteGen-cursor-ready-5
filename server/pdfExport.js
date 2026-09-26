@@ -93,12 +93,67 @@ export function pdfEngineStatus() {
   }
 }
 
-function withHardTimeout(promise, timeoutMs, label) {
+let pdfLock = Promise.resolve()
+
+/** One Chromium at a time — Railway boxes cannot host concurrent headless browsers. */
+function withPdfLock(fn) {
+  const run = pdfLock.then(fn, fn)
+  pdfLock = run.then(() => undefined, () => undefined)
+  return run
+}
+
+function isResourceExhausted(error) {
+  const msg = `${error?.message || ''} ${error?.stderr || ''} ${error?.stack || ''}`
+  return /pthread_create|Resource temporarily unavailable|EAGAIN|Cannot allocate memory|ENOMEM|too many open files|EMFILE|ENFILE/i.test(msg)
+}
+
+function resourceExhaustedError(cause) {
+  return pdfError(
+    `Could not start Chrome: the live server ran out of process threads (${cause?.message || cause}). Restart the Railway service to clear leftover PDF Chrome processes.`,
+    'CHROME_SPAWN_FAILED',
+    503
+  )
+}
+
+async function closeBrowser(session, { abort = false } = {}) {
+  if (!session) return
+  if (abort) session.killed = true
+  const browser = session.browser
+  session.browser = null
+  if (!browser) return
+  const proc = typeof browser.process === 'function' ? browser.process() : null
+  try {
+    await Promise.race([
+      browser.close(),
+      new Promise(resolve => setTimeout(resolve, 2000))
+    ])
+  } catch { /* already gone */ }
+  const pid = proc?.pid
+  if (pid && !proc.killed) {
+    try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
+  }
+}
+
+/** Reap headless Chromium left behind by timed-out PDF jobs. Safe: PDF holds the lock. */
+function killOrphanChromium() {
+  if (process.platform !== 'linux') return
+  try {
+    execFileSync('pkill', ['-9', '-f', 'chromium.*--headless'], {
+      stdio: 'ignore',
+      timeout: 3000
+    })
+  } catch {
+    /* pkill exits 1 when nothing matched */
+  }
+}
+
+function withHardTimeout(promise, timeoutMs, label, onTimeout) {
   let timer
   return Promise.race([
     promise.finally(() => { if (timer) clearTimeout(timer) }),
     new Promise((_, reject) => {
       timer = setTimeout(() => {
+        Promise.resolve(onTimeout?.()).catch(() => {})
         reject(pdfError(`${label} timed out after ${Math.round(timeoutMs / 1000)}s.`, 'PDF_TIMEOUT', 504))
       }, timeoutMs)
     })
@@ -394,7 +449,12 @@ async function resolveChromium(systemBinary) {
     '--disable-background-networking',
     '--disable-extensions',
     '--disable-sync',
-    '--disable-software-rasterizer'
+    '--disable-software-rasterizer',
+    '--renderer-process-limit=1',
+    '--disable-crash-reporter',
+    '--disable-breakpad',
+    '--metrics-recording-only',
+    '--mute-audio'
     // Do NOT use --single-process: it often deadlocks page.pdf() on Railway.
   ]
 
@@ -421,7 +481,7 @@ async function resolveChromium(systemBinary) {
   }
 }
 
-async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
+async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary, session = {}) {
   const size = inferPageSizeMm(html)
   const viewport = viewportForPage(size)
 
@@ -432,13 +492,19 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
       `--window-size=${viewport.width},${viewport.height}`,
       '--hide-scrollbars'
     ]
+    if (process.platform === 'linux') args.push('--no-zygote')
     const browser = await resolved.puppeteer.default.launch({
       args,
       defaultViewport: viewport,
       executablePath: resolved.executablePath,
       headless: 'shell',
-      protocolTimeout: timeoutMs + 10_000
+      protocolTimeout: timeoutMs + 10_000,
+      timeout: Math.min(20_000, timeoutMs),
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false
     })
+    session.browser = browser
     return { browser, source: resolved.source, executablePath: resolved.executablePath }
   }
 
@@ -450,12 +516,27 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
       browser = launched.browser
       meta = launched
     } catch (firstError) {
-      // System/Nix Chromium sometimes fails on Railway; try Lambda build next.
-      if (!systemBinary) throw firstError
-      console.warn('[pdf] system Chrome launch failed, trying @sparticuz/chromium', firstError?.message || firstError)
-      const launched = await tryLaunch(null)
-      browser = launched.browser
-      meta = launched
+      if (isResourceExhausted(firstError)) {
+        console.warn('[pdf] Chrome thread limit hit, reaping leftover Chromium then retrying once')
+        await closeBrowser(session)
+        killOrphanChromium()
+        await new Promise(resolve => setTimeout(resolve, 300))
+        try {
+          const launched = await tryLaunch(systemBinary)
+          browser = launched.browser
+          meta = launched
+        } catch (retryError) {
+          throw resourceExhaustedError(retryError)
+        }
+      } else {
+        // System/Nix Chromium sometimes fails on Railway; try Lambda build next.
+        // Do not do this after thread exhaustion — a second Chrome makes it worse.
+        if (!systemBinary) throw firstError
+        console.warn('[pdf] system Chrome launch failed, trying @sparticuz/chromium', firstError?.message || firstError)
+        const launched = await tryLaunch(null)
+        browser = launched.browser
+        meta = launched
+      }
     }
 
     const dir = await mkdtemp(join(tmpdir(), 'quotegen-pdf-'))
@@ -489,10 +570,12 @@ async function renderHtmlToPdfWithPuppeteer(html, timeoutMs, systemBinary) {
       await rm(dir, { recursive: true, force: true }).catch(() => {})
     }
   } catch (error) {
+    if (session.killed) throw error
     if (error?.code) throw error
+    if (isResourceExhausted(error)) throw resourceExhaustedError(error)
     throw pdfError(`Could not start Chrome: ${error.message}`, 'CHROME_SPAWN_FAILED', 503)
   } finally {
-    if (browser) await browser.close().catch(() => {})
+    await closeBrowser(session)
   }
 }
 
@@ -553,27 +636,35 @@ export async function renderHtmlToPdf(html, { timeoutMs = RENDER_TIMEOUT_MS } = 
   const prepared = withUprightPageCss(prepareExportHtml(html), size)
   const budget = Math.max(10_000, timeoutMs)
 
-  const run = async () => {
-    if (usePuppeteerPrint(binary)) {
-      return renderHtmlToPdfWithPuppeteer(prepared, budget, binary)
-    }
-    if (binary) {
-      return renderHtmlToPdfWithSpawn(prepared, budget, binary)
-    }
-    throw pdfError(
-      'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
-      'CHROME_MISSING',
-      503
-    )
-  }
+  return withPdfLock(async () => {
+    const session = { browser: null, killed: false }
+    const work = (async () => {
+      if (usePuppeteerPrint(binary)) {
+        return renderHtmlToPdfWithPuppeteer(prepared, budget, binary, session)
+      }
+      if (binary) {
+        return renderHtmlToPdfWithSpawn(prepared, budget, binary)
+      }
+      throw pdfError(
+        'No Chrome or Chromium was found on the server. Install Google Chrome or set CHROME_PATH in .env.',
+        'CHROME_MISSING',
+        503
+      )
+    })()
+    work.catch(() => {})
 
-  try {
-    const pdf = await withHardTimeout(run(), budget + 5_000, 'PDF render')
-    return normalizePdfRotation(pdf)
-  } catch (error) {
-    if (error?.code) throw error
-    throw pdfError(`Could not render PDF: ${error?.message || error}`, 'CHROME_LAUNCH_FAILED', 503)
-  }
+    try {
+      const pdf = await withHardTimeout(work, budget + 5_000, 'PDF render', async () => {
+        await closeBrowser(session, { abort: true })
+        killOrphanChromium()
+      })
+      return normalizePdfRotation(pdf)
+    } catch (error) {
+      await closeBrowser(session)
+      if (error?.code) throw error
+      throw pdfError(`Could not render PDF: ${error?.message || error}`, 'CHROME_LAUNCH_FAILED', 503)
+    }
+  })
 }
 
 export function registerPublicPdfRoutes(app) {

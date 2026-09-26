@@ -287,23 +287,29 @@ function convertZoomToTransform(root) {
 }
 
 function revealTitles(root) {
+  const formal = Boolean(root.querySelector('.qg-theme-formal, [data-qg-theme="formal"]'))
+  const ink = formal ? '#3d6db5' : '#ffffff'
   root.querySelectorAll('.qg-col-title, .qg-col-title--capture').forEach((node) => {
     node.style.display = 'inline'
     node.style.visibility = 'visible'
-    node.style.color = '#ffffff'
-    node.style.webkitTextFillColor = '#ffffff'
+    node.style.color = ink
+    node.style.webkitTextFillColor = ink
     node.style.letterSpacing = '0'
     node.style.textTransform = 'uppercase'
-    node.style.textShadow = '0 0 0.3px #ffffff'
+    node.style.textShadow = formal ? 'none' : '0 0 0.3px #ffffff'
   })
   root.querySelectorAll('.quote-items-table thead th').forEach((th) => {
-    th.style.color = '#ffffff'
-    th.style.webkitTextFillColor = '#ffffff'
+    th.style.color = ink
+    th.style.webkitTextFillColor = ink
     th.style.letterSpacing = '0'
     th.style.visibility = 'visible'
     th.style.opacity = '1'
     th.style.webkitPrintColorAdjust = 'exact'
     th.style.printColorAdjust = 'exact'
+    if (formal) {
+      th.style.background = '#f7f9fc'
+      th.style.textShadow = 'none'
+    }
   })
 }
 
@@ -1038,7 +1044,11 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
     ].filter(Boolean)
 
     if (code === 'CHROME_MISSING' || code === 'CHROME_SPAWN_FAILED') {
-      throw new Error(`${parts.join(' · ')} — live server could not start Chrome for PDF.`)
+      const exhausted = /process threads|pthread_create|Resource temporarily unavailable/i.test(detail)
+      const hint = exhausted
+        ? 'live server ran out of Chrome process threads. Restart the Railway service, then try Download preview in PDF again.'
+        : 'live server could not start Chrome for PDF.'
+      throw new Error(`${parts.join(' · ')} — ${hint}`)
     }
     throw new Error(parts.join(' · '))
   }

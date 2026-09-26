@@ -135,6 +135,7 @@ function InlineField({ value, onChange, onBlur, placeholder, bold, large, right,
 
 /* ─── Company letterhead block (text + logo, no header image) ────────────── */
 function CompanyLetterheadBlock({ profile, theme }) {
+  const isFormal = theme.themeClass === 'qg-theme-formal'
   const name = profile?.companyName?.trim() || 'Your Company Name'
   const headerText = profile?.headerText?.trim() || ''
   const logoUrl = profile?.logoUrl
@@ -142,49 +143,47 @@ function CompanyLetterheadBlock({ profile, theme }) {
   const height = profile?.logoHeight != null
     ? Math.max(36, Math.min(120, Number(profile.logoHeight) || 64))
     : null
+  const mark = isFormal ? 46 : Math.min(width, 56)
   const initial = name.charAt(0).toUpperCase() || 'Q'
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-      {/* Logo — fixed width, center-aligned with text block */}
-      <div style={{ flexShrink: 0, width }}>
+    <div className={`qg-letterhead${isFormal ? ' qg-letterhead--formal' : ''}`}>
+      <div className="qg-letterhead-mark" style={{ width: isFormal ? mark : width }}>
         {logoUrl ? (
           <img
             src={logoUrl}
             alt={`${name} logo`}
             onError={onQuoteAssetImgError}
-            style={{ width: '100%', height: height || 'auto', maxHeight: height || 80, objectFit: 'contain', display: 'block' }}
+            style={{ width: '100%', height: height || 'auto', maxHeight: height || (isFormal ? mark : 80), objectFit: 'contain', display: 'block' }}
           />
         ) : (
           <div
+            className="qg-letterhead-initial"
             style={{
-              width: Math.min(width, 56),
-              height: Math.min(height || width, 56),
+              width: mark,
+              height: mark,
               background: theme.accent,
-              borderRadius: 10,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#fff',
-              fontWeight: 700,
-              fontSize: Math.min(width, 56) * 0.40,
+              fontSize: mark * 0.40,
             }}
           >
             {initial}
           </div>
         )}
       </div>
-      {/* Text block */}
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <p style={{ margin: 0, fontWeight: 700, fontSize: '1.26em', lineHeight: 1.25, color: theme.accent }}>
+      <div className="qg-letterhead-text">
+        <p className="qg-letterhead-name" style={{ color: isFormal ? theme.text : theme.accent }}>
           {name}
         </p>
         {headerText ? (
-          <p style={{ margin: '4px 0 0', fontSize: '0.8em', lineHeight: 1.5, color: theme.muted, whiteSpace: 'pre-line' }}>
+          <p className="qg-letterhead-address" style={{ color: theme.muted }}>
             {headerText}
           </p>
+        ) : isFormal ? (
+          <p className="qg-letterhead-address qg-letterhead-address--hint no-print" style={{ color: theme.muted }}>
+            Address, phone, or tagline
+          </p>
         ) : (
-          <p style={{ margin: '4px 0 0', fontSize: '0.8em', color: theme.muted }}>
+          <p className="qg-letterhead-address" style={{ color: theme.muted }}>
             Your address · City, State · PIN
           </p>
         )}
@@ -278,6 +277,45 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
     )
   }
 
+  /* Formal — typeset letterhead: brand left, title + number + date right */
+  if (theme.themeClass === 'qg-theme-formal') {
+    return (
+      <header className="qg-paper-header qg-paper-header--formal">
+        <div className="qg-formal-letterhead">
+          <CompanyLetterheadBlock profile={profile} theme={theme} />
+          <div className="qg-formal-docmeta">
+            <p className="qg-doc-title" style={{ color: theme.accent, fontFamily: theme.titleFont }}>{docLabel}</p>
+            <div className="qg-formal-docmeta-no">{numberField}</div>
+            <div className="qg-formal-docmeta-date">
+              <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} right placeholder="DD MMM YYYY" />
+            </div>
+          </div>
+        </div>
+        <div className="qg-formal-meta-bar">
+          <span className="qg-formal-meta-pair">
+            <em>Valid till</em>
+            <DateField
+              value={validUntil}
+              onChange={v => update(['fields'], { ...fields, validUntil: v })}
+              right
+              placeholder="DD/MM/YYYY"
+            />
+          </span>
+          <span className="qg-formal-meta-pair">
+            <em>Ref.</em>
+            <InlineField
+              value={referenceNo}
+              onChange={v => update(['fields'], { ...fields, referenceNo: v })}
+              right
+              mono
+              placeholder="—"
+            />
+          </span>
+        </div>
+      </header>
+    )
+  }
+
   /* No header image — classic two-column letterhead layout */
   return (
     <header className="qg-paper-header" style={{ borderBottomColor: theme.tableBorder }}>
@@ -337,6 +375,143 @@ export function QuoteToSubjectBlock({ theme, quote, update, gstMissing, gstField
       const remembered = shippingAddressesForCustomer(clients, customer, '')
       if (remembered[0]) update(['customer', 'shippingLocation'], remembered[0])
     }
+  }
+
+  const isFormal = theme.themeClass === 'qg-theme-formal'
+
+  if (isFormal) {
+    return (
+      <div className="qg-to-subject-wrap qg-to-subject-wrap--formal">
+        {shippingSame ? (
+          <h3 className="qg-formal-subject">
+            <InlineField
+              value={quote.title || ''}
+              onChange={v => update(['title'], v)}
+              placeholder="Quotation subject — describe what this covers"
+              bold
+              large
+              grow
+              style={{ color: theme.text }}
+            />
+          </h3>
+        ) : null}
+        <div className="qg-to-subject-section qg-formal-parties">
+          <div className="qg-to-col">
+            <p className="qg-section-chip" style={{ color: theme.accent }}>Quoted to</p>
+            {!shippingSame ? (
+              <p className="qg-address-sublabel" style={{ color: theme.muted }}>Billing address</p>
+            ) : null}
+            <SuggestField
+              value={customer.company || ''}
+              onChange={v => update(['customer', 'company'], v)}
+              onPick={item => onPickClient?.(item.client)}
+              suggestions={clientItems('company')}
+              placeholder="Customer company name"
+              bold
+              large
+              grow
+              style={{ color: theme.text }}
+            />
+            <SuggestField
+              value={customer.name || ''}
+              onChange={v => update(['customer', 'name'], v)}
+              onPick={item => onPickClient?.(item.client)}
+              suggestions={clientItems('name')}
+              placeholder="Kind Attn — contact name"
+              grow
+              style={{ color: theme.muted, marginTop: 2 }}
+            />
+            {!shippingSame ? (
+              <SuggestField
+                value={customer.location || ''}
+                onChange={v => update(['customer', 'location'], v)}
+                onPick={item => onPickClient?.(item.client)}
+                suggestions={clientItems('location')}
+                placeholder="Billing address · City · State"
+                grow
+                style={{ color: theme.muted, marginTop: 2 }}
+              />
+            ) : null}
+            <label className="no-print qg-ship-same-check" style={{ color: theme.muted }}>
+              <input
+                type="checkbox"
+                checked={shippingSame}
+                onChange={e => setShippingSame(e.target.checked)}
+              />
+              Shipping same as billing
+            </label>
+          </div>
+          <div className="qg-subject-col">
+            {shippingSame ? (
+              <>
+                <p className="qg-section-chip" style={{ color: theme.accent }}>Customer details</p>
+                <div style={gstMissing ? { outline: '2px solid #f87171', borderRadius: 6 } : undefined}>
+                  <SuggestField
+                    inputRef={gstFieldRef}
+                    value={customer.gst || ''}
+                    onChange={v => { onGstChange?.(); update(['customer', 'gst'], v) }}
+                    onPick={item => onPickClient?.(item.client)}
+                    suggestions={clientItems('gst')}
+                    placeholder={isInvoice ? 'GSTIN (required)' : 'GSTIN / Tax ID'}
+                    style={{ color: theme.text }}
+                  />
+                </div>
+                <SuggestField
+                  value={customer.location || ''}
+                  onChange={v => update(['customer', 'location'], v)}
+                  onPick={item => onPickClient?.(item.client)}
+                  suggestions={clientItems('location')}
+                  placeholder="Location · City, State"
+                  grow
+                  style={{ color: theme.muted, marginTop: 4 }}
+                />
+              </>
+            ) : (
+              <>
+                <p className="qg-section-chip" style={{ color: theme.accent }}>Ship to</p>
+                <p className="qg-address-sublabel" style={{ color: theme.muted }}>Shipping address</p>
+                <SuggestField
+                  value={customer.shippingLocation || ''}
+                  onChange={v => update(['customer', 'shippingLocation'], v)}
+                  onPick={item => update(['customer', 'shippingLocation'], item.address || item.title || '')}
+                  suggestions={shippingItems}
+                  placeholder="Shipping address · City · State"
+                  bold
+                  large
+                  grow
+                  style={{ color: theme.text }}
+                />
+              </>
+            )}
+          </div>
+        </div>
+        {!shippingSame ? (
+          <div className="qg-subject-below qg-formal-subject-below">
+            <p className="qg-section-chip" style={{ color: theme.accent }}>Subject</p>
+            <InlineField
+              value={quote.title || ''}
+              onChange={v => update(['title'], v)}
+              placeholder="Quotation subject — describe what this covers"
+              bold
+              large
+              grow
+              style={{ color: theme.text }}
+            />
+            <div style={{ marginTop: 8, ...(gstMissing ? { outline: '2px solid #f87171', borderRadius: 6 } : {}) }}>
+              <SuggestField
+                inputRef={gstFieldRef}
+                value={customer.gst || ''}
+                onChange={v => { onGstChange?.(); update(['customer', 'gst'], v) }}
+                onPick={item => onPickClient?.(item.client)}
+                suggestions={clientItems('gst')}
+                placeholder={isInvoice ? 'GSTIN (required)' : 'GSTIN / Tax ID'}
+                style={{ color: theme.muted }}
+              />
+            </div>
+          </div>
+        ) : null}
+      </div>
+    )
   }
 
   return (

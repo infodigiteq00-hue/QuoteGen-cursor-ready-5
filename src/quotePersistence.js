@@ -497,7 +497,7 @@ export function quotationToEditorState(quotation) {
     mode: data.mode || 'saved',
     layoutRef: data.layoutRef ?? quotation?.layoutRef ?? null,
     uploadTemplateId: data.uploadTemplateId ?? null,
-    paperStyle: data.paperStyle || 'corporate',
+    paperStyle: data.paperStyle || null,
     watermarkEnabled: data.watermarkEnabled !== false,
     tableColorId: data.tableColorId || 'blue',
     tableAccent: data.tableAccent || null,
