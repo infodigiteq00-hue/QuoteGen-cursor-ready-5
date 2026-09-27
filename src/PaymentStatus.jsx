@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { trackPixel } from './metaPixel.js'
 import './paymentStatus.css'
 
 const POLL_MS = 3000
@@ -28,6 +29,9 @@ export default function PaymentStatus({ onContinue }) {
           setError('')
           setAmount(data.amount || 0)
           setState(data.state)
+          if (data.state === 'COMPLETED') {
+            trackPixel('Purchase', { value: data.amount || 0, currency: 'INR', content_name: 'QuoteGen monthly' }, { once: orderId })
+          }
           if (data.state !== 'PENDING') return
         }
       } catch {

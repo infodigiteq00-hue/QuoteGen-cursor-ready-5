@@ -13,6 +13,7 @@ import {
 } from './apiAuth.js'
 import { emailLinkError, supabaseConfigured } from './supabaseClient.js'
 import BrandMark from './BrandMark.jsx'
+import { trackPixel } from './metaPixel.js'
 import { INDIA_COUNTRY_CODE, isValidIndiaMobile, normalizeIndiaMobileDigits, toIndiaE164 } from '../shared/phone.js'
 
 function Field({ label, hint, ...props }) {
@@ -340,6 +341,7 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
         name: leadName,
         company: leadCompany
       })
+      trackPixel('CompleteRegistration', { status: 'skipped_verify' }, { once: em })
       if (isValidIndiaMobile(phoneDigits)) {
         try {
           await saveUserPhone(phoneDigits)
@@ -409,6 +411,7 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
     setLoading(true)
     try {
       await verifyEmailLoginOtp(em, otp)
+      trackPixel('CompleteRegistration', { status: 'verified' }, { once: em })
       if (isValidIndiaMobile(phoneDigits)) {
         try {
           await saveUserPhone(phoneDigits)

@@ -20,6 +20,7 @@ import {
 } from '../shared/quoteColumns.js'
 import { formatIndianAmount } from '../shared/templateMap.js'
 import { companySeedFromLead, readMetaAdsLead, usefulLead } from './metaTrialLead.js'
+import { trackPixel } from './metaPixel.js'
 import './metaTrialGuide.css'
 
 const ENQUIRY_FILE_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,application/pdf,image/*,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain'
@@ -960,6 +961,7 @@ export default function MetaTrialGuide({
     if (payBusy) return
     setPayError('')
     setPayBusy(true)
+    trackPixel('InitiateCheckout', { value: payPrice, currency: 'INR', num_items: 1, content_name: 'QuoteGen monthly' })
     const lead = usefulLead(trialLead) || readMetaAdsLead() || {}
     try {
       const response = await fetch('/api/pay/phonepe/create', {

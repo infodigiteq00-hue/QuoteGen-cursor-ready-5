@@ -11,6 +11,7 @@ import MarketingLanding from './MarketingLanding.jsx'
 import MetaAdsLanding from './MetaAdsLanding.jsx'
 import MetaTrialGuide from './MetaTrialGuide.jsx'
 import PaymentStatus from './PaymentStatus.jsx'
+import { initMetaPixel } from './metaPixel.js'
 import WsConvertModal from './WsConvertModal.jsx'
 import BrandMark from './BrandMark.jsx'
 import { emailLinkError } from './supabaseClient.js'
@@ -9983,6 +9984,7 @@ class AppErrorBoundary extends React.Component {
 }
 
 // Dev hot-reload re-runs this module; reuse the root or the app mounts twice.
+initMetaPixel()
 const rootEl = document.getElementById('root')
 rootEl.__qgRoot = rootEl.__qgRoot || createRoot(rootEl)
 rootEl.__qgRoot.render(

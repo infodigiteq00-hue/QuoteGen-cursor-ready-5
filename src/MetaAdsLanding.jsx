@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import logoUrl from './assets/landing/quotegen-logo.png'
 import { META_ADS_LEAD_KEY as LEAD_KEY, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent } from './metaTrialLead.js'
+import { trackPixel } from './metaPixel.js'
 import './metaAdsLanding.css'
 
 const CTA_STYLE = { fontFamily: 'Archivo, Inter, system-ui, sans-serif', fontWeight: 400 }
@@ -139,6 +140,7 @@ function TrialForm({ formRef, autoFocusName, onNextStep, initialLead = null }) {
         throw new Error(data.error || data.message || 'Could not save your details. Please try again.')
       }
       writeMetaAdsLead({ ...payload, id: data.id || null })
+      trackPixel('Lead', { content_name: 'QuoteGen trial' }, { once: data.id || em })
       setDone(true)
     } catch (err) {
       setError(err.message || 'Could not save your details. Please try again.')
@@ -271,6 +273,18 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial, initialLead 
       sessionStorage.removeItem('qg_meta_otp_sent')
     } catch { /* ignore */ }
     clearMetaTrialIntent()
+  }, [])
+
+  useEffect(() => {
+    const el = document.getElementById('trial-form')
+    if (!el || typeof IntersectionObserver === 'undefined') return undefined
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      trackPixel('ViewContent', { content_name: 'QuoteGen trial form' })
+      observer.disconnect()
+    }, { threshold: 0.5 })
+    observer.observe(el)
+    return () => observer.disconnect()
   }, [])
 
   const goToForm = () => {
