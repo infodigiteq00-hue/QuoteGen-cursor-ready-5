@@ -647,6 +647,7 @@ const SEAT_START = 52
 const SEAT_INTRO_END = 45
 const SEAT_FLOOR = 11
 const SEATS_KEY = 'qg_trial_seats_left_v3'
+const SEATS_INTRO_KEY = 'qg_trial_seats_intro_v3'
 const SUPPORT_PHONE_E164 = '+919067610118'
 const SUPPORT_PHONE_LABEL = '+91 90676 10118'
 
@@ -654,13 +655,64 @@ function writeSeatsLeft(n) {
   try { sessionStorage.setItem(SEATS_KEY, String(n)) } catch { /* private mode */ }
 }
 
-function randomSeatWaitMs() {
-  // 10s / 20s / 30s-ish, never more than 40s — keep FOMO inside the first minute.
-  return 8000 + Math.floor(Math.random() * 24000)
+function writeSeatsIntroDone() {
+  try { sessionStorage.setItem(SEATS_INTRO_KEY, '1') } catch { /* private mode */ }
 }
 
-function randomIntroStepMs() {
-  return 500 + Math.floor(Math.random() * 240)
+function readSeatsIntroDone() {
+  try { return sessionStorage.getItem(SEATS_INTRO_KEY) === '1' } catch { return false }
+}
+
+function readSeatsLeft() {
+  try {
+    const n = Number(sessionStorage.getItem(SEATS_KEY))
+    if (Number.isFinite(n) && n >= SEAT_FLOOR && n <= SEAT_START) return Math.round(n)
+  } catch { /* private mode */ }
+  return null
+}
+
+function randomSeatWaitMs() {
+  return 1000 + Math.floor(Math.random() * 2000)
+}
+
+function randomIntroDelays(steps) {
+  if (steps <= 0) return []
+  const full = 13200 + Math.floor(Math.random() * 1600)
+  const total = Math.round(full * (steps / (SEAT_START - SEAT_INTRO_END)))
+  const weights = Array.from({ length: steps }, () => 0.45 + Math.random() * 1.15)
+  const sum = weights.reduce((a, b) => a + b, 0) || 1
+  const delays = weights.map((w) => Math.round((w / sum) * total))
+  delays[delays.length - 1] += total - delays.reduce((a, b) => a + b, 0)
+  return delays
+}
+
+function SeatOdometer({ value }) {
+  const [shown, setShown] = useState(value)
+  const [outgoing, setOutgoing] = useState(null)
+  const reduceMotion = typeof window !== 'undefined'
+    && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+
+  useEffect(() => {
+    if (value === shown) return undefined
+    if (reduceMotion) {
+      setOutgoing(null)
+      setShown(value)
+      return undefined
+    }
+    setOutgoing(shown)
+    setShown(value)
+    const t = window.setTimeout(() => setOutgoing(null), 400)
+    return () => window.clearTimeout(t)
+  }, [value, shown, reduceMotion])
+
+  return (
+    <span className="meta-guide-odo">
+      <span className="meta-guide-odo-view">
+        {outgoing != null ? <span className="meta-guide-odo-digit is-out">{outgoing}</span> : null}
+        <span className={`meta-guide-odo-digit${outgoing != null ? ' is-in' : ''}`}>{shown}</span>
+      </span>
+    </span>
+  )
 }
 
 function readOfferStart() {
@@ -1279,8 +1331,7 @@ export default function MetaTrialGuide({
   const [qrFailed, setQrFailed] = useState(false)
   const [offerStartedAt, setOfferStartedAt] = useState(readOfferStart)
   const [offerNow, setOfferNow] = useState(() => Date.now())
-  const [seatsLeft, setSeatsLeft] = useState(SEAT_START)
-  const [seatPulse, setSeatPulse] = useState(false)
+  const [seatsLeft, setSeatsLeft] = useState(() => readSeatsLeft() ?? SEAT_START)
   const offerLeftMs = offerStartedAt ? offerStartedAt + OFFER_MS - offerNow : OFFER_MS
   const offerLive = offerLeftMs > 0
   const payPrice = offerLive ? JOIN_PRICE : REGULAR_PRICE
@@ -1335,22 +1386,46 @@ export default function MetaTrialGuide({
       }, delayMs)
     }
     const run = async () => {
+      const stored = readSeatsLeft()
+      const introDone = readSeatsIntroDone() || (stored != null && stored <= SEAT_INTRO_END)
       const reduceMotion = typeof window !== 'undefined'
         && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
 
-      dropTo(SEAT_START)
-      if (!reduceMotion) {
-        await wait(360)
-        for (let n = SEAT_START - 1; n >= SEAT_INTRO_END; n -= 1) {
-          if (cancelled) return
-          dropTo(n)
-          await wait(randomIntroStepMs())
-        }
-      } else {
+      if (introDone) {
+        dropTo(stored ?? SEAT_INTRO_END)
+        if (cancelled) return
+        scheduleTick(randomSeatWaitMs())
+        return
+      }
+
+      const from = stored != null && stored <= SEAT_START && stored > SEAT_INTRO_END
+        ? stored
+        : SEAT_START
+      dropTo(from)
+      const remaining = from - SEAT_INTRO_END
+      if (remaining <= 0) {
+        writeSeatsIntroDone()
+        if (cancelled) return
+        scheduleTick(randomSeatWaitMs())
+        return
+      }
+      if (reduceMotion) {
         dropTo(SEAT_INTRO_END)
+        writeSeatsIntroDone()
+        if (cancelled) return
+        scheduleTick(randomSeatWaitMs())
+        return
+      }
+      const delays = randomIntroDelays(remaining)
+      for (let i = 0; i < delays.length; i += 1) {
+        if (cancelled) return
+        await wait(delays[i])
+        if (cancelled) return
+        dropTo(from - 1 - i)
       }
       if (cancelled) return
-      scheduleTick(8000 + Math.floor(Math.random() * 8000))
+      writeSeatsIntroDone()
+      scheduleTick(randomSeatWaitMs())
     }
     run()
     return () => {
@@ -1358,13 +1433,6 @@ export default function MetaTrialGuide({
       window.clearTimeout(timer)
     }
   }, [phase, offerLive])
-
-  useEffect(() => {
-    if (!offerLive) return undefined
-    setSeatPulse(true)
-    const t = window.setTimeout(() => setSeatPulse(false), 420)
-    return () => window.clearTimeout(t)
-  }, [seatsLeft, offerLive])
 
   const [payBusy, setPayBusy] = useState(false)
   const [payError, setPayError] = useState('')
@@ -2003,15 +2071,17 @@ export default function MetaTrialGuide({
             {offerLive ? (
               <>
                 <div className="meta-guide-offer is-live" role="timer" aria-live="off">
-                  <span className="meta-guide-offer-label">
+                  <p className="meta-guide-offer-row">
                     Special price <s>₹{REGULAR_PRICE}</s> ₹{JOIN_PRICE}/month
+                  </p>
+                  <p className="meta-guide-offer-row is-end">
                     <em className="meta-guide-offer-save">Save ₹{JOIN_SAVE}/month</em>
-                    {' '}— ends in
-                  </span>
-                  <span className="meta-guide-offer-clock">{formatCountdown(offerLeftMs)}</span>
+                    <span className="meta-guide-offer-ends">ends in</span>
+                    <span className="meta-guide-offer-clock">{formatCountdown(offerLeftMs)}</span>
+                  </p>
                 </div>
                 <p className="meta-guide-seats" aria-live="polite">
-                  Only <strong className={seatPulse ? 'is-tick' : ''}>{seatsLeft}</strong> / {SEAT_CAP} seats left at this price
+                  Only <strong><SeatOdometer value={seatsLeft} /></strong> / {SEAT_CAP} seats left at this price
                 </p>
               </>
             ) : (
@@ -2028,13 +2098,10 @@ export default function MetaTrialGuide({
               {payBusy ? 'Opening PhonePe…' : 'Join QuoteGen Now'}
             </button>
             {payError ? <p className="meta-guide-convert-error" role="alert">{payError}</p> : null}
-            <div className="meta-guide-convert-support">
-              <p className="meta-guide-convert-support-kicker">Got doubts?</p>
-              <a className="meta-guide-convert-call" href={`tel:${SUPPORT_PHONE_E164}`}>
-                Call us
-                <span>{SUPPORT_PHONE_LABEL}</span>
-              </a>
-            </div>
+            <p className="meta-guide-convert-support">
+              Got doubts?{' '}
+              <a href={`tel:${SUPPORT_PHONE_E164}`}>Call {SUPPORT_PHONE_LABEL}</a>
+            </p>
           </div>
         </div>
 
@@ -2080,13 +2147,10 @@ export default function MetaTrialGuide({
             <button type="button" className="meta-guide-secondary meta-guide-pay-close" onClick={() => setPayOpen(false)}>
               Close
             </button>
-            <div className="meta-guide-convert-support is-modal">
-              <p className="meta-guide-convert-support-kicker">Got doubts?</p>
-              <a className="meta-guide-convert-call" href={`tel:${SUPPORT_PHONE_E164}`}>
-                Call us
-                <span>{SUPPORT_PHONE_LABEL}</span>
-              </a>
-            </div>
+            <p className="meta-guide-convert-support is-modal">
+              Got doubts?{' '}
+              <a href={`tel:${SUPPORT_PHONE_E164}`}>Call {SUPPORT_PHONE_LABEL}</a>
+            </p>
           </GuideModal>
         ) : null}
       </main>
