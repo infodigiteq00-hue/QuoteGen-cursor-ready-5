@@ -2065,9 +2065,9 @@ export default function MetaTrialGuide({
           <div className="meta-guide-convert-offer">
             <p className="meta-guide-convert-hook">Liked what you see?</p>
             <p className="meta-guide-convert-promise">
-              Join the QuoteGen club and enter the future of smart quotation making.
+              Join QuoteGen.
             </p>
-            <p className="meta-guide-convert-meta">No more manual work — just paste, verify and send.</p>
+            <p className="meta-guide-convert-meta">Just paste, verify and send.</p>
             {offerLive ? (
               <>
                 <div className="meta-guide-offer is-live" role="timer" aria-live="off">
