@@ -96,8 +96,12 @@ test('30 compact rows fill sheets instead of one-row pages', () => {
     continuedUsable: A4_HEIGHT_PX - 124
   })
   const itemPages = pages.filter(p => p.rows.length)
-  assert.ok(itemPages.length <= 4, `expected ≤4 item pages, got ${itemPages.length}`)
+  assert.ok(itemPages.length <= 5, `expected ≤5 item pages, got ${itemPages.length}`)
   for (const page of itemPages) {
+    if (page.showTotals) {
+      assert.ok(page.rows.length >= 2, `totals page only has ${page.rows.length} rows`)
+      continue
+    }
     if (!page.showHeader) {
       assert.ok(page.rows.length >= 5, `continued page only has ${page.rows.length} rows`)
     }
@@ -161,6 +165,43 @@ test('tiny leftover closing prefers sharing previous page when shortfall ≤ squ
   })
   assert.ok(pages.length <= 2, `expected ≤2 pages with squeeze, got ${pages.length}`)
   assert.ok(pages.some(p => p.showClosing), 'closing missing')
+})
+
+test('totals never sit alone on a sheet when line items exist', () => {
+  const pages = packA4Pages({
+    rowCount: 30,
+    rowHeights: Array(30).fill(48),
+    headerHeight: 160,
+    metaHeight: 90,
+    theadHeight: 40,
+    totalsHeight: 90,
+    closingHeight: 0,
+    bodyPadY: 44,
+    firstUsable: A4_HEIGHT_PX - 88,
+    continuedUsable: A4_HEIGHT_PX - 124
+  })
+  const totalsPage = pages.find(p => p.showTotals)
+  assert.ok(totalsPage, 'totals missing')
+  assert.ok(totalsPage.rows.length >= 3, `totals must keep 2–3 line items, got ${totalsPage.rows.length}`)
+})
+
+test('when the last items page is full, totals still travel with 3 rows', () => {
+  const pages = packA4Pages({
+    rowCount: 20,
+    rowHeights: Array(20).fill(70),
+    headerHeight: 180,
+    metaHeight: 100,
+    theadHeight: 44,
+    totalsHeight: 240,
+    closingHeight: 0,
+    bodyPadY: 44,
+    firstUsable: 720,
+    continuedUsable: 680
+  })
+  const totalsPage = pages.find(p => p.showTotals)
+  assert.ok(totalsPage, 'totals missing')
+  assert.ok(totalsPage.rows.length >= 3, `expected ≥3 rows with totals, got ${totalsPage.rows.length}`)
+  assert.equal(pages.filter(p => p.showTotals).length, 1)
 })
 
 console.log(`${pass} passed, ${fail} failed`)

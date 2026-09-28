@@ -1526,7 +1526,7 @@ button.meta-guide-chip.is-on {
 
 .meta-guide-real-table th.is-right,
 .meta-guide-real-table td.is-right {
-  text-align: right;
+  text-align: left;
 }
 
 .meta-guide-real-table tbody tr {
@@ -1893,7 +1893,7 @@ button.meta-guide-chip.is-on {
 
 .meta-guide-doc-table th.is-right,
 .meta-guide-doc-table td.is-right {
-  text-align: right;
+  text-align: left;
 }
 
 .meta-guide-doc-table tbody tr {
@@ -3078,6 +3078,80 @@ button.meta-guide-chip.is-on {
   margin: 10px 0 0;
   font-size: 13.5px;
   color: #FDA4AF;
+}
+
+.meta-guide-convert-support {
+  margin: 18px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  text-align: center;
+}
+
+.meta-guide-convert-support-kicker {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #9AA6BD;
+}
+
+.meta-guide-convert-call {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin-top: 8px;
+  padding: 10px 18px;
+  border-radius: 12px;
+  color: #F8FAFF;
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.meta-guide-convert-call span {
+  font-size: 16.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: #93C5FD;
+}
+
+.meta-guide-convert-call:hover,
+.meta-guide-convert-call:focus-visible {
+  background: rgba(26, 115, 232, 0.18);
+  border-color: rgba(59, 139, 255, 0.45);
+}
+
+.meta-guide-convert-support.is-modal {
+  border-top-color: #E2E8F0;
+}
+
+.meta-guide-convert-support.is-modal .meta-guide-convert-support-kicker {
+  color: #64748B;
+}
+
+.meta-guide-convert-support.is-modal .meta-guide-convert-call {
+  color: #0F172A;
+  background: #F8FAFC;
+  border-color: #E2E8F0;
+}
+
+.meta-guide-convert-support.is-modal .meta-guide-convert-call span {
+  color: #1A73E8;
+}
+
+.meta-guide-seats strong.is-tick {
+  display: inline-block;
+  animation: metaGuideSeatTick 0.42s ease;
+}
+
+@keyframes metaGuideSeatTick {
+  0% { transform: scale(1.35); color: #fff; }
+  100% { transform: scale(1); }
 }
 
 .meta-guide-convert-offer .meta-guide-seats + .meta-guide-convert-cta,

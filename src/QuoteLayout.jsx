@@ -371,7 +371,7 @@ export function QuotePaper({
               <tr>
                 {L.showSrNo && <th className={cellPad} style={thStyle}>Sr.</th>}
                 {columns.map(col => (
-                  <th key={col.id} className={`${cellPad} ${col.id === 'amount' ? 'text-right' : ''}`} style={thStyle}>{col.label}</th>
+                  <th key={col.id} className={cellPad} style={thStyle}>{col.label}</th>
                 ))}
                 {editable && <th className="no-print w-9" style={thStyle}></th>}
               </tr>
@@ -393,12 +393,12 @@ export function QuotePaper({
                             <input
                               value={item[col.id] ?? ''}
                               onChange={e => updateItem(i, col.id, e.target.value)}
-                              className={`w-full bg-transparent outline-none ${col.id === 'amount' ? 'text-right font-medium' : ''}`}
+                              className={`w-full bg-transparent outline-none ${col.id === 'amount' ? 'font-medium' : ''}`}
                               placeholder="—"
                             />
                           )
                       ) : (
-                        <span className={col.id === 'amount' ? 'block text-right' : ''}>{item[col.id] || '—'}</span>
+                        <span>{item[col.id] || '—'}</span>
                       )}
                     </td>
                   ))}

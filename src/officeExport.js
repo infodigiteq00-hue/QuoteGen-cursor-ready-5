@@ -33,15 +33,15 @@ export function exportTableColumns(columns) {
   cols.push({ key: '_sr', label: 'Sr. No.' })
   for (const col of columns || []) {
     if (isNestedColumn(col)) {
-      cols.push({ key: rateKey(col), label: `${col.label} %`, align: 'right' })
-      cols.push({ key: amountKey(col), label: `${col.label} Amt`, align: 'right', money: true })
+      cols.push({ key: rateKey(col), label: `${col.label} %`, align: 'left' })
+      cols.push({ key: amountKey(col), label: `${col.label} Amt`, align: 'left', money: true })
       continue
     }
     const numeric = col.id === 'quantity' || col.id === 'rate' || col.id === 'amount' || columnType(col) === 'hsn'
     cols.push({
       key: col.id,
       label: col.label,
-      align: col.id === 'amount' || col.id === 'rate' || col.id === 'quantity' ? 'right' : 'left',
+      align: 'left',
       money: col.id === 'rate' || col.id === 'amount',
       media: isImageColumn(col) || isAttachmentColumn(col)
     })

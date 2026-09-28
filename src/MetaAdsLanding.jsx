@@ -296,7 +296,7 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial, initialLead 
   }
 
   const handleNextStep = (choice, lead) => {
-    writeMetaTrialIntent(choice)
+    writeMetaTrialIntent(choice, lead)
     if (lead) writeMetaAdsLead({ ...lead, submitted: true, next: choice })
     recordMetaLeadProgress(choice === 'company' ? 'company' : 'demo', lead)
     // Leave the long landing URL so refresh / back doesn't dump them into the ads page again.

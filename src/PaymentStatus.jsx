@@ -5,7 +5,7 @@ import './paymentStatus.css'
 const POLL_MS = 3000
 const MAX_POLLS = 40
 
-export default function PaymentStatus({ onContinue }) {
+export default function PaymentStatus({ onContinue, onPaid }) {
   const orderId = new URLSearchParams(window.location.search).get('order') || ''
   const [state, setState] = useState(orderId ? 'PENDING' : 'MISSING')
   const [amount, setAmount] = useState(0)
@@ -30,6 +30,7 @@ export default function PaymentStatus({ onContinue }) {
           setAmount(data.amount || 0)
           setState(data.state)
           if (data.state === 'COMPLETED') {
+            onPaid?.()
             trackPixel('Purchase', { value: data.amount || 0, currency: 'INR', content_name: 'QuoteGen monthly' }, { once: orderId })
           }
           if (data.state !== 'PENDING') return

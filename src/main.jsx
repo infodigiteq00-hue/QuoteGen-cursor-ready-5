@@ -77,7 +77,7 @@ import {
 import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, peekPreferredPaperStyle, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId, normalizePaperStyle } from './quotePaperThemes.js'
 import { peekPreferredColumns, readPreferredColumns, writePreferredColumns } from './quoteLayoutPrefs.js'
 import QuoteGenerateCeremony, { CEREMONY_MIN_MS } from './QuoteGenerateCeremony.jsx'
-import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, recordMetaLeadProgress } from './metaTrialLead.js'
+import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, recordMetaLeadProgress, markMetaTrialUnpaid, markMetaTrialPaid, isMetaTrialUnpaid, isMetaGuideActive } from './metaTrialLead.js'
 import { A4_WIDTH_PX, defaultA4Pages, measureA4Blocks, normalizeA4Pages, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
 import { applyProductToItem, clientsFromQuotations, matchProducts, productsFromHistory } from './suggestCatalog.js'
@@ -828,7 +828,7 @@ function shouldWrapTableCell(col) {
   if (isSuggestedColumn(col)) return true
   if (isImageColumn(col) || isAttachmentColumn(col) || isNestedColumn(col)) return false
   const id = String(col?.id || '').toLowerCase()
-  if (['rate', 'amount', 'quantity', 'qty', 'unit'].includes(id)) return false
+  if (['rate', 'amount', 'quantity', 'qty'].includes(id)) return false
   if (columnType(col) === 'hsn') return false
   if (id === 'description' || /^(description|enquiry|inquiry)$/i.test(String(col.label || '').trim())) return false
   return true
@@ -963,7 +963,7 @@ function QuoteTextTableCell({ col, columns, item, rowIndex, updateItem, onRevert
                 if (derived) onAmountBlur(rowIndex)
               }, 120)
             }}
-            className={`no-print w-full min-w-0 rounded bg-transparent p-2 outline-none hover:bg-slate-50/60 focus:bg-blue-50 ${compactClass ? 'whitespace-nowrap' : ''} ${derived || col.id === 'amount' ? 'text-right font-medium' : ''}`}
+            className={`no-print w-full min-w-0 rounded bg-transparent p-2 outline-none hover:bg-slate-50/60 focus:bg-blue-50 whitespace-normal break-words ${derived || col.id === 'amount' ? 'font-medium' : ''}`}
             placeholder={derived && !derived.manual ? (amount ? 'Qty × Rate' : 'Auto') : '—'}
             autoComplete="off"
           />
@@ -976,7 +976,7 @@ function QuoteTextTableCell({ col, columns, item, rowIndex, updateItem, onRevert
             anchorRef={suggestWrapRef}
           />
         ) : null}
-        <span className={`print-only-cell w-full min-w-0 p-2 ${compactClass ? 'whitespace-nowrap' : 'whitespace-pre-wrap break-words'} ${derived || col.id === 'amount' ? 'text-right font-medium' : ''}`}>
+        <span className={`print-only-cell w-full min-w-0 p-2 whitespace-normal break-words ${derived || col.id === 'amount' ? 'font-medium' : ''}`}>
           {isCurrency ? printAmountText(value) : (value || (derived && !derived.manual ? (amount ? 'Qty × Rate' : 'Auto') : ''))}
         </span>
         {derived?.overridden && <AmountOverrideBadge computed={derived.computed} onRevert={() => onRevertAmount(rowIndex, col)} />}
@@ -999,11 +999,11 @@ function NestedTableCells({ col, item, rowIndex, updateItem }) {
           value={rateValue}
           onChange={e => updateItem(rowIndex, rk, e.target.value)}
           inputMode="decimal"
-          className="no-print w-full rounded bg-transparent p-2 text-right outline-none hover:bg-white focus:bg-blue-50"
+          className="no-print w-full rounded bg-transparent p-2 outline-none hover:bg-white focus:bg-blue-50"
           placeholder="%"
         />
         <span className="no-print shrink-0 pr-1 text-xs text-slate-400">%</span>
-        <span className="print-only-cell w-full p-2 text-right">{rateValue ? `${rateValue}%` : ''}</span>
+        <span className="print-only-cell w-full p-2">{rateValue ? `${rateValue}%` : ''}</span>
         {hsnHere && <HsnGstFillBadge fill={hsnFill} />}
       </div>
     </td>
@@ -1131,7 +1131,7 @@ function App() {
   const [newQuoteStep, setNewQuoteStep] = useState(1)
   const [newQuoteSession, setNewQuoteSession] = useState(0)
   const [knowledgeOpen, setKnowledgeOpen] = useState(true)
-  const [metaTrialDemo, setMetaTrialDemo] = useState(false)
+  const [metaTrialDemo, setMetaTrialDemo] = useState(() => isMetaGuideActive())
   const [generateCeremony, setGenerateCeremony] = useState(null)
   const [metaLandingReturn, setMetaLandingReturn] = useState(false)
   const [metaTrialCompany, setMetaTrialCompany] = useState(false)
@@ -1372,6 +1372,8 @@ function App() {
   }, [authUser, guestAuthMode])
 
   const startMetaTrialPath = (next) => {
+    const lead = readMetaAdsLead()
+    markMetaTrialUnpaid(lead?.email)
     recordMetaLeadProgress(next === 'company' ? 'company' : 'demo')
     clearMetaTrialIntent()
     setMetaLandingReturn(false)
@@ -1387,15 +1389,7 @@ function App() {
     setGuestLeadName('')
     setGuestLeadCompany('')
 
-    if (next === 'company') {
-      setMetaTrialDemo(false)
-      setMetaTrialCompany(true)
-      setBrandingOpen(true)
-      setWorkspaceView('company')
-      return
-    }
-
-    // Demo quotation path — empty guided flow (OTP-style), no sample enquiry.
+    // Unpaid trial never opens the workspace — company setup stays inside the demo.
     setMetaTrialCompany(false)
     setMetaTrialDemo(true)
     try { sessionStorage.setItem('qg_meta_guide', '1') } catch { /* ignore */ }
@@ -1417,15 +1411,19 @@ function App() {
   }
 
   // After Meta ads trial signup/login, honour the path they chose on the landing page.
+  // Unpaid trial sessions stay in the guide even after refresh — OTP is not a paid login.
   useEffect(() => {
-    if (!authUser || metaNextConsumedRef.current) return
+    if (!authUser) return
+    const unpaid = isMetaTrialUnpaid(authUser.email)
+    if (unpaid) setMetaTrialDemo(true)
+    if (metaNextConsumedRef.current) return
     const { next, pending } = readMetaTrialIntent()
     let resumeGuide = false
     try {
       resumeGuide = sessionStorage.getItem('qg_meta_guide') === '1'
     } catch { /* private mode */ }
     if (!pending && next !== 'demo' && next !== 'company') {
-      if (resumeGuide) setMetaTrialDemo(true)
+      if (resumeGuide || unpaid) setMetaTrialDemo(true)
       return
     }
     metaNextConsumedRef.current = true
@@ -1705,7 +1703,12 @@ function App() {
   }
 
   if (String(window.location.pathname || '').replace(/\/+$/, '') === '/payment-status') {
-    return <PaymentStatus onContinue={() => window.location.assign('/')} />
+    return (
+      <PaymentStatus
+        onContinue={() => window.location.assign('/')}
+        onPaid={markMetaTrialPaid}
+      />
+    )
   }
 
   const legalPageId = matchLegalPage(publicPath)
@@ -1757,7 +1760,7 @@ function App() {
         <MetaAdsLanding
           onSignIn={() => setGuestAuthMode('login')}
           onContinueTrial={(choice, lead) => {
-            writeMetaTrialIntent(choice)
+            writeMetaTrialIntent(choice, lead)
             if (lead) writeMetaAdsLead(lead)
             recordMetaLeadProgress(choice === 'company' ? 'company' : 'demo', lead)
             setGuestEmail(lead?.email || '')
@@ -2022,7 +2025,7 @@ function App() {
 
   // Meta ads first-quote guide — full screen, no dashboard chrome.
   // Keep this above the quote editor so the reveal ceremony can finish first.
-  if (metaTrialDemo) {
+  if (metaTrialDemo || isMetaTrialUnpaid(authUser?.email)) {
     return (
       <MetaTrialGuide
         enquiry={enquiry}
@@ -2073,6 +2076,7 @@ function App() {
           return makeQuote({ columns: nextColumns, enquiry, ceremony: false })
         }}
         onEnterEditor={() => {
+          if (isMetaTrialUnpaid(authUser?.email)) return
           const preferred = readPreferredPaperStyle()
           rememberPaperStyle(preferred)
           if (Array.isArray(quote?.columns) && quote.columns.length) {
@@ -2084,9 +2088,8 @@ function App() {
           try { sessionStorage.removeItem('qg_meta_guide') } catch { /* ignore */ }
         }}
         onBack={() => {
-          setMetaTrialDemo(false)
-          try { sessionStorage.removeItem('qg_meta_guide') } catch { /* ignore */ }
           setMetaLandingReturn(true)
+          setMetaTrialDemo(false)
         }}
       />
     )
@@ -2771,12 +2774,8 @@ function previewSampleItems(columns) {
   })
 }
 
-function previewColAlignRight(col, columns) {
-  if (isNestedColumn(col)) return true
-  const qtyCol = findFieldColumn(columns, 'quantity')
-  const rateCol = findFieldColumn(columns, 'rate')
-  const amountCol = findFieldColumn(columns, 'amount')
-  return col.id === qtyCol?.id || col.id === rateCol?.id || col.id === amountCol?.id || isFormulaColumn(col)
+function previewColAlignRight() {
+  return false
 }
 
 function formatPreviewCell(item, col, columns) {
@@ -2905,7 +2904,7 @@ function CompanyQuotePreview({ profile, layoutPreview = null, uploadTemplates = 
                         const highlight = isHighlightColumn(col) ? { backgroundColor: highlightColor(col) } : undefined
                         if (isNestedColumn(col)) {
                           return (
-                            <th key={col.id} className="px-2 py-2 text-right font-semibold" style={highlight}>
+                            <th key={col.id} className="px-2 py-2 font-semibold" style={highlight}>
                               {col.label} %
                             </th>
                           )
@@ -2931,7 +2930,7 @@ function CompanyQuotePreview({ profile, layoutPreview = null, uploadTemplates = 
                           if (isNestedColumn(col)) {
                             const rate = item[rateKey(col)]
                             return (
-                              <td key={col.id} className="px-2 py-2 text-right text-slate-600">
+                              <td key={col.id} className="px-2 py-2 text-slate-600">
                                 {rate ? `${rate}%` : '—'}
                               </td>
                             )
@@ -6256,15 +6255,65 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     const next = Math.max(floor, Math.ceil(max + 14))
     setColumnWidths(prev => (prev[colId] === next ? prev : { ...prev, [colId]: next }))
   }
+  const SR_NO_COL_WIDTH = 36
+  const ROW_ACTIONS_COL_WIDTH = 0
+  const colKeys = columns.map(col => (isNestedColumn(col) ? `${col.id}__rate` : col.id))
+  const tableChromePx = SR_NO_COL_WIDTH + ROW_ACTIONS_COL_WIDTH
+  const columnBudgetPx = Math.max(240, A4_PRINTABLE_PX - tableChromePx)
+  const minColPx = 48
+  const weightForKey = (key) => {
+    const col = columns.find(c => c.id === key || `${c.id}__rate` === key)
+    const base = defaultColWidthForKey(key)
+    const content = contentWidthForNumericColumn(col, items, LAYOUT_FONT_PX)
+    return Math.max(minColPx, columnWidths[key] || Math.max(base, content))
+  }
+  const scaleToBudget = (map, keys, budget) => {
+    const next = { ...map }
+    const sum = keys.reduce((n, key) => n + next[key], 0)
+    if (sum <= 0) return next
+    const scale = budget / sum
+    keys.forEach((key) => { next[key] = Math.max(minColPx, Math.round(next[key] * scale)) })
+    const lastKey = keys[keys.length - 1]
+    const drift = budget - keys.reduce((n, key) => n + next[key], 0)
+    if (lastKey) next[lastKey] = Math.max(minColPx, next[lastKey] + drift)
+    return next
+  }
+  const fittedWidths = scaleToBudget(
+    Object.fromEntries(colKeys.map((key) => [key, weightForKey(key)])),
+    colKeys,
+    columnBudgetPx
+  )
+  const resolvedColWidth = (key) => fittedWidths[key] || weightForKey(key)
+  const tableTotalWidthPx = A4_PRINTABLE_PX
+  const paperWidthPx = A4_WIDTH_PX
+  const tableFitZoom = 1
   const beginColumnResize = (e, key) => {
     e.preventDefault()
     e.stopPropagation()
-    resizeStateRef.current = { key, startX: e.clientX, startWidth: getColWidthRaw(key) }
+    const index = colKeys.indexOf(key)
+    if (index < 0) return
+    const startWidths = Object.fromEntries(colKeys.map((k) => [k, resolvedColWidth(k)]))
+    const rightKeys = colKeys.slice(index + 1)
+    resizeStateRef.current = { key, index, startX: e.clientX, startWidths, rightKeys }
     const onMove = (ev) => {
       const state = resizeStateRef.current
       if (!state) return
-      const next = Math.max(48, state.startWidth + (ev.clientX - state.startX))
-      setColumnWidths(prev => ({ ...prev, [state.key]: next }))
+      const leftKeys = colKeys.slice(0, state.index)
+      const leftSum = leftKeys.reduce((n, k) => n + state.startWidths[k], 0)
+      const rightMin = state.rightKeys.length * minColPx
+      const maxThis = Math.max(minColPx, columnBudgetPx - leftSum - rightMin)
+      const nextThis = Math.min(maxThis, Math.max(minColPx, state.startWidths[state.key] + (ev.clientX - state.startX)))
+      const remaining = Math.max(rightMin, columnBudgetPx - leftSum - nextThis)
+      const rightStart = state.rightKeys.reduce((n, k) => n + state.startWidths[k], 0) || 1
+      const next = {}
+      colKeys.forEach((k) => { next[k] = state.startWidths[k] })
+      next[state.key] = nextThis
+      state.rightKeys.forEach((k) => {
+        next[k] = Math.max(minColPx, Math.round(state.startWidths[k] * (remaining / rightStart)))
+      })
+      const absorb = state.rightKeys[state.rightKeys.length - 1] || state.key
+      next[absorb] = Math.max(minColPx, next[absorb] + (columnBudgetPx - colKeys.reduce((n, k) => n + next[k], 0)))
+      setColumnWidths(next)
     }
     const onUp = () => {
       resizeStateRef.current = null
@@ -6274,34 +6323,6 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
   }
-  const SR_NO_COL_WIDTH = isFormalPaper ? 36 : minWidthForHeaderLabel('Sr. No.', 22)
-  const ROW_ACTIONS_COL_WIDTH = isFormalPaper ? 28 : 40
-  const getColWidth = (key) => {
-    const base = getColWidthRaw(key)
-    const col = columns.find(c => c.id === key || `${c.id}__rate` === key)
-    return Math.max(base, contentWidthForNumericColumn(col, items, LAYOUT_FONT_PX))
-  }
-  const rawColsWidth = columns.reduce((sum, col) => (
-    sum + getColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id)
-  ), 0)
-  let tableTotalWidthPx = SR_NO_COL_WIDTH + ROW_ACTIONS_COL_WIDTH + rawColsWidth
-  const formalColWidths = {}
-  if (isFormalPaper) {
-    const descCol = columns.find(c => c.id === 'description' || /desc|particular|item/i.test(String(c?.label || '')))
-    const descKey = descCol ? (isNestedColumn(descCol) ? `${descCol.id}__rate` : descCol.id) : null
-    const others = SR_NO_COL_WIDTH + ROW_ACTIONS_COL_WIDTH + columns.reduce((sum, col) => {
-      const key = isNestedColumn(col) ? `${col.id}__rate` : col.id
-      if (descKey && key === descKey && !columnWidths[descKey]) return sum
-      return sum + getColWidth(key)
-    }, 0)
-    if (descKey && !columnWidths[descKey]) {
-      formalColWidths[descKey] = Math.max(96, A4_PRINTABLE_PX - others)
-    }
-    tableTotalWidthPx = A4_PRINTABLE_PX
-  }
-  const resolvedColWidth = (key) => formalColWidths[key] || getColWidth(key)
-  const paperWidthPx = A4_WIDTH_PX
-  const tableFitZoom = isFormalPaper ? 1 : Math.min(1, A4_PRINTABLE_PX / Math.max(1, tableTotalWidthPx - ROW_ACTIONS_COL_WIDTH))
   const tableFitsPaper = tableTotalWidthPx + 24 <= paperWidthPx
   // "Shrink font" only helps columns still at their default (font-scaled)
   // width — a column the user has manually dragged to a fixed pixel width no
@@ -6812,19 +6833,18 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
             </div>
           </div>
         ) : null}
-        <div className="quote-items-scroll overflow-x-auto" style={{ overflow: 'hidden' }}>
+        <div className="quote-items-scroll overflow-x-hidden" style={{ overflow: 'hidden', maxWidth: '100%' }}>
           <div data-qg-table-zoom={tableFitZoom} style={tableFitZoom < 1 ? { zoom: tableFitZoom, width: tableTotalWidthPx } : undefined}>
-          <table className="quote-items-table qg-studio-table text-left" style={{ tableLayout: 'fixed', width: isFormalPaper ? '100%' : `${tableTotalWidthPx}px`, minWidth: isFormalPaper ? '100%' : `${tableTotalWidthPx}px`, maxWidth: isFormalPaper ? '100%' : 'none', fontSize: `${paperFontPx}px` }}>
+          <table className="quote-items-table qg-studio-table text-left" style={{ tableLayout: 'fixed', width: '100%', minWidth: 0, maxWidth: '100%', fontSize: `${paperFontPx}px` }}>
             <colgroup>
-              <col style={{ width: `${SR_NO_COL_WIDTH}px` }} />
+              <col style={{ width: `${(SR_NO_COL_WIDTH / A4_PRINTABLE_PX) * 100}%` }} />
               {columns.map(col => (
-                    <col key={col.id} style={{ width: `${resolvedColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id)}px` }} />
+                    <col key={col.id} style={{ width: `${(resolvedColWidth(isNestedColumn(col) ? `${col.id}__rate` : col.id) / A4_PRINTABLE_PX) * 100}%` }} />
                   ))}
-              <col style={{ width: `${ROW_ACTIONS_COL_WIDTH}px` }} />
             </colgroup>
             <thead data-qg-block="thead">
               <tr className="border-y uppercase tracking-wide" style={{ borderColor: 'var(--qg-table-border, #d2e3fc)' }}>
-                <th className="qg-cell-compact p-3">{isFormalPaper ? 'Sr.' : 'Sr. No.'}</th>
+                <th className="qg-cell-compact p-3">Sr.</th>
                 {columns.map(col => (
                     <th
                       key={col.id}
@@ -6835,9 +6855,9 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                       onDrop={(e) => { e.preventDefault(); moveQuoteColumns(dragColId, col.id); setDragColId(null); setDropColId(null) }}
                       onDragEnd={() => { setDragColId(null); setDropColId(null) }}
                       title={`${col.label} — click to rename, drag to move`}
-                      className={`group relative cursor-grab p-3 active:cursor-grabbing ${isCompactColumn(col) ? 'qg-cell-compact' : ''} ${isHighlightColumn(col) ? 'qg-highlight' : ''} ${col.id === 'amount' || isNestedColumn(col) || isFormulaColumn(col) ? 'text-right' : ''} ${dragColId === col.id ? 'opacity-40' : ''} ${dropColId === col.id && dragColId !== col.id ? 'bg-blue-50 ring-2 ring-inset ring-moss' : ''} ${formulaColId === col.id ? 'z-20' : ''}`}
+                      className={`group relative cursor-grab p-3 active:cursor-grabbing ${isCompactColumn(col) ? 'qg-cell-compact' : ''} ${isHighlightColumn(col) ? 'qg-highlight' : ''} ${dragColId === col.id ? 'opacity-40' : ''} ${dropColId === col.id && dragColId !== col.id ? 'bg-blue-50 ring-2 ring-inset ring-moss' : ''} ${formulaColId === col.id ? 'z-20' : ''}`}
                     >
-                      <span className="inline-flex max-w-full flex-wrap items-center gap-0.5">
+                      <span className="inline-flex max-w-full flex-nowrap items-center gap-0.5">
                       <span className="no-print mr-1 text-slate-300">⠿</span>
                       <QuoteColumnName
                         col={col}
@@ -6883,7 +6903,6 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                       <ColumnResizeHandle colKey={isNestedColumn(col) ? `${col.id}__rate` : col.id} />
                     </th>
                   ))}
-                <th className="no-print w-0 p-0" aria-hidden="true" />
               </tr>
             </thead>
             <tbody>
@@ -6939,7 +6958,6 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                         onApplyProduct={applyProductSuggestion}
                       />
                     ))}
-                  <td className="no-print p-1 align-top" />
                 </tr>
                 )
               })}

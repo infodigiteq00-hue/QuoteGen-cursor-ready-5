@@ -2,6 +2,10 @@ export const META_ADS_LEAD_KEY = 'qg_meta_ads_lead'
 export const META_TRIAL_SEED_KEY = 'qg_trial_company_seed'
 export const META_NEXT_KEY = 'qg_meta_ads_next'
 export const META_PENDING_KEY = 'qg_meta_auth_pending'
+export const META_GUIDE_KEY = 'qg_meta_guide'
+export const META_UNPAID_KEY = 'qg_meta_trial_unpaid'
+export const META_PAID_KEY = 'qg_meta_trial_paid'
+export const META_GUIDE_PROGRESS_KEY = 'qg_meta_guide_progress'
 
 function writeStore(store, key, value) {
   try { store.setItem(key, value) } catch { /* private mode */ }
@@ -15,12 +19,13 @@ function removeStore(store, key) {
   try { store.removeItem(key) } catch { /* private mode */ }
 }
 
-export function writeMetaTrialIntent(choice) {
+export function writeMetaTrialIntent(choice, lead) {
   const next = choice === 'company' ? 'company' : 'demo'
   writeStore(sessionStorage, META_NEXT_KEY, next)
   writeStore(localStorage, META_NEXT_KEY, next)
   writeStore(sessionStorage, META_PENDING_KEY, '1')
   writeStore(localStorage, META_PENDING_KEY, '1')
+  markMetaTrialUnpaid(lead?.email)
 }
 
 export function readMetaTrialIntent() {
@@ -36,6 +41,57 @@ export function clearMetaTrialIntent() {
   removeStore(localStorage, META_NEXT_KEY)
   removeStore(sessionStorage, META_PENDING_KEY)
   removeStore(localStorage, META_PENDING_KEY)
+}
+
+export function markMetaTrialUnpaid(email) {
+  const value = String(email || '').trim().toLowerCase() || '1'
+  writeStore(localStorage, META_UNPAID_KEY, value)
+  writeStore(sessionStorage, META_UNPAID_KEY, value)
+  writeStore(sessionStorage, META_GUIDE_KEY, '1')
+}
+
+export function markMetaTrialPaid() {
+  writeStore(localStorage, META_PAID_KEY, '1')
+  writeStore(sessionStorage, META_PAID_KEY, '1')
+  removeStore(localStorage, META_UNPAID_KEY)
+  removeStore(sessionStorage, META_UNPAID_KEY)
+  removeStore(sessionStorage, META_GUIDE_KEY)
+  removeStore(sessionStorage, META_GUIDE_PROGRESS_KEY)
+}
+
+export function isMetaTrialPaid() {
+  return readStore(localStorage, META_PAID_KEY) === '1' || readStore(sessionStorage, META_PAID_KEY) === '1'
+}
+
+export function isMetaTrialUnpaid(userEmail) {
+  if (isMetaTrialPaid()) return false
+  if (readStore(sessionStorage, META_GUIDE_KEY) === '1') return true
+  const flag = readStore(localStorage, META_UNPAID_KEY) || readStore(sessionStorage, META_UNPAID_KEY)
+  if (!flag) return false
+  const em = String(userEmail || '').trim().toLowerCase()
+  if (!em || flag === '1') return true
+  return flag === em
+}
+
+export function isMetaGuideActive(userEmail) {
+  return isMetaTrialUnpaid(userEmail)
+}
+
+export function writeMetaGuideProgress(progress) {
+  try {
+    sessionStorage.setItem(META_GUIDE_PROGRESS_KEY, JSON.stringify(progress || {}))
+  } catch { /* private mode */ }
+}
+
+export function readMetaGuideProgress() {
+  try {
+    const raw = sessionStorage.getItem(META_GUIDE_PROGRESS_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
 }
 
 function parseLead(raw) {

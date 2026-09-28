@@ -658,7 +658,7 @@ select:focus {
 }
 .qg-theme-formal .qg-studio-table td.qg-cell-compact,
 .qg-theme-formal .qg-studio-table th.qg-cell-compact {
-  text-align: right;
+  text-align: left;
 }
 .qg-theme-formal .qg-studio-table th.qg-cell-compact:first-child,
 .qg-theme-formal .qg-studio-table tbody td:first-child {
@@ -945,7 +945,7 @@ select:focus {
 }
 .qg-theme-executive .qg-studio-table td.qg-cell-compact,
 .qg-theme-executive .qg-studio-table th.qg-cell-compact {
-  text-align: right;
+  text-align: left;
 }
 .qg-theme-executive .qg-studio-table th.qg-cell-compact:first-child,
 .qg-theme-executive .qg-studio-table tbody td:first-child {
@@ -1381,7 +1381,7 @@ select:focus {
 }
 .qg-theme-modern .qg-studio-table td.qg-cell-compact,
 .qg-theme-modern .qg-studio-table th.qg-cell-compact {
-  text-align: right;
+  text-align: left;
 }
 .qg-theme-modern .qg-studio-table th.qg-cell-compact:first-child,
 .qg-theme-modern .qg-studio-table tbody td:first-child {
@@ -1763,7 +1763,7 @@ select:focus {
 }
 .qg-theme-atelier .qg-studio-table td.qg-cell-compact,
 .qg-theme-atelier .qg-studio-table th.qg-cell-compact {
-  text-align: right;
+  text-align: left;
 }
 .qg-theme-atelier .qg-studio-table th.qg-cell-compact:first-child,
 .qg-theme-atelier .qg-studio-table tbody td:first-child {
@@ -2113,7 +2113,7 @@ select:focus {
 }
 .qg-theme-brief .qg-studio-table td.qg-cell-compact,
 .qg-theme-brief .qg-studio-table th.qg-cell-compact {
-  text-align: right;
+  text-align: left;
 }
 .qg-theme-brief .qg-studio-table th.qg-cell-compact:first-child,
 .qg-theme-brief .qg-studio-table tbody td:first-child {
@@ -2716,19 +2716,27 @@ textarea.qg-inline-field {
 .qg-studio-table thead th {
   background: var(--qg-table-head-bg, #061A3D) !important;
   color: var(--qg-table-head-text, #ffffff) !important;
-  font-size: inherit; /* follows paper Font size control */
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  padding: 8px 12px 8px 8px !important;
+  padding: 8px 8px !important;
   white-space: nowrap;
-  overflow: visible;
+  text-align: left;
+  overflow: hidden;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
+}
+.qg-studio-table thead th > span {
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 .qg-studio-table thead th .text-slate-400 {
   color: var(--qg-table-head-text, #ffffff);
   opacity: 0.78;
+}
+.qg-studio-table thead th .text-slate-300 {
+  display: none;
 }
 .qg-studio-table thead th button.no-print:not(.qg-col-remove) {
   color: var(--qg-table-head-text, #ffffff);
@@ -2801,26 +2809,51 @@ textarea.qg-inline-field {
 }
 .qg-studio-table td.qg-cell-compact,
 .qg-studio-table th.qg-cell-compact {
-  white-space: nowrap;
-  overflow: visible !important;
-  overflow-wrap: normal !important;
-  word-break: keep-all !important;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: break-word;
+  word-break: normal;
+  line-height: 1.3;
+  text-align: left;
+}
+.qg-studio-table thead th,
+.qg-studio-table tbody td,
+.qg-studio-table tbody td input,
+.qg-studio-table tbody td .print-only-cell,
+.quote-items-table thead th,
+.quote-items-table tbody td {
+  text-align: left;
+}
+.qg-studio-table td.qg-cell-compact {
+  font-size: 0.88em;
+  padding: 8px 4px !important;
 }
 .qg-studio-table td.qg-cell-compact input,
 .qg-studio-table td.qg-cell-compact .print-only-cell {
-  white-space: nowrap;
+  white-space: normal;
   overflow: visible;
-  text-overflow: clip;
+  text-overflow: unset;
   min-width: 0;
+  max-width: 100%;
+  width: 100%;
   padding-left: 2px !important;
-  padding-right: 4px !important;
+  padding-right: 2px !important;
+  line-height: 1.3;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 .qg-studio-table .description-cell,
 .qg-studio-table td.description-cell {
   white-space: normal !important;
-  overflow: visible !important;
-  overflow-wrap: anywhere;
+  overflow: visible;
+  overflow-wrap: break-word;
   word-break: break-word;
+}
+.qg-studio-table thead th {
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: break-word;
+  line-height: 1.25;
 }
 .quote-media-cell {
   width: 100% !important;
@@ -4136,10 +4169,10 @@ html.qg-a4-export .qg-footer-image {
   .quote-items-table th { overflow-wrap: normal; hyphens: none; }
   .quote-items-table td.qg-cell-compact,
   .quote-items-table th.qg-cell-compact {
-    white-space: nowrap !important;
+    white-space: normal !important;
     overflow: visible !important;
-    overflow-wrap: normal !important;
-    word-break: keep-all !important;
+    overflow-wrap: break-word !important;
+    word-break: normal !important;
   }
   .quote-items-table input { padding: 0 !important; }
   .quote-items-table { page-break-inside: auto; }

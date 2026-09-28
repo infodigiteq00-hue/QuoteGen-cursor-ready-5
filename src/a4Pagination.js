@@ -6,10 +6,14 @@ export const A4_HEIGHT_PX = 1123
 
 /** Keep body content clear of the sheet run header/footer chrome. */
 export const A4_CONTENT_TOP_MARGIN = 10
-/** Packer reserve under last content — leave room so signatory + brand footer aren’t clipped. */
-export const A4_CONTENT_BOTTOM_MARGIN = 80
+/** Packer reserve under last content — enough to clear the run-footer, not a half-empty sheet. */
+export const A4_CONTENT_BOTTOM_MARGIN = 52
 /** If closing almost fits, absorb this much overflow instead of a near-empty page. */
 export const A4_CLOSING_SQUEEZE_PX = 72
+/** Gap above the pinned sheet footer after totals/closing. */
+const A4_FOOTER_GAP = 22
+/** Inflated totals (flex-grown empty page) must not force a totals-only sheet. */
+const A4_TOTALS_HEIGHT_CAP = 260
 
 function num(value, fallback = 0) {
   const n = Number(value)
@@ -157,7 +161,7 @@ export function measureA4Blocks(root) {
     headerHeight: heightOf('[data-qg-block="header"]'),
     metaHeight: heightOf('[data-qg-block="meta"]'),
     theadHeight: heightOf('[data-qg-block="thead"]'),
-    totalsHeight: heightOf('[data-qg-block="totals"]'),
+    totalsHeight: Math.min(heightOf('[data-qg-block="totals"]'), A4_TOTALS_HEIGHT_CAP),
     closingHeight,
     bodyPadY,
     rowHeights,
@@ -244,49 +248,88 @@ export function packA4Pages({
     return chrome + rows
   }
 
-  const last = pages[pages.length - 1]
-  const lastBudget = last.showHeader ? firstBudget : continuedBudget
-  // Keep a reserve so totals/closing never paint into the plate edge / run-footer.
-  const footerReserve = 56
-  const leftover = lastBudget - usedOn(last) - footerReserve
-  const totals = Math.max(0, totalsHeight)
-  const closing = Math.max(0, closingHeight)
-  const needAll = totals + closing
-  const shortfallAll = Math.max(0, needAll - leftover)
-  const canSqueezeAll = needAll > 0
-    && shortfallAll > 0
-    && shortfallAll <= A4_CLOSING_SQUEEZE_PX
-    && leftover + A4_CLOSING_SQUEEZE_PX >= needAll
+  const budgetOf = (page) => (page.showHeader ? firstBudget : continuedBudget)
+  const leftoverOf = (page) => budgetOf(page) - usedOn(page) - A4_FOOTER_GAP
+  const totals = Math.min(Math.max(0, num(totalsHeight)), A4_TOTALS_HEIGHT_CAP)
+  const closing = Math.max(0, num(closingHeight))
 
-  // Prefer sharing the last items page; squeeze a little rather than a near-empty sheet.
-  if ((leftover >= needAll || canSqueezeAll) && needAll > 0) {
-    last.showTotals = totals > 0
-    last.showClosing = closing > 0
-  } else if (leftover >= totals && totals > 0) {
-    last.showTotals = true
-    const closeLeft = leftover - totals
-    const closeShort = Math.max(0, closing - closeLeft)
-    if (closing > 0 && (closeLeft >= closing || closeShort <= A4_CLOSING_SQUEEZE_PX)) {
-      last.showClosing = true
-    } else if (closing > 0) {
-      pages.push({ showHeader: false, showMeta: false, rows: [], showTotals: false, showClosing: true })
+  const lastItems = () => pages[pages.length - 1]
+  const TOTALS_WITH_ROWS = 3
+
+  const peelTail = (n) => {
+    const tail = []
+    for (let i = pages.length - 1; i >= 0 && tail.length < n; i -= 1) {
+      const page = pages[i]
+      while (page.rows.length && tail.length < n) {
+        tail.unshift(page.rows.pop())
+      }
     }
-  } else {
-    if (totals + closing <= continuedBudget - footerReserve) {
-      pages.push({
-        showHeader: false,
-        showMeta: false,
-        rows: [],
-        showTotals: totals > 0,
-        showClosing: closing > 0
-      })
+    while (pages.length > 1) {
+      const page = pages[pages.length - 1]
+      if (page.rows.length || page.showHeader || page.showMeta) break
+      pages.pop()
+    }
+    return tail
+  }
+
+  if (totals > 0 && count > 0) {
+    const last = lastItems()
+    const fitsHere = last.rows.length > 0 && leftoverOf(last) >= totals
+    if (fitsHere) {
+      last.showTotals = true
     } else {
-      if (totals > 0) {
-        pages.push({ showHeader: false, showMeta: false, rows: [], showTotals: true, showClosing: false })
+      const want = Math.min(TOTALS_WITH_ROWS, count)
+      const tail = peelTail(want)
+      const host = lastItems()
+      if (!host.rows.length) {
+        host.rows = tail
+        host.showTotals = true
+      } else {
+        pages.push({
+          showHeader: false,
+          showMeta: false,
+          rows: tail,
+          showTotals: true,
+          showClosing: false
+        })
       }
-      if (closing > 0) {
-        pages.push({ showHeader: false, showMeta: false, rows: [], showTotals: false, showClosing: true })
+    }
+  }
+
+  const totalsPage = pages.find(page => page.showTotals)
+  if (totalsPage && totalsPage.rows.length < Math.min(TOTALS_WITH_ROWS, count) && count > 0) {
+    const need = Math.min(TOTALS_WITH_ROWS, count) - totalsPage.rows.length
+    const totalsIndex = pages.indexOf(totalsPage)
+    const stolen = []
+    for (let i = totalsIndex - 1; i >= 0 && stolen.length < need; i -= 1) {
+      const page = pages[i]
+      while (page.rows.length && stolen.length < need) {
+        stolen.unshift(page.rows.pop())
       }
+    }
+    totalsPage.rows = stolen.concat(totalsPage.rows)
+    for (let i = totalsIndex - 1; i >= 0; i -= 1) {
+      const page = pages[i]
+      if (!page.rows.length && !page.showHeader && !page.showMeta) {
+        pages.splice(i, 1)
+      }
+    }
+  }
+
+  const last = lastItems()
+  const leftover = leftoverOf(last)
+  const closeLeft = leftover - (last.showTotals ? totals : 0)
+  const closeShort = Math.max(0, closing - closeLeft)
+  const canSqueezeClose = closing > 0
+    && closeShort > 0
+    && closeShort <= A4_CLOSING_SQUEEZE_PX
+    && closeLeft + A4_CLOSING_SQUEEZE_PX >= closing
+
+  if (closing > 0) {
+    if (closeLeft >= closing || canSqueezeClose) {
+      last.showClosing = true
+    } else {
+      pages.push({ showHeader: false, showMeta: false, rows: [], showTotals: false, showClosing: true })
     }
   }
 

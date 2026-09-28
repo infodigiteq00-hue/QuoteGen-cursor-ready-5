@@ -21,7 +21,7 @@ import {
   toNumber
 } from '../shared/quoteColumns.js'
 import { formatIndianAmount } from '../shared/templateMap.js'
-import { companySeedFromLead, readMetaAdsLead, usefulLead } from './metaTrialLead.js'
+import { companySeedFromLead, readMetaAdsLead, usefulLead, readMetaGuideProgress, writeMetaGuideProgress } from './metaTrialLead.js'
 import { trackPixel } from './metaPixel.js'
 import './metaTrialGuide.css'
 
@@ -140,12 +140,8 @@ function isDescriptionColumn(col) {
   return /^(description|enquiry|inquiry|particular)$/i.test(String(col.label || '').trim())
 }
 
-function previewColAlignRight(col, columns) {
-  if (isNestedColumn(col)) return true
-  const qtyCol = findFieldColumn(columns, 'quantity')
-  const rateCol = findFieldColumn(columns, 'rate')
-  const amountCol = findFieldColumn(columns, 'amount')
-  return col.id === qtyCol?.id || col.id === rateCol?.id || col.id === amountCol?.id || isFormulaColumn(col)
+function previewColAlignRight() {
+  return false
 }
 
 function formatPreviewCell(item, col, columns) {
@@ -645,35 +641,41 @@ const REGULAR_PRICE = 699
 const JOIN_SAVE = REGULAR_PRICE - JOIN_PRICE
 const JOIN_QUOTES = 20
 const OFFER_MS = 10 * 60 * 1000
-const OFFER_STARTED_KEY = 'qg_join_offer_started'
+const OFFER_STARTED_KEY = 'qg_join_offer_started_v2'
 const SEAT_CAP = 100
-const SEAT_START = 48
+const SEAT_START = 52
+const SEAT_INTRO_END = 45
 const SEAT_FLOOR = 11
-const SEATS_KEY = 'qg_trial_seats_left_v1'
+const SEATS_KEY = 'qg_trial_seats_left_v3'
+const SUPPORT_PHONE_E164 = '+919067610118'
+const SUPPORT_PHONE_LABEL = '+91 90676 10118'
 
 function writeSeatsLeft(n) {
-  try { localStorage.setItem(SEATS_KEY, String(n)) } catch { /* private mode */ }
-}
-
-function readSeatsLeft() {
-  try {
-    const n = Number(localStorage.getItem(SEATS_KEY))
-    if (Number.isFinite(n) && n >= SEAT_FLOOR && n <= SEAT_START) return Math.round(n)
-  } catch { /* private mode */ }
-  return SEAT_START
+  try { sessionStorage.setItem(SEATS_KEY, String(n)) } catch { /* private mode */ }
 }
 
 function randomSeatWaitMs() {
-  return 10000 + Math.floor(Math.random() * 40000)
+  // 10s / 20s / 30s-ish, never more than 40s — keep FOMO inside the first minute.
+  return 8000 + Math.floor(Math.random() * 24000)
+}
+
+function randomIntroStepMs() {
+  return 500 + Math.floor(Math.random() * 240)
 }
 
 function readOfferStart() {
   try {
-    const at = Number(localStorage.getItem(OFFER_STARTED_KEY))
-    return Number.isFinite(at) && at > 0 ? at : null
+    const at = Number(sessionStorage.getItem(OFFER_STARTED_KEY))
+    if (!Number.isFinite(at) || at <= 0) return null
+    if (at + OFFER_MS <= Date.now()) return null
+    return at
   } catch {
     return null
   }
+}
+
+function writeOfferStart(at) {
+  try { sessionStorage.setItem(OFFER_STARTED_KEY, String(at)) } catch { /* private mode */ }
 }
 
 function formatCountdown(ms) {
@@ -683,18 +685,21 @@ function formatCountdown(ms) {
 
 function trialExportColWidths(columns) {
   const sr = 36
-  const widths = (columns || []).map((col) => {
-    if (isDescriptionColumn(col)) return 0
-    if (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) return 56
-    if (col.id === 'quantity' || /qty|quantity/i.test(String(col.label || ''))) return 76
-    if (col.id === 'rate' || /rate|price/i.test(String(col.label || ''))) return 102
-    if (col.id === 'amount' || /amount|total/i.test(String(col.label || ''))) return 118
-    return 78
-  })
   const printable = 718
-  const used = sr + widths.reduce((sum, w) => sum + w, 0)
-  const descIdx = (columns || []).findIndex(isDescriptionColumn)
-  if (descIdx >= 0) widths[descIdx] = Math.max(260, printable - used)
+  const minCol = 48
+  const raw = (columns || []).map((col) => {
+    if (isDescriptionColumn(col)) return 320
+    if (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) return 56
+    if (col.id === 'quantity' || /qty|quantity/i.test(String(col.label || ''))) return 72
+    if (col.id === 'rate' || /rate|price/i.test(String(col.label || ''))) return 96
+    if (col.id === 'amount' || /amount|total/i.test(String(col.label || ''))) return 112
+    return 72
+  })
+  const budget = Math.max(240, printable - sr)
+  const sum = raw.reduce((n, w) => n + w, 0) || 1
+  const widths = raw.map((w) => Math.max(minCol, Math.round(w * (budget / sum))))
+  const drift = budget - widths.reduce((n, w) => n + w, 0)
+  if (widths.length) widths[widths.length - 1] += drift
   return { sr, widths }
 }
 
@@ -1250,8 +1255,9 @@ export default function MetaTrialGuide({
   onCompanyProfileSaved
 }) {
   const initialSeed = companySeedFromLead(usefulLead(trialLead) || readMetaAdsLead(), companyProfile)
-  const [step, setStep] = useState(1)
-  const [phase, setPhase] = useState('flow') // flow | ceremony | reveal | client | company | final
+  const savedProgress = readMetaGuideProgress()
+  const [step, setStep] = useState(() => (savedProgress?.step === 2 ? 2 : 1))
+  const [phase, setPhase] = useState(() => (savedProgress?.phase === 'convert' ? 'convert' : 'flow'))
   const [revealQuote, setRevealQuote] = useState(null)
   const [revealReady, setRevealReady] = useState(false)
   const [previewReading, setPreviewReading] = useState(false)
@@ -1273,15 +1279,28 @@ export default function MetaTrialGuide({
   const [qrFailed, setQrFailed] = useState(false)
   const [offerStartedAt, setOfferStartedAt] = useState(readOfferStart)
   const [offerNow, setOfferNow] = useState(() => Date.now())
-  const [seatsLeft, setSeatsLeft] = useState(readSeatsLeft)
+  const [seatsLeft, setSeatsLeft] = useState(SEAT_START)
+  const [seatPulse, setSeatPulse] = useState(false)
   const offerLeftMs = offerStartedAt ? offerStartedAt + OFFER_MS - offerNow : OFFER_MS
   const offerLive = offerLeftMs > 0
   const payPrice = offerLive ? JOIN_PRICE : REGULAR_PRICE
 
   useEffect(() => {
-    if (phase !== 'convert' || offerStartedAt) return
+    writeMetaGuideProgress({ phase, step })
+  }, [phase, step])
+
+  useEffect(() => {
+    if (phase !== 'convert') return
+    const existing = readOfferStart()
+    if (existing) {
+      if (!offerStartedAt) {
+        setOfferStartedAt(existing)
+        setOfferNow(Date.now())
+      }
+      return
+    }
     const at = Date.now()
-    try { localStorage.setItem(OFFER_STARTED_KEY, String(at)) } catch { /* private mode */ }
+    writeOfferStart(at)
     setOfferStartedAt(at)
     setOfferNow(at)
   }, [phase, offerStartedAt])
@@ -1304,7 +1323,7 @@ export default function MetaTrialGuide({
       writeSeatsLeft(next)
       setSeatsLeft(next)
     }
-    const scheduleTick = () => {
+    const scheduleTick = (delayMs) => {
       timer = window.setTimeout(() => {
         if (cancelled) return
         setSeatsLeft((cur) => {
@@ -1312,25 +1331,26 @@ export default function MetaTrialGuide({
           writeSeatsLeft(next)
           return next
         })
-        scheduleTick()
-      }, randomSeatWaitMs())
+        scheduleTick(randomSeatWaitMs())
+      }, delayMs)
     }
     const run = async () => {
-      const start = readSeatsLeft()
       const reduceMotion = typeof window !== 'undefined'
         && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
-      if (!reduceMotion && start >= SEAT_START) {
-        await wait(900)
-        if (cancelled) return
-        dropTo(46)
-        await wait(700)
-        if (cancelled) return
-        dropTo(45)
-        await wait(2600)
-        if (cancelled) return
+
+      dropTo(SEAT_START)
+      if (!reduceMotion) {
+        await wait(360)
+        for (let n = SEAT_START - 1; n >= SEAT_INTRO_END; n -= 1) {
+          if (cancelled) return
+          dropTo(n)
+          await wait(randomIntroStepMs())
+        }
+      } else {
+        dropTo(SEAT_INTRO_END)
       }
       if (cancelled) return
-      scheduleTick()
+      scheduleTick(8000 + Math.floor(Math.random() * 8000))
     }
     run()
     return () => {
@@ -1338,6 +1358,13 @@ export default function MetaTrialGuide({
       window.clearTimeout(timer)
     }
   }, [phase, offerLive])
+
+  useEffect(() => {
+    if (!offerLive) return undefined
+    setSeatPulse(true)
+    const t = window.setTimeout(() => setSeatPulse(false), 420)
+    return () => window.clearTimeout(t)
+  }, [seatsLeft, offerLive])
 
   const [payBusy, setPayBusy] = useState(false)
   const [payError, setPayError] = useState('')
@@ -1508,12 +1535,6 @@ export default function MetaTrialGuide({
     applyPaperStyle(next)
     onSaveCompany?.({ paperStyle: next })
     return next
-  }
-
-  const enterEditorWithPreferredFormat = () => {
-    const visibleId = normalizePaperStyle(visibleCarouselThemeId(paperStyle))
-    commitPreferredPaperStyle(visibleId)
-    onEnterEditor?.()
   }
 
   const downloadFormalPdf = async () => {
@@ -1950,7 +1971,7 @@ export default function MetaTrialGuide({
     )
   }
 
-  if (phase === 'convert' && revealQuote) {
+  if (phase === 'convert') {
     return (
       <main className="meta-guide meta-guide-convert-page">
         <div className="meta-guide-convert-burst" aria-hidden="true">
@@ -1990,7 +2011,7 @@ export default function MetaTrialGuide({
                   <span className="meta-guide-offer-clock">{formatCountdown(offerLeftMs)}</span>
                 </div>
                 <p className="meta-guide-seats" aria-live="polite">
-                  Only <strong>{seatsLeft}</strong> / {SEAT_CAP} seats left at this price
+                  Only <strong className={seatPulse ? 'is-tick' : ''}>{seatsLeft}</strong> / {SEAT_CAP} seats left at this price
                 </p>
               </>
             ) : (
@@ -2007,6 +2028,13 @@ export default function MetaTrialGuide({
               {payBusy ? 'Opening PhonePe…' : 'Join QuoteGen Now'}
             </button>
             {payError ? <p className="meta-guide-convert-error" role="alert">{payError}</p> : null}
+            <div className="meta-guide-convert-support">
+              <p className="meta-guide-convert-support-kicker">Got doubts?</p>
+              <a className="meta-guide-convert-call" href={`tel:${SUPPORT_PHONE_E164}`}>
+                Call us
+                <span>{SUPPORT_PHONE_LABEL}</span>
+              </a>
+            </div>
           </div>
         </div>
 
@@ -2052,6 +2080,13 @@ export default function MetaTrialGuide({
             <button type="button" className="meta-guide-secondary meta-guide-pay-close" onClick={() => setPayOpen(false)}>
               Close
             </button>
+            <div className="meta-guide-convert-support is-modal">
+              <p className="meta-guide-convert-support-kicker">Got doubts?</p>
+              <a className="meta-guide-convert-call" href={`tel:${SUPPORT_PHONE_E164}`}>
+                Call us
+                <span>{SUPPORT_PHONE_LABEL}</span>
+              </a>
+            </div>
           </GuideModal>
         ) : null}
       </main>
@@ -2285,10 +2320,10 @@ export default function MetaTrialGuide({
             <button
               type="button"
               className="meta-guide-primary meta-guide-primary-inline"
-              onClick={enterEditorWithPreferredFormat}
+              onClick={() => { void downloadFormalPdf() }}
+              disabled={pdfBusy}
             >
-              Continue to edit &amp; export
-              <span aria-hidden="true">→</span>
+              {pdfBusy ? 'Downloading…' : 'Download PDF'}
             </button>
           </div>
         </div>
