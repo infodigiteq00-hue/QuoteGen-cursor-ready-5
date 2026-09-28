@@ -22,9 +22,11 @@ function isPublicApiRequest(req) {
   const full = String(req.originalUrl || req.url || '').split('?')[0]
   const mounted = String(req.path || '').split('?')[0]
   const paths = [full, mounted, `/api${mounted}`]
+  const method = String(req.method || 'GET').toUpperCase()
   return paths.some((p) => (
-    p === '/api/meta-ads-leads'
-    || p === '/meta-ads-leads'
+    /* Lead form + funnel progress are public; GET list is super-admin and must stay behind auth. */
+    ((p === '/api/meta-ads-leads' || p === '/meta-ads-leads') && method === 'POST')
+    || ((p === '/api/meta-ads-leads/progress' || p === '/meta-ads-leads/progress') && method === 'POST')
     || p.startsWith('/api/meta-ads-trial/')
     || p.startsWith('/meta-ads-trial/')
     || p.startsWith('/api/pay/phonepe/')

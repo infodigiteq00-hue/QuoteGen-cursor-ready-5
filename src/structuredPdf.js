@@ -276,7 +276,7 @@ export async function downloadStructuredQuotationPdf({
   doc.rect(MARGIN, y, CONTENT_W, rowH, 'F')
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(7)
-  doc.setTextColor(255, 255, 255)
+  doc.setTextColor(...hexToRgb(theme?.tableHeadText || '#ffffff'))
   let x = MARGIN
   for (const col of cols) {
     const label = String(col.label || '').toUpperCase()

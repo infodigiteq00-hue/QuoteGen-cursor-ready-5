@@ -10,7 +10,7 @@ function tableTintFromAccent(accent) {
     accentSoft: mixHex(accent, '#ffffff', 0.94),
     labelColor: accent,
     tableHeadBg: accent,
-    tableHeadText: '#ffffff',
+    tableHeadText: readableTextOn(accent),
     tableStripeBg: mixHex(accent, '#ffffff', 0.96),
     tableBorder: mixHex(accent, '#e8edf3', 0.78),
     dropBorder: mixHex(accent, '#e8edf3', 0.88),
@@ -34,20 +34,6 @@ export const PAPER_THEMES = {
     titleFont: 'Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif',
     ...tableTintFromAccent(DEFAULT_ACCENT)
   },
-  warm: {
-    id: 'warm',
-    label: 'Warm invoice',
-    hint: 'Ivory paper, stone headings — understated and trustworthy',
-    themeClass: 'qg-theme-warm',
-    pageBg: '#ede9e1',
-    paperBg: '#faf8f3',
-    text: '#3a3020',
-    muted: '#7a6e5e',
-    metaBarBg: '#f2ede0',
-    fontFamily: 'Georgia, "Times New Roman", serif',
-    titleFont: 'Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif',
-    ...tableTintFromAccent(DEFAULT_ACCENT)
-  },
   formal: {
     id: 'formal',
     label: 'Formal quotation',
@@ -61,6 +47,62 @@ export const PAPER_THEMES = {
     fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
     titleFont: 'Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif',
     ...tableTintFromAccent(DEFAULT_ACCENT)
+  },
+  executive: {
+    id: 'executive',
+    label: 'Executive proposal',
+    hint: 'Boardroom-grade — headline value, key facts strip & client sign-off',
+    themeClass: 'qg-theme-executive',
+    pageBg: '#e6e9f0',
+    paperBg: '#ffffff',
+    text: '#0b1220',
+    muted: '#667085',
+    metaBarBg: '#f8fafc',
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    titleFont: 'Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif',
+    ...tableTintFromAccent(DEFAULT_ACCENT)
+  },
+  modern: {
+    id: 'modern',
+    label: 'Modern studio',
+    hint: 'Bento cards, soft hero panel & light totals — fresh product-style design',
+    themeClass: 'qg-theme-modern',
+    pageBg: '#eceff5',
+    paperBg: '#ffffff',
+    text: '#101828',
+    muted: '#667085',
+    metaBarBg: '#f7f8fa',
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    titleFont: 'Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif',
+    ...tableTintFromAccent(DEFAULT_ACCENT)
+  },
+  atelier: {
+    id: 'atelier',
+    label: 'Atelier folio',
+    hint: 'Swiss folio — Archivo type, hairline grid & a left ink rail',
+    themeClass: 'qg-theme-atelier',
+    pageBg: '#e4e2dc',
+    paperBg: '#fbfaf6',
+    text: '#161410',
+    muted: '#6b655c',
+    metaBarBg: '#f4f1ea',
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    titleFont: 'Archivo, "Avenir Next", Inter, sans-serif',
+    ...tableTintFromAccent(DEFAULT_ACCENT)
+  },
+  brief: {
+    id: 'brief',
+    label: 'Board brief',
+    hint: 'Compact letterhead, dense type — serious, space-saving, high impact',
+    themeClass: 'qg-theme-brief',
+    pageBg: '#e8ecf2',
+    paperBg: '#ffffff',
+    text: '#1a2332',
+    muted: '#5d6b7c',
+    metaBarBg: '#f4f6f8',
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    titleFont: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    ...tableTintFromAccent(DEFAULT_ACCENT)
   }
 }
 
@@ -68,10 +110,16 @@ export function isPaperStyleId(id) {
   return Boolean(id && PAPER_THEMES[id])
 }
 
+/** Retired ids (e.g. warm invoice) map onto a live theme so old quotes still open. */
+export function normalizePaperStyle(id) {
+  if (id === 'warm') return DEFAULT_PAPER_STYLE
+  return isPaperStyleId(id) ? id : DEFAULT_PAPER_STYLE
+}
+
 export function readPreferredPaperStyle() {
   try {
     const stored = localStorage.getItem(PAPER_STYLE_STORAGE_KEY)
-    if (isPaperStyleId(stored)) return stored
+    return normalizePaperStyle(stored)
   } catch { /* private mode */ }
   return DEFAULT_PAPER_STYLE
 }
@@ -83,7 +131,7 @@ export function writePreferredPaperStyle(id) {
 }
 
 export function resolvePaperTheme(id, tableAccent) {
-  const base = PAPER_THEMES[id] || PAPER_THEMES.formal
+  const base = PAPER_THEMES[normalizePaperStyle(id)] || PAPER_THEMES.formal
   const chosen = /^#[0-9a-f]{6}$/i.test(tableAccent) ? tableAccent : DEFAULT_ACCENT
   const tint = tableTintFromAccent(chosen)
   const resolved = {
@@ -93,12 +141,45 @@ export function resolvePaperTheme(id, tableAccent) {
     labelColor: chosen,
     tableAccent: chosen
   }
-  // Formal matches the trial unlock sheet: pale header, ink labels, no navy bar.
   if (base.id === 'formal') {
-    resolved.tableHeadBg = '#f7f9fc'
-    resolved.tableHeadText = '#3d6db5'
     resolved.tableStripeBg = '#ffffff'
     resolved.tableBorder = '#e8edf3'
+  }
+  if (base.id === 'executive') {
+    resolved.accentInk = mixHex(chosen, '#0b1220', 0.38)
+    resolved.accentOn = readableTextOn(chosen)
+    resolved.tableHeadBg = mixHex(chosen, '#ffffff', 0.9)
+    resolved.tableHeadText = mixHex(chosen, '#0b1220', 0.45)
+    resolved.tableStripeBg = '#ffffff'
+    resolved.tableBorder = '#e7eaf0'
+    resolved.accentSoft = mixHex(chosen, '#ffffff', 0.95)
+  }
+  if (base.id === 'modern') {
+    resolved.accentInk = mixHex(chosen, '#101828', 0.35)
+    resolved.accentOn = readableTextOn(chosen)
+    resolved.accentSoft = mixHex(chosen, '#ffffff', 0.93)
+    resolved.tableHeadBg = '#f2f4f7'
+    resolved.tableHeadText = '#475467'
+    resolved.tableStripeBg = '#ffffff'
+    resolved.tableBorder = '#eaecf0'
+  }
+  if (base.id === 'atelier') {
+    resolved.accentInk = mixHex(chosen, '#161410', 0.42)
+    resolved.accentOn = readableTextOn(chosen)
+    resolved.accentSoft = mixHex(chosen, '#fbfaf6', 0.9)
+    resolved.tableHeadBg = 'transparent'
+    resolved.tableHeadText = mixHex(chosen, '#161410', 0.28)
+    resolved.tableStripeBg = '#fbfaf6'
+    resolved.tableBorder = '#e4e0d6'
+  }
+  if (base.id === 'brief') {
+    resolved.accentInk = mixHex(chosen, '#1a2332', 0.28)
+    resolved.accentOn = readableTextOn(chosen)
+    resolved.accentSoft = mixHex(chosen, '#ffffff', 0.92)
+    resolved.tableHeadBg = chosen
+    resolved.tableHeadText = readableTextOn(chosen)
+    resolved.tableStripeBg = '#ffffff'
+    resolved.tableBorder = '#e6eaef'
   }
   return resolved
 }
@@ -139,6 +220,13 @@ function parseHex(hex) {
 function toHex({ r, g, b }) {
   const n = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')
   return `#${n(r)}${n(g)}${n(b)}`
+}
+
+/** White on mid/dark brand colours, near-black only on light ones (yellow, lime, pastel). */
+export function readableTextOn(bg) {
+  const { r, g, b } = parseHex(bg)
+  const brightness = (r * 299 + g * 587 + b * 114) / 1000
+  return brightness >= 165 ? '#111827' : '#ffffff'
 }
 
 export function mixHex(a, b, t) {

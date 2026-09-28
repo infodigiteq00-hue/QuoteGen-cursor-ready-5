@@ -171,7 +171,7 @@ function CompanyLetterheadBlock({ profile, theme }) {
         )}
       </div>
       <div className="qg-letterhead-text">
-        <p className="qg-letterhead-name" style={{ color: isFormal ? theme.text : theme.accent }}>
+        <p className="qg-letterhead-name" style={{ color: theme.accent }}>
           {name}
         </p>
         {headerText ? (
@@ -203,7 +203,7 @@ function MetaRow({ label, children, theme }) {
 }
 
 /* ─── Paper header — handles BOTH cases cleanly ─────────────────────────── */
-export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isInvoice, onNumberCommit }) {
+export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isInvoice, onNumberCommit, grandTotal = '' }) {
   const fields = quote?.fields || {}
   const validUntil = fields.validUntil || quote.validUntil || ''
   const referenceNo = fields.referenceNo || quote.referenceNo || ''
@@ -272,6 +272,189 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
               {referenceField}
             </MetaRow>
           </div>
+        </div>
+      </header>
+    )
+  }
+
+  /* Executive — accent rule, brand left, headline number right, key facts strip */
+  if (theme.themeClass === 'qg-theme-executive') {
+    return (
+      <header className="qg-paper-header qg-exec-header">
+        <div className="qg-exec-rule" aria-hidden="true" />
+        <div className="qg-exec-top">
+          <CompanyLetterheadBlock profile={profile} theme={theme} />
+          <div className="qg-exec-docmeta">
+            <p className="qg-exec-eyebrow" style={{ color: theme.accent }}>{docLabel}</p>
+            <div className="qg-exec-number">{numberField}</div>
+          </div>
+        </div>
+        <div className="qg-exec-facts">
+          <div className="qg-exec-fact">
+            <span className="qg-exec-fact-label">Date issued</span>
+            <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} placeholder="DD MMM YYYY" />
+          </div>
+          <div className="qg-exec-fact">
+            <span className="qg-exec-fact-label">Valid till</span>
+            <DateField
+              value={validUntil}
+              onChange={v => update(['fields'], { ...fields, validUntil: v })}
+              placeholder="DD/MM/YYYY"
+            />
+          </div>
+          <div className="qg-exec-fact">
+            <span className="qg-exec-fact-label">Reference</span>
+            <InlineField
+              value={referenceNo}
+              onChange={v => update(['fields'], { ...fields, referenceNo: v })}
+              placeholder="—"
+            />
+          </div>
+          {grandTotal ? (
+            <div className="qg-exec-fact qg-exec-fact--value">
+              <span className="qg-exec-fact-label">{isInvoice ? 'Amount due' : 'Quote value'}</span>
+              <strong className="qg-exec-fact-amount">{grandTotal}</strong>
+            </div>
+          ) : null}
+        </div>
+      </header>
+    )
+  }
+
+  /* Modern — soft hero panel with sentence-case title, value tile and fact chips */
+  if (theme.themeClass === 'qg-theme-modern') {
+    const label = String(docLabel || 'Quotation')
+    const title = label.charAt(0).toUpperCase() + label.slice(1).toLowerCase()
+    return (
+      <header className="qg-paper-header qg-mod-header">
+        <div className="qg-mod-hero">
+          <div className="qg-mod-hero-top">
+            <CompanyLetterheadBlock profile={profile} theme={theme} />
+            <div className="qg-mod-number">
+              <span className="qg-mod-number-dot" aria-hidden="true" />
+              {numberField}
+            </div>
+          </div>
+          <div className="qg-mod-hero-bottom">
+            <h1 className="qg-mod-title">{title}<span style={{ color: theme.accent }}>.</span></h1>
+            {grandTotal ? (
+              <div className="qg-mod-value">
+                <span className="qg-mod-value-label">{isInvoice ? 'Amount due' : 'Total value'}</span>
+                <strong className="qg-mod-value-amount">{grandTotal}</strong>
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="qg-mod-chips">
+          <div className="qg-mod-chip">
+            <span className="qg-mod-chip-label">Issued</span>
+            <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} placeholder="DD MMM YYYY" />
+          </div>
+          <div className="qg-mod-chip">
+            <span className="qg-mod-chip-label">Valid till</span>
+            <DateField
+              value={validUntil}
+              onChange={v => update(['fields'], { ...fields, validUntil: v })}
+              placeholder="DD/MM/YYYY"
+            />
+          </div>
+          <div className="qg-mod-chip">
+            <span className="qg-mod-chip-label">Ref.</span>
+            <InlineField
+              value={referenceNo}
+              onChange={v => update(['fields'], { ...fields, referenceNo: v })}
+              placeholder="—"
+            />
+          </div>
+        </div>
+      </header>
+    )
+  }
+
+  /* Atelier — Swiss folio: ink rail, Archivo masthead, hairline index */
+  if (theme.themeClass === 'qg-theme-atelier') {
+    const label = String(docLabel || 'Quotation')
+    const title = label.charAt(0).toUpperCase() + label.slice(1).toLowerCase()
+    return (
+      <header className="qg-paper-header qg-atl-header">
+        <div className="qg-atl-top">
+          <CompanyLetterheadBlock profile={profile} theme={theme} />
+          <div className="qg-atl-no">
+            <span className="qg-atl-no-label">No.</span>
+            {numberField}
+          </div>
+        </div>
+        <div className="qg-atl-mast">
+          <h1 className="qg-atl-title">{title}</h1>
+          {grandTotal ? (
+            <div className="qg-atl-value">
+              <span className="qg-atl-value-label">{isInvoice ? 'Amount due' : 'Proposal value'}</span>
+              <strong className="qg-atl-value-amount">{grandTotal}</strong>
+            </div>
+          ) : null}
+        </div>
+        <div className="qg-atl-index">
+          <div className="qg-atl-cell">
+            <span className="qg-atl-cell-n">01</span>
+            <span className="qg-atl-cell-label">Issued</span>
+            <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} placeholder="DD MMM YYYY" />
+          </div>
+          <div className="qg-atl-cell">
+            <span className="qg-atl-cell-n">02</span>
+            <span className="qg-atl-cell-label">Valid till</span>
+            <DateField
+              value={validUntil}
+              onChange={v => update(['fields'], { ...fields, validUntil: v })}
+              placeholder="DD/MM/YYYY"
+            />
+          </div>
+          <div className="qg-atl-cell">
+            <span className="qg-atl-cell-n">03</span>
+            <span className="qg-atl-cell-label">Reference</span>
+            <InlineField
+              value={referenceNo}
+              onChange={v => update(['fields'], { ...fields, referenceNo: v })}
+              placeholder="—"
+            />
+          </div>
+        </div>
+      </header>
+    )
+  }
+
+  /* Board brief — compact colour bar, dense meta, high-impact total */
+  if (theme.themeClass === 'qg-theme-brief') {
+    return (
+      <header className="qg-paper-header qg-brief-header">
+        <div className="qg-brief-bar">
+          <CompanyLetterheadBlock profile={profile} theme={theme} />
+          <div className="qg-brief-bar-right">
+            <p className="qg-brief-doc">{docLabel}</p>
+            <div className="qg-brief-no">{numberField}</div>
+            {grandTotal ? <strong className="qg-brief-total">{grandTotal}</strong> : null}
+          </div>
+        </div>
+        <div className="qg-brief-meta">
+          <span className="qg-brief-pair">
+            <em>Date</em>
+            <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} placeholder="DD MMM YYYY" />
+          </span>
+          <span className="qg-brief-pair">
+            <em>Valid till</em>
+            <DateField
+              value={validUntil}
+              onChange={v => update(['fields'], { ...fields, validUntil: v })}
+              placeholder="DD/MM/YYYY"
+            />
+          </span>
+          <span className="qg-brief-pair">
+            <em>Ref.</em>
+            <InlineField
+              value={referenceNo}
+              onChange={v => update(['fields'], { ...fields, referenceNo: v })}
+              placeholder="—"
+            />
+          </span>
         </div>
       </header>
     )
@@ -377,7 +560,7 @@ export function QuoteToSubjectBlock({ theme, quote, update, gstMissing, gstField
     }
   }
 
-  const isFormal = theme.themeClass === 'qg-theme-formal'
+  const isFormal = theme.themeClass === 'qg-theme-formal' || theme.themeClass === 'qg-theme-executive' || theme.themeClass === 'qg-theme-modern' || theme.themeClass === 'qg-theme-atelier' || theme.themeClass === 'qg-theme-brief'
 
   if (isFormal) {
     return (
@@ -688,7 +871,9 @@ export function QuoteStudioCanvas({
     '--qg-table-accent': theme.tableAccent || theme.tableHeadText,
     '--qg-drop-border': theme.dropBorder,
     '--qg-drop-bg': theme.dropBg,
-    '--qg-text': theme.text
+    '--qg-text': theme.text,
+    '--qg-accent-ink': theme.accentInk || theme.accent,
+    '--qg-accent-on': theme.accentOn || '#ffffff'
   }
   const paperVars = {
     background: theme.paperBg,
@@ -1082,6 +1267,107 @@ export function LayoutStyleCards({ value, onChange, uploadTemplates, selectedTem
             >
               {/* Paper preview thumbnail */}
               <div style={{ background: t.pageBg, padding: '10px 10px 6px', borderBottom: `1px solid ${t.tableBorder}` }}>
+                {t.id === 'brief' ? (
+                <div style={{ background: t.paperBg, borderRadius: 6, overflow: 'hidden', height: 90, position: 'relative', boxShadow: '0 1px 6px rgba(0,0,0,0.10)' }}>
+                  <div style={{ height: 3, background: t.accent }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '6px 7px 4px' }}>
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <div style={{ width: 8, height: 8, borderRadius: 2, background: t.accent }} />
+                      <div style={{ height: 3, width: 26, background: t.accent }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                      <div style={{ height: 2, width: 16, background: t.accent }} />
+                      <div style={{ height: 4, width: 28, background: t.text }} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, padding: '4px 7px', background: '#f7f8fa', borderBottom: '1px solid #e6eaef' }}>
+                    {[10, 14, 8].map((w, i) => (
+                      <div key={i} style={{ height: 2, width: w, background: '#c5ced8' }} />
+                    ))}
+                  </div>
+                  <div style={{ margin: '6px 7px 0', height: 8, background: t.accent }} />
+                  <div style={{ margin: '4px 7px 0', display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+                    {[0.92, 0.78, 0.85].map((w, i) => (
+                      <div key={i} style={{ height: 2, background: '#e6eaef', width: `${w * 100}%` }} />
+                    ))}
+                  </div>
+                  <div style={{ position: 'absolute', bottom: 6, right: 7, height: 3, width: 26, background: t.accent }} />
+                </div>
+                ) : t.id === 'atelier' ? (
+                <div style={{ background: t.paperBg, borderRadius: 6, overflow: 'hidden', height: 90, position: 'relative', boxShadow: '0 1px 6px rgba(0,0,0,0.10)', display: 'flex' }}>
+                  <div style={{ width: 4, background: t.accent, flexShrink: 0 }} />
+                  <div style={{ flex: 1, padding: '7px 7px 0', minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ height: 3, width: 28, background: t.accent }} />
+                      <div style={{ height: 8, width: 22, border: `1px solid ${t.accent}` }} />
+                    </div>
+                    <div style={{ marginTop: 8, height: 9, width: 52, background: t.text }} />
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', marginTop: 8, borderTop: '1px solid #dcd6c8' }}>
+                      {[0, 1, 2].map(i => (
+                        <div key={i} style={{ padding: '5px 4px 0', borderLeft: i ? '1px solid #dcd6c8' : 0 }}>
+                          <div style={{ height: 2, width: 8, background: t.accent, marginBottom: 3 }} />
+                          <div style={{ height: 2, width: '70%', background: '#c8c2b4' }} />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ position: 'absolute', bottom: 7, right: 8, height: 2, width: 28, background: t.accent }} />
+                  </div>
+                </div>
+                ) : t.id === 'modern' ? (
+                <div style={{ background: t.paperBg, borderRadius: 6, overflow: 'hidden', height: 90, position: 'relative', boxShadow: '0 1px 6px rgba(0,0,0,0.10)', padding: 6 }}>
+                  <div style={{ position: 'relative', overflow: 'hidden', borderRadius: 6, background: `${t.accent}14`, height: 34, padding: '5px 6px' }}>
+                    <div style={{ position: 'absolute', right: -12, top: -12, width: 34, height: 34, borderRadius: '50%', border: `5px solid ${t.accent}22` }} />
+                    <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+                      <div style={{ width: 7, height: 7, borderRadius: 2, background: t.accent }} />
+                      <div style={{ height: 3, width: 24, borderRadius: 2, background: t.accent }} />
+                    </div>
+                    <div style={{ marginTop: 6, height: 7, width: 38, borderRadius: 2, background: t.text }} />
+                  </div>
+                  <div style={{ display: 'flex', gap: 3, marginTop: 5 }}>
+                    {[18, 22, 14].map((w, i) => (
+                      <div key={i} style={{ height: 6, width: w, borderRadius: 99, background: '#f2f4f7', border: '1px solid #eaecf0' }} />
+                    ))}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 3, marginTop: 5 }}>
+                    <div style={{ height: 12, borderRadius: 4, background: '#f7f8fa', border: '1px solid #eaecf0' }} />
+                    <div style={{ height: 12, borderRadius: 4, background: '#f7f8fa', border: '1px solid #eaecf0' }} />
+                  </div>
+                  <div style={{ position: 'absolute', bottom: 6, right: 6, height: 12, width: 40, borderRadius: 4, background: '#fff', border: '1px solid #eaecf0', boxShadow: `inset 0 2px 0 ${t.accent}`, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: 4 }}>
+                    <div style={{ height: 3, width: 16, borderRadius: 2, background: t.accent }} />
+                  </div>
+                </div>
+                ) : t.id === 'executive' ? (
+                <div style={{ background: t.paperBg, borderRadius: 6, overflow: 'hidden', height: 90, position: 'relative', boxShadow: '0 1px 6px rgba(0,0,0,0.10)' }}>
+                  <div style={{ height: 3, background: t.accent }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '7px 8px 0' }}>
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <div style={{ width: 10, height: 10, borderRadius: 3, background: t.accent }} />
+                      <div style={{ height: 4, width: 34, borderRadius: 2, background: t.accent }} />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+                      <div style={{ height: 2, width: 20, borderRadius: 2, background: t.accent, opacity: 0.7 }} />
+                      <div style={{ height: 5, width: 34, borderRadius: 2, background: t.text }} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', margin: '8px 8px 0', borderTop: '1px solid #e7eaf0', borderBottom: '1px solid #e7eaf0' }}>
+                    {[0, 1, 2].map(i => (
+                      <div key={i} style={{ padding: '4px 3px' }}>
+                        <div style={{ height: 2, width: '60%', background: '#cbd2dc', borderRadius: 2 }} />
+                      </div>
+                    ))}
+                    <div style={{ background: t.accent, padding: '4px 3px' }}>
+                      <div style={{ height: 2, width: '70%', background: '#fff', borderRadius: 2 }} />
+                    </div>
+                  </div>
+                  <div style={{ margin: '6px 8px 0', height: 6, background: `${t.accent}1f`, borderRadius: 2 }} />
+                  <div style={{ margin: '4px 8px 0', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {[0.9, 0.75].map((w, i) => (
+                      <div key={i} style={{ height: 2, borderRadius: 2, background: '#e2e6ec', width: `${w * 100}%` }} />
+                    ))}
+                  </div>
+                  <div style={{ position: 'absolute', bottom: 7, right: 8, height: 6, borderRadius: 2, background: t.accent, width: 36 }} />
+                </div>
+                ) : (
                 <div style={{ background: t.paperBg, borderRadius: 6, overflow: 'hidden', height: 90, position: 'relative', boxShadow: '0 1px 6px rgba(0,0,0,0.10)' }}>
                   {/* Header bar */}
                   <div style={{ background: t.tableHeadBg, height: 18, borderBottom: `1px solid ${t.tableBorder}` }} />
@@ -1097,6 +1383,7 @@ export function LayoutStyleCards({ value, onChange, uploadTemplates, selectedTem
                   {/* Total line accent */}
                   <div style={{ position: 'absolute', bottom: 8, right: 8, height: 3, borderRadius: 2, background: t.accent, width: 32, opacity: 0.6 }} />
                 </div>
+                )}
               </div>
               <div style={{ padding: '10px 12px 12px' }}>
                 <div style={{ fontWeight: 700, fontSize: 13.5, color: '#1a202c' }}>{t.label}</div>

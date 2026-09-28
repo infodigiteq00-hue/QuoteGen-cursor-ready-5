@@ -66,6 +66,25 @@ export function readMetaAdsLead() {
   return null
 }
 
+export function recordMetaLeadProgress(stage, leadOverride) {
+  const lead = usefulLead(leadOverride) || readMetaAdsLead() || {}
+  const email = String(lead.email || '').trim().toLowerCase()
+  const phone = String(lead.phone || '').replace(/\D/g, '')
+  if (!email || phone.length !== 10) return
+  const next = stage === 'company' ? 'company' : 'demo'
+  fetch('/api/meta-ads-leads/progress', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      stage: next,
+      email,
+      phone,
+      name: lead.name || '',
+      company: lead.company || ''
+    })
+  }).catch(() => {})
+}
+
 export function writeMetaAdsLead(lead) {
   if (!lead || typeof lead !== 'object') return
   const payload = {

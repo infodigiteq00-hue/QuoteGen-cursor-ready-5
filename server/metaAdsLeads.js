@@ -43,6 +43,123 @@ function validateLead(lead) {
   return ''
 }
 
+const STAGE_RANK = { lead: 0, demo: 1, purchased: 2 }
+
+function serializeLead(row) {
+  return {
+    id: row.id,
+    name: row.name || '',
+    phone: row.phone || '',
+    email: row.email || '',
+    company: row.company || '',
+    source: row.source || '',
+    path: row.path || '',
+    query: row.query || '',
+    status: row.status === 'purchased' || row.status === 'demo' ? row.status : 'lead',
+    intent: row.intent === 'company' ? 'company' : row.intent === 'demo' ? 'demo' : '',
+    demoAt: row.demo_at || null,
+    purchasedAt: row.purchased_at || null,
+    purchaseAmount: row.purchase_amount || null,
+    purchaseOrderId: row.purchase_order_id || '',
+    createdAt: row.created_at
+  }
+}
+
+async function findLatestLead(supabase, { email, phone }) {
+  const em = String(email || '').trim().toLowerCase()
+  const ph = digitsOnly(phone)
+  if (em) {
+    const { data, error } = await supabase
+      .from('meta_ads_leads')
+      .select('id, status, intent, email, phone, demo_at, purchase_order_id')
+      .eq('email', em)
+      .order('created_at', { ascending: false })
+      .limit(20)
+    if (error) throw error
+    const rows = data || []
+    if (ph.length === 10) {
+      const byPhone = rows.find((row) => row.phone === ph)
+      if (byPhone) return byPhone
+    }
+    return rows[0] || null
+  }
+  if (ph.length === 10) {
+    const { data, error } = await supabase
+      .from('meta_ads_leads')
+      .select('id, status, intent, email, phone, demo_at, purchase_order_id')
+      .eq('phone', ph)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) throw error
+    return data || null
+  }
+  return null
+}
+
+/** Advance a Meta ads lead without downgrading (lead → demo → purchased). */
+export async function markMetaAdsLeadStage(supabase, {
+  email,
+  phone,
+  name,
+  company,
+  stage,
+  amount,
+  orderId
+} = {}) {
+  const nextStage = stage === 'purchased' ? 'purchased' : (stage === 'company' || stage === 'demo') ? 'demo' : ''
+  if (!nextStage) return null
+
+  const em = String(email || '').trim().toLowerCase()
+  const ph = digitsOnly(phone)
+  const now = new Date().toISOString()
+  const existing = await findLatestLead(supabase, { email: em, phone: ph })
+
+  const patch = {}
+  if (nextStage === 'demo') {
+    if (stage === 'company' || stage === 'demo') patch.intent = stage
+    if (!existing?.demo_at) patch.demo_at = now
+    if ((STAGE_RANK[existing?.status] ?? 0) < STAGE_RANK.demo) patch.status = 'demo'
+  }
+  if (nextStage === 'purchased') {
+    patch.status = 'purchased'
+    patch.purchased_at = now
+    const rupees = Math.round(Number(amount) || 0)
+    if (rupees > 0) patch.purchase_amount = rupees
+    if (orderId) patch.purchase_order_id = String(orderId).slice(0, 80)
+  }
+
+  if (!Object.keys(patch).length) return existing?.id || null
+
+  if (existing) {
+    if (nextStage === 'purchased' && existing.purchase_order_id && orderId && existing.purchase_order_id === String(orderId)) {
+      return existing.id
+    }
+    const { error } = await supabase.from('meta_ads_leads').update(patch).eq('id', existing.id)
+    if (error) throw error
+    return existing.id
+  }
+
+  if (nextStage !== 'purchased') return null
+
+  const insert = {
+    name: String(name || '').trim() || 'Customer',
+    phone: ph.length === 10 ? ph : '',
+    email: em || '',
+    company: String(company || '').trim(),
+    source: 'phonepe',
+    status: 'purchased',
+    intent: 'demo',
+    purchased_at: now,
+    purchase_amount: Math.round(Number(amount) || 0) || null,
+    purchase_order_id: orderId ? String(orderId).slice(0, 80) : null
+  }
+  if (!insert.email && !insert.phone) return null
+  const { data, error } = await supabase.from('meta_ads_leads').insert(insert).select('id').single()
+  if (error) throw error
+  return data?.id || null
+}
+
 function trialUserMeta(body) {
   const name = String(body?.name || '').trim()
   const company = String(body?.company || '').trim()
@@ -120,7 +237,8 @@ export function registerPublicMetaAdsLeadRoutes(app) {
           company: lead.company,
           source: lead.source,
           path: lead.path,
-          query: lead.query
+          query: lead.query,
+          status: 'lead'
         })
         .select('id, created_at')
         .single()
@@ -157,6 +275,42 @@ export function registerPublicMetaAdsLeadRoutes(app) {
       })
     } catch (error) {
       console.error(`[${requestId}] meta ads lead insert failed`, error?.code, error?.message)
+      if (/meta_ads_leads|schema cache|PGRST|42703/i.test(error?.message || '')) {
+        return migrationRequired(res, requestId)
+      }
+      supabaseError(error, res, requestId)
+    }
+  })
+
+  app.post('/api/meta-ads-leads/progress', async (req, res) => {
+    const requestId = `mal-prog-${Date.now()}`
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+
+    const stage = String(req.body?.stage || '').trim().toLowerCase()
+    if (stage !== 'demo' && stage !== 'company') {
+      return res.status(400).json({ error: 'Unknown step.', code: 'VALIDATION', requestId })
+    }
+    const email = String(req.body?.email || '').trim().toLowerCase()
+    const phone = digitsOnly(req.body?.phone)
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || phone.length !== 10) {
+      return res.status(400).json({ error: 'Enter the same email and mobile used on the form.', code: 'VALIDATION', requestId })
+    }
+
+    try {
+      const id = await markMetaAdsLeadStage(supabase, {
+        email,
+        phone,
+        name: req.body?.name,
+        company: req.body?.company,
+        stage
+      })
+      if (!id) {
+        return res.status(404).json({ error: 'Lead not found.', code: 'NOT_FOUND', requestId })
+      }
+      return res.json({ ok: true, id, requestId })
+    } catch (error) {
+      console.error(`[${requestId}] meta ads lead progress failed`, error?.code, error?.message)
       if (/meta_ads_leads|schema cache|PGRST|42703/i.test(error?.message || '')) {
         return migrationRequired(res, requestId)
       }
@@ -319,24 +473,20 @@ export function registerMetaAdsLeadRoutes(app) {
     try {
       const { data, error, count } = await supabase
         .from('meta_ads_leads')
-        .select('id, name, phone, email, company, source, path, query, created_at', { count: 'exact' })
+        .select('id, name, phone, email, company, source, path, query, status, intent, demo_at, purchased_at, purchase_amount, purchase_order_id, created_at', { count: 'exact' })
         .order('created_at', { ascending: false })
         .limit(500)
       if (error) throw error
 
-      const leads = (data || []).map((row) => ({
-        id: row.id,
-        name: row.name || '',
-        phone: row.phone || '',
-        email: row.email || '',
-        company: row.company || '',
-        source: row.source || '',
-        path: row.path || '',
-        query: row.query || '',
-        createdAt: row.created_at
-      }))
+      const leads = (data || []).map(serializeLead)
+      const counts = { lead: 0, demo: 0, purchased: 0 }
+      for (const lead of leads) {
+        if (lead.status === 'purchased') counts.purchased += 1
+        else if (lead.status === 'demo') counts.demo += 1
+        else counts.lead += 1
+      }
 
-      res.json({ total: count ?? leads.length, leads, requestId })
+      res.json({ total: count ?? leads.length, counts, leads, requestId })
     } catch (error) {
       console.error(`[${requestId}] meta ads leads list failed`, error?.code, error?.message)
       if (/meta_ads_leads|schema cache|PGRST|42703/i.test(error?.message || '')) {

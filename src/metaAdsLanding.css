@@ -1538,6 +1538,11 @@
   color: #7E8AA3;
   text-align: center;
 }
+.meta-form-fine a {
+  color: #9CC4F5;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 .meta-next-prompt {
   margin: 22px 0 12px;
@@ -1601,9 +1606,21 @@
 .meta-footer .meta-shell {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 12px 20px;
   justify-content: space-between;
   align-items: center;
+}
+.meta-footer-legal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.meta-footer-legal a {
+  color: #9AA6BD;
+}
+.meta-footer-legal a:hover {
+  color: #F3F6FC;
+  text-decoration: underline;
 }
 
 @media (max-width: 860px) {

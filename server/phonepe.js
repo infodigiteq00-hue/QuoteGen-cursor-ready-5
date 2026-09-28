@@ -1,4 +1,6 @@
 import crypto from 'node:crypto'
+import { getSupabase, isSupabaseConfigured } from './db.js'
+import { markMetaAdsLeadStage } from './metaAdsLeads.js'
 import { sendAdminEmail } from './mail.js'
 
 const OFFER_PRICE = 199
@@ -152,6 +154,19 @@ export function registerPublicPhonePeRoutes(app) {
             `Email: ${m.udf4 || '-'}`
           ].join('\n')
         }).catch(() => {})
+        if (isSupabaseConfigured()) {
+          markMetaAdsLeadStage(getSupabase(), {
+            stage: 'purchased',
+            email: m.udf4,
+            phone: m.udf3,
+            name: m.udf1,
+            company: m.udf2,
+            amount,
+            orderId
+          }).catch((error) => {
+            console.error('[phonepe] lead purchase update failed', error?.message)
+          })
+        }
       }
 
       return res.json({ state, amount })

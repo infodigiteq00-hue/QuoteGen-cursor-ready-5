@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import logoUrl from './assets/landing/quotegen-logo.png'
-import { META_ADS_LEAD_KEY as LEAD_KEY, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent } from './metaTrialLead.js'
+import { META_ADS_LEAD_KEY as LEAD_KEY, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, recordMetaLeadProgress } from './metaTrialLead.js'
 import { trackPixel } from './metaPixel.js'
 import './metaAdsLanding.css'
 
@@ -251,6 +251,8 @@ function TrialForm({ formRef, autoFocusName, onNextStep, initialLead = null }) {
       </button>
       <p className="meta-form-fine">
         No credit card required · Free to try
+        <br />
+        By continuing you agree to our <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Service</a>.
       </p>
     </form>
   )
@@ -296,6 +298,7 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial, initialLead 
   const handleNextStep = (choice, lead) => {
     writeMetaTrialIntent(choice)
     if (lead) writeMetaAdsLead({ ...lead, submitted: true, next: choice })
+    recordMetaLeadProgress(choice === 'company' ? 'company' : 'demo', lead)
     // Leave the long landing URL so refresh / back doesn't dump them into the ads page again.
     // Signed-in users (initialLead) skip verify and go straight back into the app.
     try {
@@ -646,6 +649,12 @@ pls confirm`}</pre>
       <footer className="meta-footer">
         <div className="meta-shell">
           <div>© {new Date().getFullYear()} QuoteGen by Digiteq Solution</div>
+          <nav className="meta-footer-legal" aria-label="Legal">
+            <a href="/privacy">Privacy Policy</a>
+            <a href="/terms">Terms of Service</a>
+            <a href="/refund">Refund Policy</a>
+            <a href="/contact">Contact</a>
+          </nav>
           {onSignIn && (
             <button type="button" className="meta-link" onClick={onSignIn}>Already have an account? Sign In</button>
           )}

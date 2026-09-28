@@ -200,6 +200,10 @@ function SignupForm({ onNeedsConfirmation, onAlreadyRegistered, onSwitch, prefil
       <Field label="Confirm password" type="password" autoComplete="new-password" required value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Retype your password" />
       <Alert tone="error">{error}</Alert>
       <Submit loading={loading} idle="Sign up" busy="Creating account…" />
+      <p className="text-center text-xs leading-relaxed text-slate-500">
+        By signing up you agree to our <a href="/privacy" className="font-semibold text-moss hover:underline">Privacy Policy</a>
+        {' '}and <a href="/terms" className="font-semibold text-moss hover:underline">Terms of Service</a>.
+      </p>
       <p className="text-center text-sm text-slate-500">
         Already have an account?{' '}
         <button type="button" onClick={onSwitch} className="font-semibold text-moss hover:underline">Log in</button>

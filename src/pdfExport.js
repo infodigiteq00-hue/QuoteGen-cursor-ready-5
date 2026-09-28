@@ -287,8 +287,10 @@ function convertZoomToTransform(root) {
 }
 
 function revealTitles(root) {
-  const formal = Boolean(root.querySelector('.qg-theme-formal, [data-qg-theme="formal"]'))
-  const ink = formal ? '#3d6db5' : '#ffffff'
+  const formal = Boolean(root.querySelector('.qg-theme-formal, [data-qg-theme="formal"], .qg-theme-executive, [data-qg-theme="executive"], .qg-theme-modern, [data-qg-theme="modern"], .qg-theme-atelier, [data-qg-theme="atelier"], .qg-theme-brief, [data-qg-theme="brief"]'))
+  const tokens = root.matches?.('[style*="--qg-table-head-bg"]') ? root : root.querySelector('[style*="--qg-table-head-bg"]')
+  const headBg = tokens?.style.getPropertyValue('--qg-table-head-bg').trim() || ''
+  const ink = tokens?.style.getPropertyValue('--qg-table-head-text').trim() || '#ffffff'
   root.querySelectorAll('.qg-col-title, .qg-col-title--capture').forEach((node) => {
     node.style.display = 'inline'
     node.style.visibility = 'visible'
@@ -296,7 +298,7 @@ function revealTitles(root) {
     node.style.webkitTextFillColor = ink
     node.style.letterSpacing = '0'
     node.style.textTransform = 'uppercase'
-    node.style.textShadow = formal ? 'none' : '0 0 0.3px #ffffff'
+    node.style.textShadow = formal ? 'none' : `0 0 0.3px ${ink}`
   })
   root.querySelectorAll('.quote-items-table thead th').forEach((th) => {
     th.style.color = ink
@@ -307,7 +309,7 @@ function revealTitles(root) {
     th.style.webkitPrintColorAdjust = 'exact'
     th.style.printColorAdjust = 'exact'
     if (formal) {
-      th.style.background = '#f7f9fc'
+      if (headBg) th.style.background = headBg
       th.style.textShadow = 'none'
     }
   })

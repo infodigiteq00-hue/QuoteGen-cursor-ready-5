@@ -737,7 +737,7 @@ function TrialFormalExport({ quote, companyProfile = null }) {
             )}
           </div>
           <div className="qg-letterhead-text">
-            <p className="qg-letterhead-name" style={{ color: theme.text }}>{companyName}</p>
+            <p className="qg-letterhead-name" style={{ color: theme.accent }}>{companyName}</p>
             {headerText ? (
               <p className="qg-letterhead-address" style={{ color: theme.muted, whiteSpace: 'pre-line' }}>{headerText}</p>
             ) : null}
@@ -1668,6 +1668,11 @@ export default function MetaTrialGuide({
                 <small> /month</small>
               </p>
               <p className="meta-guide-pay-note">{JOIN_QUOTES} quotations / month · pay as you go for more</p>
+              <p className="meta-guide-pay-note">
+                <a href="/refund">Refund policy</a>
+                {' · '}
+                <a href="/terms">Terms</a>
+              </p>
               <div className="meta-guide-pay-qr">
                 {!qrFailed ? (
                   <img

@@ -11,6 +11,7 @@ import MarketingLanding from './MarketingLanding.jsx'
 import MetaAdsLanding from './MetaAdsLanding.jsx'
 import MetaTrialGuide from './MetaTrialGuide.jsx'
 import PaymentStatus from './PaymentStatus.jsx'
+import LegalPages, { matchLegalPage } from './LegalPages.jsx'
 import { initMetaPixel } from './metaPixel.js'
 import WsConvertModal from './WsConvertModal.jsx'
 import BrandMark from './BrandMark.jsx'
@@ -71,8 +72,8 @@ import {
   QuoteToSubjectBlock,
   LayoutStyleCards
 } from './QuoteStudio.jsx'
-import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId } from './quotePaperThemes.js'
-import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent } from './metaTrialLead.js'
+import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId, normalizePaperStyle } from './quotePaperThemes.js'
+import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, recordMetaLeadProgress } from './metaTrialLead.js'
 import { A4_WIDTH_PX, defaultA4Pages, measureA4Blocks, normalizeA4Pages, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
 import { applyProductToItem, clientsFromQuotations, matchProducts, productsFromHistory } from './suggestCatalog.js'
@@ -1332,6 +1333,7 @@ function App() {
   }, [authUser, guestAuthMode])
 
   const startMetaTrialPath = (next) => {
+    recordMetaLeadProgress(next === 'company' ? 'company' : 'demo')
     clearMetaTrialIntent()
     setMetaLandingReturn(false)
 
@@ -1664,6 +1666,11 @@ function App() {
     return <PaymentStatus onContinue={() => window.location.assign('/')} />
   }
 
+  const legalPageId = matchLegalPage(publicPath)
+  if (legalPageId) {
+    return <LegalPages pageId={legalPageId} />
+  }
+
   if (!authChecked) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-3.5 bg-mist">
@@ -1710,6 +1717,7 @@ function App() {
           onContinueTrial={(choice, lead) => {
             writeMetaTrialIntent(choice)
             if (lead) writeMetaAdsLead(lead)
+            recordMetaLeadProgress(choice === 'company' ? 'company' : 'demo', lead)
             setGuestEmail(lead?.email || '')
             setGuestPhone(lead?.phone || '')
             setGuestLeadName(lead?.name || '')
@@ -2108,7 +2116,7 @@ function App() {
     account: ['Account', 'Your own details'],
     billing: ['Billing', 'Your plan'],
     'feature-interest': ['Feature interest', 'Who asked for upcoming features'],
-    'meta-ads-leads': ['Meta ads leads', 'Trial form leads from /metaadslanding'],
+    'meta-ads-leads': ['Meta ads leads', 'Who entered a lead, tried the demo, or purchased'],
     'users-admin': ['Users', 'Onboarded accounts and quotation usage']
   }
   const [wsPageTitle, wsPageHint] = wsTitles[workspaceView] || wsTitles.home
@@ -5436,7 +5444,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [saveFlash, setSaveFlash] = useState('')
   const [paperStyle, setPaperStyleLocal] = useState(() => (
-    quote.paperStyle || quote.companyProfile?.paperStyle || readPreferredPaperStyle()
+    normalizePaperStyle(quote.paperStyle || quote.companyProfile?.paperStyle || readPreferredPaperStyle())
   ))
   const [watermarkEnabled, setWatermarkEnabledLocal] = useState(quote.watermarkEnabled !== false)
   const [logoColorBusy, setLogoColorBusy] = useState(false)
@@ -5465,8 +5473,8 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   }, [quote.watermarkEnabled, quoteId])
 
   useEffect(() => {
-    const next = quote.paperStyle || quote.companyProfile?.paperStyle || readPreferredPaperStyle()
-    if (isPaperStyleId(next)) setPaperStyleLocal(next)
+    const next = normalizePaperStyle(quote.paperStyle || quote.companyProfile?.paperStyle || readPreferredPaperStyle())
+    setPaperStyleLocal(next)
   }, [quote.paperStyle, quote.companyProfile?.paperStyle, quoteId])
 
   const tableColorId = quote.tableColorId || 'blue'
@@ -6149,7 +6157,8 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const [columnWidths, setColumnWidths] = useState({})
   const resizeStateRef = useRef(null)
   const imageFitRef = useRef({})
-  const isFormalPaper = paperStyle === 'formal'
+  const isEditorialPaper = paperStyle === 'executive' || paperStyle === 'modern' || paperStyle === 'atelier' || paperStyle === 'brief'
+  const isFormalPaper = paperStyle === 'formal' || isEditorialPaper
   const defaultColWidthForKey = (key) => {
     const col = columns.find(c => c.id === key || `${c.id}__rate` === key)
     if (!col) return Math.max(60, Math.round(110 * (LAYOUT_FONT_PX / 14)))
@@ -6505,6 +6514,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         docLabel={docLabel}
         isInvoice={isInvoice}
         onNumberCommit={commitQuoteNumberSeries}
+        grandTotal={hasAmount ? money(quoteTotals.grandTotal) : ''}
       />
         </div>
         ) : null}
@@ -6817,7 +6827,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                     className={`qg-cell-compact relative cursor-grab p-3 text-slate-400 active:cursor-grabbing`}
                   >
                     <span className="no-print mr-1 text-slate-300">⠿</span>
-                    {i + 1}
+                    {isEditorialPaper ? String(i + 1).padStart(2, '0') : i + 1}
                     <button
                       type="button"
                       draggable={false}
@@ -6889,7 +6899,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
               onUpdate={updateExtraLine}
               onRemove={removeExtraLine}
             />
-            <div className="mt-2 flex justify-between border-t pt-2 text-base font-semibold" style={{ borderColor: 'var(--qg-accent)' }}><span>Total</span><span>{money(quoteTotals.grandTotal)}</span></div>
+            <div className="qg-totals-grand mt-2 flex justify-between border-t pt-2 text-base font-semibold" style={{ borderColor: 'var(--qg-accent)' }}><span>{isEditorialPaper ? 'Grand total' : 'Total'}</span><span>{money(quoteTotals.grandTotal)}</span></div>
             {!hasNested && <p className="mt-1 text-right text-xs text-slate-400">Taxes extra as applicable</p>}
           </div>
         )}
@@ -7003,13 +7013,29 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
           </div>
         </section>
         <footer className="mt-8 qg-signatory-block">
-          {profile?.bankName || profile?.bankAccountNo || profile?.bankQrUrl || paperStyle === 'formal' ? (
+          {profile?.bankName || profile?.bankAccountNo || profile?.bankQrUrl || isFormalPaper ? (
             <>
               <hr className="qg-section-rule" />
-              <CompanyBankDetails profile={profile} className="mb-8" showEmpty={paperStyle === 'formal'} />
+              <CompanyBankDetails profile={profile} className="mb-8" showEmpty={isFormalPaper} />
             </>
           ) : null}
           <hr className="qg-section-rule" />
+          {isEditorialPaper ? (
+            <div className="qg-exec-signoff">
+              <div className="qg-exec-sign">
+                <p className="qg-exec-sign-eyebrow">Accepted by</p>
+                <p className="qg-exec-sign-party">{customer.company?.trim() || customer.name?.trim() || 'Client'}</p>
+                <div className="qg-exec-sign-line" />
+                <p className="qg-exec-sign-caption">Name, signature, seal &amp; date</p>
+              </div>
+              <div className="qg-exec-sign qg-exec-sign--issuer">
+                <p className="qg-exec-sign-eyebrow">For</p>
+                <p className="qg-exec-sign-party">{profile?.companyName?.trim() || 'Your Company'}</p>
+                <div className="qg-exec-sign-line" />
+                <p className="qg-exec-sign-caption">Authorized Signatory</p>
+              </div>
+            </div>
+          ) : (
           <div className="flex justify-end pb-1">
             <div className="w-52 text-center">
               <div className="h-14" />
@@ -7019,6 +7045,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
               </div>
             </div>
           </div>
+          )}
           {visibleFooterText(profile?.footerText) && !profile?.footerImageUrl ? (
             <PageEndBand>
               <CompanyFooter profile={profile} />
@@ -9545,10 +9572,51 @@ function WsFeatureInterestAdmin() {
   )
 }
 
+function metaLeadStatusView(lead) {
+  if (lead?.status === 'purchased') {
+    const amount = lead.purchaseAmount ? `₹${lead.purchaseAmount}` : ''
+    return {
+      label: amount ? `Purchased ${amount}` : 'Purchased',
+      hint: lead.purchasedAt
+        ? `Payment received ${new Date(lead.purchasedAt).toLocaleString()}`
+        : 'Payment received',
+      bg: '#ECFDF3',
+      color: '#15803D',
+      border: '#BBF7D0'
+    }
+  }
+  if (lead?.status === 'demo' && lead?.intent === 'company') {
+    return {
+      label: 'Started setup',
+      hint: lead.demoAt ? `Company details ${new Date(lead.demoAt).toLocaleString()}` : 'Opened company setup',
+      bg: '#F5F3FF',
+      color: '#6D28D9',
+      border: '#DDD6FE'
+    }
+  }
+  if (lead?.status === 'demo') {
+    return {
+      label: 'Tried demo',
+      hint: lead.demoAt ? `Demo quotation ${new Date(lead.demoAt).toLocaleString()}` : 'Opened demo quotation',
+      bg: '#EFF6FF',
+      color: '#1D4ED8',
+      border: '#BFDBFE'
+    }
+  }
+  return {
+    label: 'Lead only',
+    hint: 'Submitted the form',
+    bg: '#F8FAFC',
+    color: '#64748B',
+    border: '#E2E8F0'
+  }
+}
+
 function WsMetaAdsLeadsAdmin() {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState('')
   const [total, setTotal] = React.useState(0)
+  const [counts, setCounts] = React.useState({ lead: 0, demo: 0, purchased: 0 })
   const [leads, setLeads] = React.useState([])
 
   const load = React.useCallback(() => {
@@ -9559,6 +9627,11 @@ function WsMetaAdsLeadsAdmin() {
         const data = await r.json().catch(() => ({}))
         if (!r.ok) throw new Error(data.error || data.message || `Could not load leads (${r.status})`)
         setTotal(data.total || 0)
+        setCounts({
+          lead: Number(data.counts?.lead) || 0,
+          demo: Number(data.counts?.demo) || 0,
+          purchased: Number(data.counts?.purchased) || 0
+        })
         setLeads(Array.isArray(data.leads) ? data.leads : [])
       })
       .catch((e) => setError(e.message || 'Could not load leads'))
@@ -9567,20 +9640,29 @@ function WsMetaAdsLeadsAdmin() {
 
   React.useEffect(() => { load() }, [load])
 
+  const statChip = (label, value, color) => (
+    <div style={{ minWidth: 88 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7688' }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 800, color, letterSpacing: '-0.03em', lineHeight: 1.1 }}>{loading ? '…' : value}</div>
+    </div>
+  )
+
   return (
-    <div style={{ maxWidth: 1080, display: 'flex', flexDirection: 'column', gap: 18 }}>
+    <div style={{ maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 18 }}>
       <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 26 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8' }}>Meta ads landing</div>
             <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: '#1a202c' }}>Trial form leads</div>
             <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4 }}>
-              Captured from <code style={{ fontSize: 13 }}>/metaadslanding</code> — name, phone, email, company.
+              Who submitted a lead, tried the demo, or completed a purchase.
             </div>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#6B7688' }}>Total</div>
-            <div style={{ fontSize: 36, fontWeight: 800, color: '#1A73E8', letterSpacing: '-0.03em', lineHeight: 1 }}>{loading ? '…' : total}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, textAlign: 'right' }}>
+            {statChip('Purchased', counts.purchased, '#15803D')}
+            {statChip('Started trial', counts.demo, '#1A73E8')}
+            {statChip('Lead only', counts.lead, '#64748B')}
+            {statChip('Total', total, '#1A73E8')}
           </div>
         </div>
         <button
@@ -9606,6 +9688,7 @@ function WsMetaAdsLeadsAdmin() {
             <thead>
               <tr style={{ textAlign: 'left', color: '#6B7688', fontSize: 12, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Name</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Status</th>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Phone</th>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Email</th>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Company</th>
@@ -9613,21 +9696,40 @@ function WsMetaAdsLeadsAdmin() {
               </tr>
             </thead>
             <tbody>
-              {leads.map((lead) => (
-                <tr key={lead.id}>
-                  <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', fontWeight: 650, color: '#1a202c' }}>{lead.name}</td>
-                  <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', whiteSpace: 'nowrap' }}>
-                    <a href={`tel:+91${lead.phone}`} style={{ color: '#1A73E8', textDecoration: 'none', fontWeight: 600 }}>+91 {lead.phone}</a>
-                  </td>
-                  <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', wordBreak: 'break-all' }}>
-                    <a href={`mailto:${lead.email}`} style={{ color: '#1A73E8', textDecoration: 'none' }}>{lead.email}</a>
-                  </td>
-                  <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#3D4859' }}>{lead.company || '—'}</td>
-                  <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#8A94A6', whiteSpace: 'nowrap', fontSize: 13 }}>
-                    {lead.createdAt ? new Date(lead.createdAt).toLocaleString() : ''}
-                  </td>
-                </tr>
-              ))}
+              {leads.map((lead) => {
+                const status = metaLeadStatusView(lead)
+                return (
+                  <tr key={lead.id}>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', fontWeight: 650, color: '#1a202c' }}>{lead.name}</td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', verticalAlign: 'top' }}>
+                      <span style={{
+                        display: 'inline-block',
+                        padding: '4px 10px',
+                        borderRadius: 999,
+                        background: status.bg,
+                        color: status.color,
+                        border: `1px solid ${status.border}`,
+                        fontSize: 12,
+                        fontWeight: 750,
+                        whiteSpace: 'nowrap'
+                      }}>
+                        {status.label}
+                      </span>
+                      <div style={{ marginTop: 4, fontSize: 12, color: '#8A94A6', maxWidth: 220 }}>{status.hint}</div>
+                    </td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', whiteSpace: 'nowrap' }}>
+                      <a href={`tel:+91${lead.phone}`} style={{ color: '#1A73E8', textDecoration: 'none', fontWeight: 600 }}>+91 {lead.phone}</a>
+                    </td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', wordBreak: 'break-all' }}>
+                      <a href={`mailto:${lead.email}`} style={{ color: '#1A73E8', textDecoration: 'none' }}>{lead.email}</a>
+                    </td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#3D4859' }}>{lead.company || '—'}</td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#8A94A6', whiteSpace: 'nowrap', fontSize: 13 }}>
+                      {lead.createdAt ? new Date(lead.createdAt).toLocaleString() : ''}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}

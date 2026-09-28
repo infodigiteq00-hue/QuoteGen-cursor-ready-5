@@ -658,13 +658,14 @@ export default function MarketingLanding({ onSignIn, onSignUp }) {
               <strong style={{ display: 'block', color: '#0D1117', fontSize: '13px', marginBottom: '6px' }}>Company</strong>
               <a href="#features" style={{ color: '#4A5566' }}>Features</a><br />
               <span style={{ color: '#4A5566' }}>Careers</span><br />
-              <span style={{ color: '#4A5566' }}>Contact</span>
+              <a href="/contact" style={{ color: '#4A5566' }}>Contact</a>
             </div>
             <div>
               <strong style={{ display: 'block', color: '#0D1117', fontSize: '13px', marginBottom: '6px' }}>Legal</strong>
-              <span style={{ color: '#4A5566' }}>Privacy</span><br />
-              <span style={{ color: '#4A5566' }}>Terms</span><br />
-              <span style={{ color: '#4A5566' }}>Security</span>
+              <a href="/privacy" style={{ color: '#4A5566' }}>Privacy</a><br />
+              <a href="/terms" style={{ color: '#4A5566' }}>Terms</a><br />
+              <a href="/refund" style={{ color: '#4A5566' }}>Refunds</a><br />
+              <a href="/contact" style={{ color: '#4A5566' }}>Contact</a>
             </div>
           </div>
         </div>
