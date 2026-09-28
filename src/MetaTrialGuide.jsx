@@ -1,8 +1,10 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ingestEnquiryFiles, uploadCompanyLogo } from './quotePersistence.js'
 import { downloadQuotationPdf, quotationFileName } from './pdfExport.js'
-import { QuoteStudioCanvas } from './QuoteStudio.jsx'
-import { resolvePaperTheme } from './quotePaperThemes.js'
+import { QuotePaperHeader, QuoteStudioCanvas } from './QuoteStudio.jsx'
+import { PAPER_THEMES, normalizePaperStyle, readPreferredPaperStyle, resolvePaperTheme, writePreferredPaperStyle, extractImagePalette, accentForTableColor, tableColorSwatches } from './quotePaperThemes.js'
+import { peekPreferredColumns, writePreferredColumns } from './quoteLayoutPrefs.js'
+import QuoteGenerateCeremony, { CEREMONY_MIN_MS } from './QuoteGenerateCeremony.jsx'
 import { defaultA4Pages, measureA4Blocks, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { NAMED_AMOUNT_COLUMN_PRESETS, buildNamedAmountColumn, formulaEditPatch, isFormulaColumn } from '../shared/quoteFormulas.js'
 import {
@@ -40,39 +42,6 @@ const OPTIONAL_PRESETS = [
   { id: 'image', label: 'Image', type: 'image' }
 ]
 
-const CEREMONY_BEATS = [
-  { id: 'read', stage: 'scan', title: 'Scanning the enquiry', detail: 'Reading every line of the client message…' },
-  { id: 'extract', stage: 'lift', title: 'Pulling the details free', detail: 'Products, quantities, and rates lifting off the page…' },
-  { id: 'map', stage: 'map', title: 'Slotting into your layout', detail: 'Each detail snapping into the columns you chose…' },
-  { id: 'build', stage: 'forge', title: 'Forging the quotation', detail: 'Assembling a client-ready sheet — almost there…' }
-]
-
-const CEREMONY_SHARD_FALLBACKS = ['Qty', 'Rate', 'Item', 'Unit', '12', '1,250', 'Nos', 'Amount']
-
-function ceremonyShards(enquiryText, columns) {
-  const fromText = String(enquiryText || '')
-    .replace(/[^\w\s.,%/₹$-]/g, ' ')
-    .split(/\s+/)
-    .map((w) => w.trim())
-    .filter((w) => w.length >= 2 && w.length <= 18)
-    .slice(0, 6)
-  const fromCols = (Array.isArray(columns) ? columns : [])
-    .map((c) => c.label)
-    .filter(Boolean)
-    .slice(0, 4)
-  const mixed = [...fromText, ...fromCols, ...CEREMONY_SHARD_FALLBACKS]
-  const seen = new Set()
-  const out = []
-  for (const raw of mixed) {
-    const key = String(raw).toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(String(raw).slice(0, 16))
-    if (out.length >= 8) break
-  }
-  return out
-}
-
 function IconUpload() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
@@ -105,6 +74,15 @@ function IconPencil() {
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+    </svg>
+  )
+}
+
+function IconChevron({ dir = 'left' }) {
+  const d = dir === 'right' ? 'M9 6l6 6-6 6' : 'M15 6l-6 6 6 6'
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={d} />
     </svg>
   )
 }
@@ -200,6 +178,7 @@ function sleep(ms) {
 function LayoutPreviewTable({ columns, onRemove }) {
   const cols = Array.isArray(columns) ? columns : []
   return (
+    <>
     <div className="meta-guide-table-wrap">
       <table className="meta-guide-table">
         <colgroup>
@@ -243,6 +222,8 @@ function LayoutPreviewTable({ columns, onRemove }) {
         </tbody>
       </table>
     </div>
+    <p className="meta-guide-table-hint">Swipe the table sideways to see every column</p>
+    </>
   )
 }
 
@@ -661,9 +642,30 @@ function GuideModal({ title, onClose, children, className = '' }) {
 const PHONEPE_QR_SRC = '/phonepe-qr.png'
 const JOIN_PRICE = 199
 const REGULAR_PRICE = 699
+const JOIN_SAVE = REGULAR_PRICE - JOIN_PRICE
 const JOIN_QUOTES = 20
 const OFFER_MS = 10 * 60 * 1000
 const OFFER_STARTED_KEY = 'qg_join_offer_started'
+const SEAT_CAP = 100
+const SEAT_START = 48
+const SEAT_FLOOR = 11
+const SEATS_KEY = 'qg_trial_seats_left_v1'
+
+function writeSeatsLeft(n) {
+  try { localStorage.setItem(SEATS_KEY, String(n)) } catch { /* private mode */ }
+}
+
+function readSeatsLeft() {
+  try {
+    const n = Number(localStorage.getItem(SEATS_KEY))
+    if (Number.isFinite(n) && n >= SEAT_FLOOR && n <= SEAT_START) return Math.round(n)
+  } catch { /* private mode */ }
+  return SEAT_START
+}
+
+function randomSeatWaitMs() {
+  return 10000 + Math.floor(Math.random() * 40000)
+}
 
 function readOfferStart() {
   try {
@@ -683,11 +685,11 @@ function trialExportColWidths(columns) {
   const sr = 36
   const widths = (columns || []).map((col) => {
     if (isDescriptionColumn(col)) return 0
-    if (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) return 52
-    if (col.id === 'quantity' || /qty|quantity/i.test(String(col.label || ''))) return 70
-    if (col.id === 'rate' || /rate|price/i.test(String(col.label || ''))) return 78
-    if (col.id === 'amount' || /amount|total/i.test(String(col.label || ''))) return 88
-    return 72
+    if (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) return 56
+    if (col.id === 'quantity' || /qty|quantity/i.test(String(col.label || ''))) return 76
+    if (col.id === 'rate' || /rate|price/i.test(String(col.label || ''))) return 102
+    if (col.id === 'amount' || /amount|total/i.test(String(col.label || ''))) return 118
+    return 78
   })
   const printable = 718
   const used = sr + widths.reduce((sum, w) => sum + w, 0)
@@ -696,7 +698,58 @@ function trialExportColWidths(columns) {
   return { sr, widths }
 }
 
-function TrialFormalExport({ quote, companyProfile = null }) {
+const DEMO_PAPER_IDS = ['formal', 'executive', 'modern', 'atelier', 'brief', 'corporate']
+const FORMAT_HINT_KEY = 'qg_trial_format_hint_v2'
+
+function noopUpdate() {}
+
+function easeInOut(t) {
+  return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2
+}
+
+function animateScrollLeft(el, to, duration) {
+  const from = el.scrollLeft
+  const dist = to - from
+  if (Math.abs(dist) < 1) {
+    el.scrollLeft = to
+    return Promise.resolve()
+  }
+  const start = performance.now()
+  return new Promise((resolve) => {
+    const tick = (now) => {
+      const t = Math.min(1, (now - start) / duration)
+      el.scrollLeft = from + dist * easeInOut(t)
+      if (t < 1) requestAnimationFrame(tick)
+      else resolve()
+    }
+    requestAnimationFrame(tick)
+  })
+}
+
+function centerScrollLeft(scroller, index) {
+  const slide = scroller?.children?.[index]
+  if (!slide) return 0
+  return Math.max(0, slide.offsetLeft - (scroller.clientWidth - slide.offsetWidth) / 2)
+}
+
+function visibleCarouselThemeId(fallback) {
+  const track = document.querySelector('.meta-guide-format-track')
+  if (!track?.children?.length) return fallback
+  const mid = track.scrollLeft + track.clientWidth / 2
+  let best = 0
+  let bestDist = Infinity
+  Array.from(track.children).forEach((slide, i) => {
+    const center = slide.offsetLeft + slide.offsetWidth / 2
+    const dist = Math.abs(center - mid)
+    if (dist < bestDist) {
+      bestDist = dist
+      best = i
+    }
+  })
+  return DEMO_PAPER_IDS[best] || fallback
+}
+
+function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', captureReady = false, onUploadLogo = null, logoBusy = false, onLogoSizeChange = null }) {
   const columns = Array.isArray(quote?.columns) && quote.columns.length ? quote.columns : CORE_COLUMNS.map(({ locked, ...c }) => c)
   const items = Array.isArray(quote?.items) ? quote.items : []
   const totals = computeQuoteTotals(items, columns, quote?.extraLines)
@@ -704,15 +757,16 @@ function TrialFormalExport({ quote, companyProfile = null }) {
   const companyName = String(profile?.companyName || '').trim() || 'Your Company Name'
   const headerText = String(profile?.headerText || '').trim()
   const logoUrl = String(profile?.logoUrl || '').trim()
-  const terms = String(profile?.standardTerms || '').trim()
+  const terms = String(quote?.fields?.standardTerms || profile?.standardTerms || '').trim()
   const title = String(quote?.title || quote?.subject || '').trim()
   const clientName = String(quote?.customer?.name || '').trim()
   const clientCompany = String(quote?.customer?.company || '').trim()
   const clientGst = String(quote?.customer?.gst || '').trim()
   const clientLocation = String(quote?.customer?.location || '').trim()
   const hasClient = Boolean(clientName || clientCompany || clientGst || clientLocation)
-  const theme = resolvePaperTheme('formal')
-  const initial = companyName.charAt(0).toUpperCase() || 'Q'
+  const resolvedId = normalizePaperStyle(themeId)
+  const chosenAccent = accentForTableColor(quote?.tableColorId, quote?.logoPalette)
+  const theme = resolvePaperTheme(resolvedId, chosenAccent)
   const colWidths = trialExportColWidths(columns)
   const rootRef = useRef(null)
   const [pages, setPages] = useState(() => defaultA4Pages(items.length))
@@ -721,35 +775,23 @@ function TrialFormalExport({ quote, companyProfile = null }) {
     const measured = measureA4Blocks(rootRef.current)
     const next = packA4Pages({ rowCount: items.length, ...measured })
     setPages((prev) => (pagesEqual(prev, next) ? prev : next))
-  }, [items, columns, companyName, headerText, logoUrl, title, terms, clientName, clientCompany])
+    return undefined
+  }, [items, columns, companyName, headerText, logoUrl, title, terms, clientName, clientCompany, resolvedId, chosenAccent, profile?.logoWidth, profile?.logoHeight])
 
   const letterhead = (
-    <header className="qg-paper-header qg-paper-header--formal" data-qg-block="header">
-      <div className="qg-formal-letterhead">
-        <div className="qg-letterhead qg-letterhead--formal">
-          <div className="qg-letterhead-mark" style={{ width: 46 }}>
-            {logoUrl ? (
-              <img src={logoUrl} alt="" style={{ width: '100%', maxHeight: 46, objectFit: 'contain', display: 'block' }} />
-            ) : (
-              <div className="qg-letterhead-initial" style={{ width: 46, height: 46, background: theme.accent, fontSize: 18 }}>
-                {initial}
-              </div>
-            )}
-          </div>
-          <div className="qg-letterhead-text">
-            <p className="qg-letterhead-name" style={{ color: theme.accent }}>{companyName}</p>
-            {headerText ? (
-              <p className="qg-letterhead-address" style={{ color: theme.muted, whiteSpace: 'pre-line' }}>{headerText}</p>
-            ) : null}
-          </div>
-        </div>
-        <div className="qg-formal-docmeta">
-          <p className="qg-doc-title" style={{ color: theme.accent, fontFamily: theme.titleFont }}>QUOTATION</p>
-          <div className="qg-formal-docmeta-no">{quote?.number || 'QG-XXXX'}</div>
-          <div className="qg-formal-docmeta-date">{quote?.date || ''}</div>
-        </div>
-      </div>
-    </header>
+    <div data-qg-block="header">
+      <QuotePaperHeader
+        theme={theme}
+        profile={profile}
+        quote={quote || {}}
+        update={noopUpdate}
+        docLabel="QUOTATION"
+        grandTotal={money(totals.grandTotal)}
+        onUploadLogo={onUploadLogo}
+        logoBusy={logoBusy}
+        onLogoSizeChange={captureReady ? null : onLogoSizeChange}
+      />
+    </div>
   )
 
   const parties = (
@@ -809,7 +851,7 @@ function TrialFormalExport({ quote, companyProfile = null }) {
                 const right = previewColAlignRight(col, columns)
                 const desc = isDescriptionColumn(col)
                 return (
-                  <td key={col.id} className={`${right ? 'is-right' : ''}${desc ? ' description-cell' : ''}`}>
+                  <td key={col.id} className={`${right ? 'is-right qg-cell-compact' : ''}${desc ? ' description-cell' : ''}`}>
                     {isImageColumn(col) || isAttachmentColumn(col)
                       ? ''
                       : formatPreviewCell(item, col, columns)}
@@ -823,13 +865,25 @@ function TrialFormalExport({ quote, companyProfile = null }) {
     </table>
   )
 
+  const notes = (Array.isArray(quote?.notes) ? quote.notes : []).map((n) => String(n || '').trim()).filter(Boolean)
+  const clarifications = (Array.isArray(quote?.clarifications) ? quote.clarifications : []).map((n) => String(n || '').trim()).filter(Boolean)
+  const commercial = ['validity', 'delivery', 'payment', 'taxes', 'freight']
+    .map((key) => ({ key, val: String(quote?.terms?.[key] || '').trim() }))
+    .filter((row) => row.val)
+  const bankRows = [
+    ['Bank Name', profile?.bankName],
+    ['Account Name', profile?.bankAccountName || companyName],
+    ['Account No', profile?.bankAccountNo],
+    ['IFSC / SWIFT', profile?.bankIfsc]
+  ].filter(([, value]) => String(value || '').trim())
+
   const totalsBlock = (
     <div className="qg-totals-card" data-qg-block="totals" style={{ marginLeft: 'auto', marginTop: 16, maxWidth: 240 }}>
       <div className="flex justify-between text-sm" style={{ color: theme.muted }}>
         <span>Subtotal</span>
         <span>{money(totals.subtotal ?? totals.grandTotal)}</span>
       </div>
-      <div className="flex justify-between text-sm">
+      <div className="qg-totals-grand flex justify-between text-sm" style={{ borderColor: theme.accent }}>
         <span>Total</span>
         <span>{money(totals.grandTotal)}</span>
       </div>
@@ -838,31 +892,90 @@ function TrialFormalExport({ quote, companyProfile = null }) {
 
   const closing = (
     <div data-qg-block="closing">
-      <section className="qg-closing-optional" style={{ marginTop: 18 }}>
-        <p className="qg-section-heading qg-rich-heading" style={{ color: 'var(--qg-accent)' }}>Standard terms</p>
-        <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--qg-muted)' }}>
-          {terms || 'Standard terms for this quotation'}
-        </p>
-      </section>
-      <footer className="mt-8 qg-signatory-block">
-        <hr className="qg-section-rule" />
-        <div className="flex justify-end pb-1">
-          <div className="w-52 text-center">
-            <div className="h-14" />
-            <div className="pt-2" style={{ borderTop: '1.5px solid var(--qg-muted, #5c6879)' }}>
-              <p className="text-xs font-semibold" style={{ color: 'var(--qg-text)' }}>Authorized Signatory</p>
-              <p className="mt-0.5 text-[11px]" style={{ color: 'var(--qg-muted)' }}>For {companyName}</p>
+      <div className="qg-paper-body">
+        <div className={`qg-closing-stack${notes.length ? ' qg-closing-stack--side' : ''}`}>
+          <section className="qg-closing-optional">
+            <p className="qg-section-heading qg-rich-heading" style={{ color: 'var(--qg-accent)' }}>Standard terms</p>
+            <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--qg-muted)', whiteSpace: 'pre-line' }}>
+              {terms || '—'}
+            </p>
+          </section>
+          {notes.length ? (
+            <section className="qg-closing-optional qg-closing-notes">
+              <p className="qg-section-heading qg-rich-heading" style={{ color: 'var(--qg-accent)' }}>Notes</p>
+              <div className="mt-1 text-sm leading-6" style={{ color: 'var(--qg-text)' }}>
+                {notes.map((line, i) => <p key={i}>{line}</p>)}
+              </div>
+            </section>
+          ) : null}
+        </div>
+        {clarifications.length ? (
+          <section className="qg-closing-optional" style={{ marginTop: 14 }}>
+            <p className="qg-section-heading qg-rich-heading" style={{ color: 'var(--qg-accent)' }}>Clarifications</p>
+            <div className="mt-1 text-sm leading-6" style={{ color: 'var(--qg-muted)' }}>
+              {clarifications.map((line, i) => <p key={i}>{line}</p>)}
+            </div>
+          </section>
+        ) : null}
+        {commercial.length ? (
+          <section style={{ marginTop: 16 }}>
+            <p className="qg-section-heading qg-rich-heading" style={{ color: 'var(--qg-accent)' }}>Commercial terms</p>
+            <div className="grid grid-cols-1 gap-x-8 sm:grid-cols-2">
+              {commercial.map((row) => (
+                <div key={row.key} className="flex gap-2 border-b border-dashed py-2 text-sm" style={{ borderColor: 'var(--qg-table-border)' }}>
+                  <span className="w-28 shrink-0 capitalize" style={{ color: 'var(--qg-muted)' }}>{row.key}</span>
+                  <span>{row.val}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        <footer className="mt-8 qg-signatory-block">
+          {bankRows.length || profile?.bankQrUrl ? (
+            <>
+              <hr className="qg-section-rule" />
+              <section className="mb-8">
+                <h3 className="qg-section-heading mb-2 border-b pb-1.5 text-[11px]" style={{ borderColor: 'var(--qg-table-border, #e8edf3)' }}>Bank details</h3>
+                <div className={`qg-bank-block${profile?.bankQrUrl ? ' qg-bank-block--with-qr' : ''}`}>
+                  {profile?.bankQrUrl ? (
+                    <div className="qg-bank-qr-col">
+                      <img src={profile.bankQrUrl} alt="Payment QR" className="qg-bank-qr" />
+                    </div>
+                  ) : null}
+                  <div className="text-sm leading-7 text-slate-700">
+                    {bankRows.map(([label, value]) => (
+                      <p key={label}><span className="text-slate-600">{label}:</span> {value}</p>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            </>
+          ) : null}
+          <hr className="qg-section-rule" />
+          <div className="flex justify-end pb-1">
+            <div className="w-52 text-center">
+              <div className="h-14" />
+              <div className="pt-2" style={{ borderTop: '1.5px solid var(--qg-muted, #5c6879)' }}>
+                <p className="text-xs font-semibold" style={{ color: 'var(--qg-text)' }}>Authorized Signatory</p>
+                <p className="mt-0.5 text-[11px]" style={{ color: 'var(--qg-muted)' }}>For {companyName}</p>
+              </div>
             </div>
           </div>
-        </div>
-      </footer>
+        </footer>
+      </div>
     </div>
   )
 
+  const pagesToPaint = pages
+
   return (
-    <div ref={rootRef} data-qg-trial-ready="1">
+    <div
+      ref={rootRef}
+      data-qg-theme={resolvedId}
+      {...(captureReady ? { 'data-qg-trial-ready': '1' } : { 'data-qg-preview': '1' })}
+    >
       <QuoteStudioCanvas
-        themeId="formal"
+        themeId={resolvedId}
         tableAccent={theme.accent}
         fontSizePx={14}
         lockA4
@@ -877,7 +990,7 @@ function TrialFormalExport({ quote, companyProfile = null }) {
           right: quote?.number ? `Quotation ${quote.number}` : 'Quotation'
         }}
       >
-        {pages.map((page, pageIndex) => (
+        {pagesToPaint.map((page, pageIndex) => (
           <section key={pageIndex} className="qg-page-section">
             {page.showHeader ? letterhead : null}
             {page.showMeta ? parties : null}
@@ -894,6 +1007,229 @@ function TrialFormalExport({ quote, companyProfile = null }) {
     </div>
   )
 }
+
+function ScaledQuotePaper({ children }) {
+  const outerRef = useRef(null)
+  const innerRef = useRef(null)
+  const [scale, setScale] = useState(0.42)
+  const [naturalH, setNaturalH] = useState(1123)
+
+  useLayoutEffect(() => {
+    const outer = outerRef.current
+    const inner = innerRef.current
+    if (!outer || !inner || typeof ResizeObserver === 'undefined') return undefined
+    const apply = () => {
+      const w = outer.clientWidth
+      if (w > 40) setScale(Math.min(1, w / 794))
+      const h = inner.scrollHeight || inner.offsetHeight || 0
+      if (h > 80) setNaturalH(h)
+    }
+    apply()
+    const ro = new ResizeObserver(apply)
+    ro.observe(outer)
+    ro.observe(inner)
+    const later = window.setTimeout(apply, 120)
+    return () => {
+      ro.disconnect()
+      window.clearTimeout(later)
+    }
+  }, [])
+
+  return (
+    <div ref={outerRef} className="meta-guide-scaled" style={{ height: naturalH * scale, '--qg-preview-scale': scale }}>
+      <div
+        ref={innerRef}
+        className="meta-guide-scaled-inner"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: '50%',
+          width: 794,
+          marginLeft: -397,
+          transform: `scale(${scale})`,
+          transformOrigin: 'top center'
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function TrialFormatCarousel({ quote, companyProfile, themeId, onThemeChange, ready, onAddLogo, logoBusy, onReadingChange, onLogoSizeChange }) {
+  const scrollerRef = useRef(null)
+  const hintingRef = useRef(false)
+  const [hinting, setHinting] = useState(false)
+  const active = DEMO_PAPER_IDS.includes(themeId) ? themeId : 'formal'
+  const activeIndex = Math.max(0, DEMO_PAPER_IDS.indexOf(active))
+  const theme = PAPER_THEMES[active] || PAPER_THEMES.formal
+  const lastIndex = DEMO_PAPER_IDS.length - 1
+
+  const goTo = (index, behavior = 'smooth') => {
+    const el = scrollerRef.current
+    if (!el) return
+    const clamped = Math.max(0, Math.min(lastIndex, index))
+    const left = centerScrollLeft(el, clamped)
+    if (behavior === 'instant') el.scrollLeft = left
+    else el.scrollTo({ left, behavior: 'smooth' })
+    const id = DEMO_PAPER_IDS[clamped]
+    if (id && id !== themeId) onThemeChange(id)
+    onReadingChange?.(false)
+  }
+
+  const syncFromScroll = () => {
+    if (hintingRef.current) return
+    const el = scrollerRef.current
+    if (!el) return
+    const mid = el.scrollLeft + el.clientWidth / 2
+    let best = 0
+    let bestDist = Infinity
+    Array.from(el.children).forEach((slide, i) => {
+      const center = slide.offsetLeft + slide.offsetWidth / 2
+      const dist = Math.abs(center - mid)
+      if (dist < bestDist) {
+        bestDist = dist
+        best = i
+      }
+    })
+    const id = DEMO_PAPER_IDS[best]
+    if (id && id !== themeId) onThemeChange(id)
+  }
+
+  useEffect(() => {
+    const el = scrollerRef.current
+    if (!el || !ready) return undefined
+    let cancelled = false
+    const run = async () => {
+      goTo(Math.max(0, DEMO_PAPER_IDS.indexOf(themeId)), 'instant')
+      let played = false
+      try { played = sessionStorage.getItem(FORMAT_HINT_KEY) === '1' } catch { /* ignore */ }
+      if (played || DEMO_PAPER_IDS.length < 2) return
+      hintingRef.current = true
+      setHinting(true)
+      await sleep(480)
+      if (cancelled) return
+      await animateScrollLeft(el, centerScrollLeft(el, 1), 560)
+      await sleep(380)
+      if (cancelled) return
+      await animateScrollLeft(el, centerScrollLeft(el, 0), 600)
+      try { sessionStorage.setItem(FORMAT_HINT_KEY, '1') } catch { /* ignore */ }
+      hintingRef.current = false
+      setHinting(false)
+      onThemeChange('formal')
+    }
+    run()
+    return () => {
+      cancelled = true
+      hintingRef.current = false
+      setHinting(false)
+    }
+  }, [ready])
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (hintingRef.current) return
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        goTo(activeIndex + 1)
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        goTo(activeIndex - 1)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [activeIndex, themeId])
+
+  return (
+    <div className="meta-guide-format">
+      <div className="meta-guide-format-stage">
+        <button
+          type="button"
+          className="meta-guide-format-arrow is-prev"
+          aria-label="Previous quotation format"
+          disabled={hinting || activeIndex <= 0}
+          onClick={() => goTo(activeIndex - 1)}
+        >
+          <IconChevron dir="left" />
+        </button>
+        <div
+          ref={scrollerRef}
+          className="meta-guide-format-track"
+          onScroll={syncFromScroll}
+        >
+          {DEMO_PAPER_IDS.map((id, index) => {
+            const live = hinting
+              ? index <= 1
+              : Math.abs(index - activeIndex) <= 1
+            return (
+              <div
+                key={id}
+                className={`meta-guide-format-slide${id === active ? ' is-active' : ''}`}
+                aria-hidden={id !== active}
+                aria-label={PAPER_THEMES[id]?.label || id}
+                onScroll={(e) => {
+                  if (id !== active) return
+                  onReadingChange?.((e.currentTarget.scrollTop || 0) > 18)
+                }}
+              >
+                {live ? (
+                  <ScaledQuotePaper>
+                    <TrialThemedExport
+                      quote={quote}
+                      companyProfile={companyProfile}
+                      themeId={id}
+                      onUploadLogo={onAddLogo}
+                      logoBusy={logoBusy}
+                      onLogoSizeChange={onLogoSizeChange}
+                    />
+                  </ScaledQuotePaper>
+                ) : (
+                  <div className="meta-guide-format-ph" style={{ background: PAPER_THEMES[id]?.pageBg || '#eef0f5' }}>
+                    <span>{PAPER_THEMES[id]?.label}</span>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+        <button
+          type="button"
+          className="meta-guide-format-arrow is-next"
+          aria-label="Next quotation format"
+          disabled={hinting || activeIndex >= lastIndex}
+          onClick={() => goTo(activeIndex + 1)}
+        >
+          <IconChevron dir="right" />
+        </button>
+        {hinting ? (
+          <div className="meta-guide-format-hint" aria-hidden="true">
+            <span className="meta-guide-format-hint-arrow is-left"><IconChevron dir="left" /></span>
+            <span className="meta-guide-format-hint-copy">Swipe</span>
+            <span className="meta-guide-format-hint-arrow is-right"><IconChevron dir="right" /></span>
+          </div>
+        ) : null}
+      </div>
+      <p className="meta-guide-format-name">{theme.label}</p>
+      <p className="meta-guide-format-kicker">Scroll to read every page — arrows or swipe for another design</p>
+      <div className="meta-guide-format-dots" role="tablist" aria-label="Quotation formats">
+        {DEMO_PAPER_IDS.map((id, index) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            className={id === active ? 'is-on' : ''}
+            aria-label={PAPER_THEMES[id]?.label || id}
+            aria-selected={id === active}
+            disabled={hinting}
+            onClick={() => goTo(index)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /**
  * Meta ads guided first quote — OTP-style full screen (no dashboard chrome).
  * Step 1: paste / upload enquiry. Step 2: prefer columns. Then ceremony → reveal.
@@ -916,9 +1252,10 @@ export default function MetaTrialGuide({
   const initialSeed = companySeedFromLead(usefulLead(trialLead) || readMetaAdsLead(), companyProfile)
   const [step, setStep] = useState(1)
   const [phase, setPhase] = useState('flow') // flow | ceremony | reveal | client | company | final
-  const [ceremonyBeat, setCeremonyBeat] = useState(0)
   const [revealQuote, setRevealQuote] = useState(null)
   const [revealReady, setRevealReady] = useState(false)
+  const [previewReading, setPreviewReading] = useState(false)
+  const [paperStyle, setPaperStyle] = useState(() => readPreferredPaperStyle())
   const [guideProfile, setGuideProfile] = useState(() => initialSeed.profile)
   const [clientDone, setClientDone] = useState(false)
   const [companyDone, setCompanyDone] = useState(() => Boolean(String(initialSeed.draft.companyName || '').trim()))
@@ -936,6 +1273,7 @@ export default function MetaTrialGuide({
   const [qrFailed, setQrFailed] = useState(false)
   const [offerStartedAt, setOfferStartedAt] = useState(readOfferStart)
   const [offerNow, setOfferNow] = useState(() => Date.now())
+  const [seatsLeft, setSeatsLeft] = useState(readSeatsLeft)
   const offerLeftMs = offerStartedAt ? offerStartedAt + OFFER_MS - offerNow : OFFER_MS
   const offerLive = offerLeftMs > 0
   const payPrice = offerLive ? JOIN_PRICE : REGULAR_PRICE
@@ -953,6 +1291,53 @@ export default function MetaTrialGuide({
     const t = setInterval(() => setOfferNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [offerStartedAt, offerLive])
+
+  useEffect(() => {
+    if (phase !== 'convert' || !offerLive) return undefined
+    let cancelled = false
+    let timer = 0
+    const wait = (ms) => new Promise((resolve) => {
+      timer = window.setTimeout(resolve, ms)
+    })
+    const dropTo = (n) => {
+      const next = Math.max(SEAT_FLOOR, n)
+      writeSeatsLeft(next)
+      setSeatsLeft(next)
+    }
+    const scheduleTick = () => {
+      timer = window.setTimeout(() => {
+        if (cancelled) return
+        setSeatsLeft((cur) => {
+          const next = Math.max(SEAT_FLOOR, cur - 1)
+          writeSeatsLeft(next)
+          return next
+        })
+        scheduleTick()
+      }, randomSeatWaitMs())
+    }
+    const run = async () => {
+      const start = readSeatsLeft()
+      const reduceMotion = typeof window !== 'undefined'
+        && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+      if (!reduceMotion && start >= SEAT_START) {
+        await wait(900)
+        if (cancelled) return
+        dropTo(46)
+        await wait(700)
+        if (cancelled) return
+        dropTo(45)
+        await wait(2600)
+        if (cancelled) return
+      }
+      if (cancelled) return
+      scheduleTick()
+    }
+    run()
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [phase, offerLive])
 
   const [payBusy, setPayBusy] = useState(false)
   const [payError, setPayError] = useState('')
@@ -996,14 +1381,22 @@ export default function MetaTrialGuide({
   const [ingestNote, setIngestNote] = useState('')
   const [attached, setAttached] = useState([])
   const [dragOver, setDragOver] = useState(false)
-  const [draftColumns, setDraftColumns] = useState(() => (
-    Array.isArray(columns) && columns.length ? columns : CORE_COLUMNS.map(({ locked, ...c }) => c)
-  ))
+  const [draftColumns, setDraftColumns] = useState(() => {
+    const stored = peekPreferredColumns()
+    if (stored?.length) return stored
+    return Array.isArray(columns) && columns.length ? columns : CORE_COLUMNS.map(({ locked, ...c }) => c)
+  })
   const [customLabel, setCustomLabel] = useState('')
   const [showAddMore, setShowAddMore] = useState(false)
+  useEffect(() => {
+    if (Array.isArray(draftColumns) && draftColumns.length) writePreferredColumns(draftColumns)
+  }, [draftColumns])
   const fileRef = useRef(null)
   const logoFileRef = useRef(null)
-  const enquiryScrollRef = useRef(null)
+  const generateGenRef = useRef(0)
+  const logoSizeTimerRef = useRef(0)
+  const guideProfileRef = useRef(guideProfile)
+  guideProfileRef.current = guideProfile
 
   const canNext = String(enquiry || '').trim().length > 0 || attached.length > 0
   const showError = localError || error
@@ -1036,6 +1429,44 @@ export default function MetaTrialGuide({
     if (nextProfile.logoUrl) setLogoPreviewUrl(nextProfile.logoUrl)
   }
 
+  const applyLogoSize = ({ logoWidth, logoHeight }) => {
+    const next = { ...(guideProfileRef.current || {}), logoWidth, logoHeight }
+    applyGuideProfile(next)
+    window.clearTimeout(logoSizeTimerRef.current)
+    logoSizeTimerRef.current = window.setTimeout(() => {
+      onSaveCompany?.({ logoWidth, logoHeight })
+    }, 400)
+  }
+
+  const applyTableColor = (id) => {
+    const palette = revealQuote?.logoPalette || null
+    const tableColorId = id || 'blue'
+    const tableAccent = accentForTableColor(tableColorId, palette)
+    setRevealQuote((q) => (q ? { ...q, tableColorId, tableAccent, logoPalette: palette } : q))
+    onPatchQuote?.({ tableColorId, tableAccent, logoPalette: palette })
+  }
+
+  const matchColoursFromLogo = async (url) => {
+    if (!url) return
+    try {
+      const palette = await extractImagePalette(url)
+      if (!palette?.primary) return
+      const tableColorId = 'logo-primary'
+      const tableAccent = palette.primary
+      setRevealQuote((q) => (q ? { ...q, logoPalette: palette, tableColorId, tableAccent } : q))
+      onPatchQuote?.({ logoPalette: palette, tableColorId, tableAccent })
+    } catch {
+      /* keep default accent */
+    }
+  }
+
+  useEffect(() => {
+    const url = String(guideProfile?.logoUrl || '').trim()
+    if (phase !== 'reveal' || !url || revealQuote?.logoPalette?.primary) return undefined
+    void matchColoursFromLogo(url)
+    return undefined
+  }, [phase, guideProfile?.logoUrl, revealQuote?.logoPalette?.primary])
+
   const patchRevealCustomer = (customer) => {
     setRevealQuote((q) => (q ? { ...q, customer: { ...(q.customer || {}), ...customer } } : q))
     onPatchQuote?.({ customer })
@@ -1064,18 +1495,44 @@ export default function MetaTrialGuide({
     if (nextItems) onPatchQuote?.({ items: nextItems })
   }
 
+  const applyPaperStyle = (id) => {
+    const next = normalizePaperStyle(id)
+    setPaperStyle(next)
+    writePreferredPaperStyle(next)
+    onPatchQuote?.({ paperStyle: next })
+    setRevealQuote((q) => (q ? { ...q, paperStyle: next } : q))
+  }
+
+  const commitPreferredPaperStyle = (id) => {
+    const next = normalizePaperStyle(id)
+    applyPaperStyle(next)
+    onSaveCompany?.({ paperStyle: next })
+    return next
+  }
+
+  const enterEditorWithPreferredFormat = () => {
+    const visibleId = normalizePaperStyle(visibleCarouselThemeId(paperStyle))
+    commitPreferredPaperStyle(visibleId)
+    onEnterEditor?.()
+  }
+
   const downloadFormalPdf = async () => {
     if (!revealQuote || pdfBusy) return
     setLocalError('')
     setPdfBusy(true)
-    onPatchQuote?.({ paperStyle: 'formal' })
+    const visibleId = normalizePaperStyle(visibleCarouselThemeId(paperStyle))
+    commitPreferredPaperStyle(visibleId)
     try {
-      for (let i = 0; i < 36; i += 1) {
-        const papers = document.querySelectorAll('[data-qg-trial-ready="1"] .qg-studio-paper')
-        if (papers.length >= 1) break
+      const need = (Array.isArray(revealQuote?.items) && revealQuote.items.length > 10) ? 2 : 1
+      for (let i = 0; i < 60; i += 1) {
+        const root = document.querySelector('.meta-guide-format-slide.is-active [data-qg-preview="1"]')
+          || document.querySelector('[data-qg-trial-ready="1"]')
+        const themeOk = root?.getAttribute('data-qg-theme') === visibleId
+        const papers = root?.querySelectorAll('.qg-studio-paper') || []
+        if (themeOk && papers.length >= need) break
         await new Promise((resolve) => requestAnimationFrame(resolve))
       }
-      await new Promise((resolve) => requestAnimationFrame(resolve))
+      await sleep(80)
       await downloadQuotationPdf(quotationFileName(revealQuote, 'pdf'))
       setPhase('convert')
     } catch (err) {
@@ -1095,17 +1552,19 @@ export default function MetaTrialGuide({
     const localUrl = URL.createObjectURL(file)
     setLogoPreviewUrl(localUrl)
     try {
-      const result = await uploadCompanyLogo(file)
+      const result = await uploadCompanyLogo(file, { logoWidth: 72 })
       if (result?.unavailable) {
-        // Keep local preview for this session; persistence can catch up later.
         applyGuideProfile({ ...(guideProfile || {}), logoUrl: localUrl })
+        await matchColoursFromLogo(localUrl)
         return
       }
       if (result?.profile) {
         applyGuideProfile(result.profile)
+        await matchColoursFromLogo(result.profile.logoUrl || localUrl)
         return
       }
       applyGuideProfile({ ...(guideProfile || {}), logoUrl: localUrl })
+      await matchColoursFromLogo(localUrl)
     } catch (err) {
       setLocalError(err?.message || 'Could not upload logo.')
       setLogoPreviewUrl(guideProfile?.logoUrl || null)
@@ -1153,7 +1612,8 @@ export default function MetaTrialGuide({
       const payload = {
         companyName,
         headerText: headerLines.join('\n'),
-        standardTerms: companyDraft.standardTerms.trim()
+        standardTerms: companyDraft.standardTerms.trim(),
+        paperStyle: normalizePaperStyle(paperStyle)
       }
       let saved = null
       if (onSaveCompany) {
@@ -1195,49 +1655,6 @@ export default function MetaTrialGuide({
     if (!companySavedThisSession || unlockFromFinalBack) return
     if (phase === 'reveal') setPhase('final')
   }, [companySavedThisSession, unlockFromFinalBack, phase])
-
-  useEffect(() => {
-    if (phase !== 'ceremony') return undefined
-    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
-      return undefined
-    }
-    let raf = 0
-    let cancelled = false
-    let direction = 1
-    let last = 0
-    const speed = 32 // px / sec — slow scan through the enquiry
-
-    const tick = (now) => {
-      if (cancelled) return
-      const el = enquiryScrollRef.current
-      if (!el) {
-        raf = requestAnimationFrame(tick)
-        return
-      }
-      if (!last) last = now
-      const max = Math.max(0, el.scrollHeight - el.clientHeight)
-      if (max > 0) {
-        const dt = Math.min(50, now - last) / 1000
-        last = now
-        let next = el.scrollTop + direction * speed * dt
-        if (next >= max - 0.5) {
-          next = max
-          direction = -1
-        } else if (next <= 0.5) {
-          next = 0
-          direction = 1
-        }
-        el.scrollTop = next
-      }
-      raf = requestAnimationFrame(tick)
-    }
-
-    raf = requestAnimationFrame(tick)
-    return () => {
-      cancelled = true
-      cancelAnimationFrame(raf)
-    }
-  }, [phase, enquiryPreview])
 
   const ingestFiles = async (fileList) => {
     const files = Array.from(fileList || []).filter((f) => f?.size > 0)
@@ -1317,26 +1734,6 @@ export default function MetaTrialGuide({
     setCustomLabel('')
   }
 
-  useEffect(() => {
-    if (phase !== 'ceremony') return undefined
-    let cancelled = false
-    let beat = 0
-    setCeremonyBeat(0)
-    const timer = setInterval(() => {
-      if (cancelled) return
-      beat += 1
-      if (beat >= CEREMONY_BEATS.length) {
-        clearInterval(timer)
-        return
-      }
-      setCeremonyBeat(beat)
-    }, 1050)
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
-  }, [phase])
-
   const goGenerate = async () => {
     setLocalError('')
     if (!draftColumns.length) {
@@ -1345,17 +1742,23 @@ export default function MetaTrialGuide({
     }
     setPhase('ceremony')
     setRevealReady(false)
+    setPreviewReading(false)
     setRevealQuote(null)
+    const gen = ++generateGenRef.current
     const started = Date.now()
     try {
       const built = await onGenerate?.(draftColumns)
+      if (gen !== generateGenRef.current) return
       const elapsed = Date.now() - started
-      const minShow = 4400
-      if (elapsed < minShow) await sleep(minShow - elapsed)
+      if (elapsed < CEREMONY_MIN_MS) await sleep(CEREMONY_MIN_MS - elapsed)
+      if (gen !== generateGenRef.current) return
       if (!built) {
         setPhase('flow')
         setStep(2)
-        setLocalError(error || 'Could not create the quotation. Please try again.')
+        const raw = error || 'Could not create the quotation. Please try again.'
+        setLocalError(/429|credits|Retry shortly|timed out|TimeoutError/i.test(String(raw))
+          ? 'The generator is busy. Tap Create quotation again — your enquiry is still here.'
+          : raw)
         return
       }
       const lead = usefulLead(trialLead) || readMetaAdsLead()
@@ -1382,124 +1785,72 @@ export default function MetaTrialGuide({
         email: prev.email || seeded.draft.email,
         standardTerms: prev.standardTerms || seeded.draft.standardTerms
       }))
+      if (gen !== generateGenRef.current) return
       setPhase('reveal')
       requestAnimationFrame(() => {
         requestAnimationFrame(() => setRevealReady(true))
       })
     } catch (err) {
+      if (gen !== generateGenRef.current) return
       setPhase('flow')
       setStep(2)
       setLocalError(err?.message || 'Could not create the quotation. Please try again.')
     }
   }
 
+  const backFromReveal = () => {
+    setPreviewReading(false)
+    setLocalError('')
+    setPhase('flow')
+    setStep(2)
+  }
+
   if (phase === 'ceremony') {
-    const beat = CEREMONY_BEATS[Math.min(ceremonyBeat, CEREMONY_BEATS.length - 1)]
-    const stage = beat.stage
-    const shards = ceremonyShards(enquiryPreview, draftColumns)
-    const previewLines = (enquiryPreview || 'Your enquiry').split(/\n/)
-    return (
-      <main className={`meta-guide meta-guide-ceremony is-${stage}`}>
-        <div className="meta-guide-ceremony-aura" aria-hidden="true">
-          <span className="meta-guide-ceremony-orb meta-guide-ceremony-orb-a" />
-          <span className="meta-guide-ceremony-orb meta-guide-ceremony-orb-b" />
-          <span className="meta-guide-ceremony-orb meta-guide-ceremony-orb-c" />
-          <div className="meta-guide-ceremony-stars">
-            {Array.from({ length: 18 }, (_, i) => (
-              <span key={i} className={`meta-guide-ceremony-star s${i + 1}`} />
-            ))}
-          </div>
-        </div>
-
-        <div className="meta-guide-ceremony-shell">
-          <p className="meta-guide-step">QuoteGen at work</p>
-          <h1 className="meta-guide-title meta-guide-ceremony-title" key={beat.id}>
-            {beat.title}
-          </h1>
-          <p className="meta-guide-lead meta-guide-ceremony-detail" key={`d-${beat.id}`}>
-            {beat.detail}
-          </p>
-
-          <div className="meta-guide-alchemy" aria-hidden="true">
-            <div className="meta-guide-alchemy-enquiry">
-              <div className="meta-guide-alchemy-enquiry-label"><IconMail /> Enquiry</div>
-              <div className="meta-guide-alchemy-enquiry-body" ref={enquiryScrollRef}>
-                {previewLines.length ? previewLines.map((line, i) => (
-                  <p key={i}>{line || '\u00a0'}</p>
-                )) : <p>—</p>}
-              </div>
-              <span className="meta-guide-alchemy-scan" />
-              <span className="meta-guide-alchemy-glow" />
-            </div>
-
-            <div className="meta-guide-alchemy-stream">
-              {shards.map((label, i) => (
-                <span
-                  key={`${label}-${i}`}
-                  className={`meta-guide-alchemy-shard shard-${i}${ceremonyBeat >= 1 ? ' is-lift' : ''}${ceremonyBeat >= 2 ? ' is-fly' : ''}`}
-                  style={{ '--i': i }}
-                >
-                  {label}
-                </span>
-              ))}
-              <span className="meta-guide-alchemy-beam" />
-            </div>
-
-            <div className="meta-guide-alchemy-layout">
-              <div className="meta-guide-alchemy-cols">
-                {draftColumns.map((c, i) => (
-                  <span
-                    key={c.id}
-                    className={`meta-guide-alchemy-col${ceremonyBeat >= 2 ? ' is-catch' : ''}${ceremonyBeat >= 3 ? ' is-fuse' : ''}`}
-                    style={{ '--i': i }}
-                  >
-                    {c.label}
-                  </span>
-                ))}
-              </div>
-              <div className={`meta-guide-alchemy-sheet${ceremonyBeat >= 3 ? ' is-forge' : ''}`}>
-                <span className="meta-guide-alchemy-sheet-bar" />
-                <span className="meta-guide-alchemy-sheet-bar" />
-                <span className="meta-guide-alchemy-sheet-bar" />
-                <span className="meta-guide-alchemy-burst" />
-              </div>
-            </div>
-          </div>
-
-          <div className="meta-guide-ceremony-progress" aria-hidden="true">
-            {CEREMONY_BEATS.map((b, i) => (
-              <span key={b.id} className={`meta-guide-ceremony-dot${i <= ceremonyBeat ? ' is-on' : ''}${i === ceremonyBeat ? ' is-active' : ''}`} />
-            ))}
-          </div>
-        </div>
-      </main>
-    )
+    return <QuoteGenerateCeremony enquiry={enquiryPreview} columns={draftColumns} />
   }
 
   if (phase === 'reveal' && revealQuote) {
     return (
-      <main className={`meta-guide meta-guide-reveal-page${revealReady ? ' is-ready' : ''}`}>
+      <main className={`meta-guide meta-guide-reveal-page${revealReady ? ' is-ready' : ''}${previewReading ? ' is-reading' : ''}`}>
         <div className="meta-guide-reveal-shell">
           <p className="meta-guide-step">Ta-da</p>
           <h1 className="meta-guide-title">
             Quotation <span>unlocked</span>
           </h1>
 
-          <div className={`meta-guide-reveal-frame${revealReady ? ' is-expand' : ''}`}>
-            <div className="meta-guide-reveal-sheet is-scrollable">
-              <div className="meta-guide-reveal-sheet-scroll">
-                <RealQuotePreviewTable
-                  quote={revealQuote}
-                  companyProfile={guideProfile}
-                  editableRates
-                  onRateChange={patchRevealRate}
-                  logoBusy={logoBusy}
-                  hasAddress={Boolean(companyDraft.headerText.trim())}
-                  onUploadLogo={() => { if (!logoBusy) logoFileRef.current?.click() }}
-                  onAddAddress={() => { setLocalError(''); setAddressOpen(true) }}
-                />
+          {String(guideProfile?.logoUrl || '').trim() ? (
+            <div className="meta-guide-color-row">
+              <span>Colour</span>
+              <div className="meta-guide-color-swatches">
+                {tableColorSwatches(revealQuote?.logoPalette).map((swatch) => (
+                  <button
+                    key={swatch.id}
+                    type="button"
+                    title={swatch.caption || swatch.label}
+                    aria-label={swatch.label}
+                    aria-pressed={(revealQuote?.tableColorId || 'blue') === swatch.id}
+                    className={`meta-guide-color-swatch${(revealQuote?.tableColorId || 'blue') === swatch.id ? ' is-on' : ''}`}
+                    style={{ background: swatch.hex }}
+                    onClick={() => applyTableColor(swatch.id)}
+                  />
+                ))}
               </div>
+              <em>Matched from your logo — tap to change</em>
             </div>
+          ) : null}
+
+          <div className={`meta-guide-reveal-frame${revealReady ? ' is-expand' : ''}`}>
+            <TrialFormatCarousel
+              quote={revealQuote}
+              companyProfile={guideProfile}
+              themeId={paperStyle}
+              onThemeChange={applyPaperStyle}
+              ready={revealReady}
+              onAddLogo={() => { if (!logoBusy) logoFileRef.current?.click() }}
+              logoBusy={logoBusy}
+              onReadingChange={setPreviewReading}
+              onLogoSizeChange={applyLogoSize}
+            />
           </div>
           <input
             ref={logoFileRef}
@@ -1515,7 +1866,10 @@ export default function MetaTrialGuide({
 
           {showError ? <p className="meta-guide-error">{showError}</p> : null}
 
-          <div className="meta-guide-unlock">
+          <div className="meta-guide-unlock meta-guide-actions">
+            <button type="button" className="meta-guide-ghost" onClick={backFromReveal}>
+              ← Back
+            </button>
             <button
               type="button"
               className="meta-guide-primary"
@@ -1529,7 +1883,7 @@ export default function MetaTrialGuide({
 
         {revealQuote ? (
           <div className="meta-guide-pdf-offscreen" aria-hidden="true">
-            <TrialFormalExport quote={revealQuote} companyProfile={guideProfile} />
+            <TrialThemedExport key={paperStyle} quote={revealQuote} companyProfile={guideProfile} themeId={paperStyle} captureReady />
           </div>
         ) : null}
 
@@ -1626,12 +1980,19 @@ export default function MetaTrialGuide({
             </p>
             <p className="meta-guide-convert-meta">No more manual work — just paste, verify and send.</p>
             {offerLive ? (
-              <div className="meta-guide-offer is-live" role="timer" aria-live="off">
-                <span className="meta-guide-offer-label">
-                  Special price <s>₹{REGULAR_PRICE}</s> ₹{JOIN_PRICE}/month — ends in
-                </span>
-                <span className="meta-guide-offer-clock">{formatCountdown(offerLeftMs)}</span>
-              </div>
+              <>
+                <div className="meta-guide-offer is-live" role="timer" aria-live="off">
+                  <span className="meta-guide-offer-label">
+                    Special price <s>₹{REGULAR_PRICE}</s> ₹{JOIN_PRICE}/month
+                    <em className="meta-guide-offer-save">Save ₹{JOIN_SAVE}/month</em>
+                    {' '}— ends in
+                  </span>
+                  <span className="meta-guide-offer-clock">{formatCountdown(offerLeftMs)}</span>
+                </div>
+                <p className="meta-guide-seats" aria-live="polite">
+                  Only <strong>{seatsLeft}</strong> / {SEAT_CAP} seats left at this price
+                </p>
+              </>
             ) : (
               <div className="meta-guide-offer is-ended">
                 <span className="meta-guide-offer-label">The ₹{JOIN_PRICE} offer has ended</span>
@@ -1657,7 +2018,7 @@ export default function MetaTrialGuide({
           >
             <p className="meta-guide-pay-lead">
               {offerLive
-                ? <>Join now and pay just <strong>₹{JOIN_PRICE}/month</strong>. When the timer hits zero, the price goes up to ₹{REGULAR_PRICE}/month.</>
+                ? <>Join now and pay just <strong>₹{JOIN_PRICE}/month</strong> — save <strong>₹{JOIN_SAVE}/month</strong> vs ₹{REGULAR_PRICE}. When the timer hits zero, the price goes up. Only {seatsLeft} of {SEAT_CAP} seats left.</>
                 : <>QuoteGen is ₹{REGULAR_PRICE}/month for {JOIN_QUOTES} quotations. Pay as you go for more.</>}
             </p>
             <div className="meta-guide-pay-card">
@@ -1902,10 +2263,14 @@ export default function MetaTrialGuide({
 
           <div className="meta-guide-reveal-frame is-expand meta-guide-final-frame">
             <div className="meta-guide-final-scroll">
-              <FinalQuoteDocument
-                quote={revealQuote}
-                companyProfile={guideProfile}
-              />
+              <ScaledQuotePaper>
+                <TrialThemedExport
+                  quote={revealQuote}
+                  companyProfile={guideProfile}
+                  themeId={paperStyle}
+                  onLogoSizeChange={applyLogoSize}
+                />
+              </ScaledQuotePaper>
             </div>
           </div>
 
@@ -1920,7 +2285,7 @@ export default function MetaTrialGuide({
             <button
               type="button"
               className="meta-guide-primary meta-guide-primary-inline"
-              onClick={() => onEnterEditor?.()}
+              onClick={enterEditorWithPreferredFormat}
             >
               Continue to edit &amp; export
               <span aria-hidden="true">→</span>
@@ -1932,89 +2297,184 @@ export default function MetaTrialGuide({
   }
 
   return (
-    <main className="meta-guide">
+    <main className="meta-guide meta-guide-flow">
       <div className="meta-guide-shell">
-        <p className="meta-guide-step">Step {step} of 2</p>
-        {step === 1 ? (
-          <>
-            <h1 className="meta-guide-title">
-              Paste or upload the <span>enquiry</span>
-            </h1>
-            <p className="meta-guide-lead">
-              Use a real client message — WhatsApp text, email, PDF, or a photo of the RFQ. No sample text.
-            </p>
+        <div className="meta-guide-flow-body">
+          <p className="meta-guide-step">Step {step} of 2</p>
+          {step === 1 ? (
+            <>
+              <h1 className="meta-guide-title">
+                Paste or upload the <span>enquiry</span>
+              </h1>
+              <p className="meta-guide-lead">
+                Use a real client message — WhatsApp text, email, PDF, or a photo of the RFQ. No sample text.
+              </p>
 
-            <div
-              className={`meta-guide-card${dragOver ? ' is-drag' : ''}`}
-              onDragOver={(e) => { e.preventDefault(); if (!ingestBusy) setDragOver(true) }}
-              onDragLeave={(e) => {
-                e.preventDefault()
-                if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false)
-              }}
-              onDrop={(e) => {
-                e.preventDefault()
-                setDragOver(false)
-                if (!ingestBusy && e.dataTransfer?.files?.length) ingestFiles(e.dataTransfer.files)
-              }}
-            >
-              <div className="meta-guide-card-head">
-                <span className="meta-guide-card-label"><IconMail /> Enquiry</span>
-              </div>
-              <textarea
-                className="meta-guide-textarea"
-                value={enquiry}
-                onChange={(e) => setEnquiry(e.target.value)}
-                placeholder="Copy-paste the inquiry email or WhatsApp message here…"
-                rows={10}
-              />
-
-              <div className="meta-guide-or" role="separator" aria-label="or">
-                <span>or</span>
-              </div>
-
-              <button
-                type="button"
-                className="meta-guide-upload-btn"
-                disabled={ingestBusy}
-                onClick={() => fileRef.current?.click()}
-              >
-                <IconUpload />
-                {ingestBusy ? 'Reading…' : 'Upload image or doc'}
-              </button>
-              <input
-                ref={fileRef}
-                type="file"
-                accept={ENQUIRY_FILE_ACCEPT}
-                multiple
-                hidden
-                onChange={(e) => {
-                  ingestFiles(e.target.files)
-                  e.target.value = ''
+              <div
+                className={`meta-guide-card${dragOver ? ' is-drag' : ''}`}
+                onDragOver={(e) => { e.preventDefault(); if (!ingestBusy) setDragOver(true) }}
+                onDragLeave={(e) => {
+                  e.preventDefault()
+                  if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false)
                 }}
-              />
+                onDrop={(e) => {
+                  e.preventDefault()
+                  setDragOver(false)
+                  if (!ingestBusy && e.dataTransfer?.files?.length) ingestFiles(e.dataTransfer.files)
+                }}
+              >
+                <div className="meta-guide-card-head">
+                  <span className="meta-guide-card-label"><IconMail /> Enquiry</span>
+                </div>
+                <textarea
+                  className="meta-guide-textarea"
+                  value={enquiry}
+                  onChange={(e) => setEnquiry(e.target.value)}
+                  placeholder="Copy-paste the inquiry email or WhatsApp message here…"
+                  rows={10}
+                />
 
-              {(ingestNote || attached.length > 0) && (
-                <div className="meta-guide-attach-meta">
-                  {ingestNote && <p>{ingestNote}</p>}
-                  {attached.length > 0 && (
-                    <ul>
-                      {attached.map((f) => (
-                        <li key={`${f.name}-${f.chars}`}>{f.name}</li>
-                      ))}
-                    </ul>
-                  )}
+                <div className="meta-guide-or" role="separator" aria-label="or">
+                  <span>or</span>
+                </div>
+
+                <button
+                  type="button"
+                  className="meta-guide-upload-btn"
+                  disabled={ingestBusy}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <IconUpload />
+                  {ingestBusy ? 'Reading…' : 'Upload image or doc'}
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept={ENQUIRY_FILE_ACCEPT}
+                  multiple
+                  hidden
+                  onChange={(e) => {
+                    ingestFiles(e.target.files)
+                    e.target.value = ''
+                  }}
+                />
+
+                {(ingestNote || attached.length > 0) && (
+                  <div className="meta-guide-attach-meta">
+                    {ingestNote && <p>{ingestNote}</p>}
+                    {attached.length > 0 && (
+                      <ul>
+                        {attached.map((f) => (
+                          <li key={`${f.name}-${f.chars}`}>{f.name}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {showError && <p className="meta-guide-error">{showError}</p>}
+            </>
+          ) : (
+            <>
+              <h1 className="meta-guide-title">
+                Which <span>columns</span> do you usually want?
+              </h1>
+              <p className="meta-guide-lead">
+                This is your default quotation layout. You can add more columns if you need them.
+              </p>
+
+              <div className="meta-guide-card meta-guide-card-cols">
+                <LayoutPreviewTable
+                  columns={draftColumns}
+                  onRemove={removeColumn}
+                />
+              </div>
+
+              {!showAddMore ? (
+                <button
+                  type="button"
+                  className="meta-guide-add-more"
+                  onClick={() => setShowAddMore(true)}
+                >
+                  + Add more columns
+                </button>
+              ) : (
+                <div className="meta-guide-card meta-guide-add-panel">
+                  <div className="meta-guide-add-panel-head">
+                    <p className="meta-guide-section-label">Add more columns</p>
+                    <button
+                      type="button"
+                      className="meta-guide-add-done"
+                      onClick={() => setShowAddMore(false)}
+                    >
+                      Done
+                    </button>
+                  </div>
+                  <div className="meta-guide-chips meta-guide-chips-row">
+                    {OPTIONAL_PRESETS.map((p) => {
+                      const on = hasOptional(p.id)
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className={`meta-guide-chip is-toggle${on ? ' is-on' : ''}`}
+                          onClick={() => toggleOptional(p)}
+                          disabled={on}
+                        >
+                          + {p.label}
+                        </button>
+                      )
+                    })}
+                    {NAMED_AMOUNT_COLUMN_PRESETS.map((p) => {
+                      const on = hasNamedAmount(p.id)
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          title={p.hint}
+                          className={`meta-guide-chip is-toggle${on ? ' is-on' : ''}`}
+                          onClick={() => toggleNamedAmount(p)}
+                          disabled={on}
+                        >
+                          + {p.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="meta-guide-custom-row">
+                    <input
+                      type="text"
+                      value={customLabel}
+                      onChange={(e) => setCustomLabel(e.target.value)}
+                      placeholder="Custom column name"
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustom() } }}
+                    />
+                    <button type="button" onClick={addCustom} disabled={!customLabel.trim()}>Add</button>
+                  </div>
                 </div>
               )}
-            </div>
 
-            {showError && <p className="meta-guide-error">{showError}</p>}
+              {showError && <p className="meta-guide-error">{showError}</p>}
+            </>
+          )}
+        </div>
 
-            <div className="meta-guide-actions">
-              {onBack && (
-                <button type="button" className="meta-guide-ghost" disabled={ingestBusy} onClick={onBack}>
-                  ← Back
-                </button>
-              )}
+        <div className="meta-guide-flow-foot">
+          <div className="meta-guide-actions">
+            {step === 1 && !onBack ? (
+              <span className="meta-guide-ghost meta-guide-ghost-slot" aria-hidden="true" />
+            ) : (
+              <button
+                type="button"
+                className="meta-guide-ghost"
+                disabled={step === 1 ? ingestBusy : loading}
+                onClick={step === 1 ? onBack : () => setStep(1)}
+              >
+                ← Back
+              </button>
+            )}
+            {step === 1 ? (
               <button
                 type="button"
                 className={`meta-guide-primary${!canNext || ingestBusy ? ' is-idle' : ''}`}
@@ -2024,104 +2484,17 @@ export default function MetaTrialGuide({
                 Continue
                 <span aria-hidden="true">→</span>
               </button>
-            </div>
-          </>
-        ) : (
-          <>
-            <h1 className="meta-guide-title">
-              Which <span>columns</span> do you usually want?
-            </h1>
-            <p className="meta-guide-lead">
-              This is your default quotation layout. You can add more columns if you need them.
-            </p>
-
-            <div className="meta-guide-card meta-guide-card-cols">
-              <LayoutPreviewTable
-                columns={draftColumns}
-                onRemove={removeColumn}
-              />
-            </div>
-
-            {!showAddMore ? (
-              <button
-                type="button"
-                className="meta-guide-add-more"
-                onClick={() => setShowAddMore(true)}
-              >
-                + Add more columns
-              </button>
             ) : (
-              <div className="meta-guide-card meta-guide-add-panel">
-                <div className="meta-guide-add-panel-head">
-                  <p className="meta-guide-section-label">Add more columns</p>
-                  <button
-                    type="button"
-                    className="meta-guide-add-done"
-                    onClick={() => setShowAddMore(false)}
-                  >
-                    Done
-                  </button>
-                </div>
-                <div className="meta-guide-chips meta-guide-chips-row">
-                  {OPTIONAL_PRESETS.map((p) => {
-                    const on = hasOptional(p.id)
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        className={`meta-guide-chip is-toggle${on ? ' is-on' : ''}`}
-                        onClick={() => toggleOptional(p)}
-                        disabled={on}
-                      >
-                        + {p.label}
-                      </button>
-                    )
-                  })}
-                  {NAMED_AMOUNT_COLUMN_PRESETS.map((p) => {
-                    const on = hasNamedAmount(p.id)
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        title={p.hint}
-                        className={`meta-guide-chip is-toggle${on ? ' is-on' : ''}`}
-                        onClick={() => toggleNamedAmount(p)}
-                        disabled={on}
-                      >
-                        + {p.label}
-                      </button>
-                    )
-                  })}
-                </div>
-                <div className="meta-guide-custom-row">
-                  <input
-                    type="text"
-                    value={customLabel}
-                    onChange={(e) => setCustomLabel(e.target.value)}
-                    placeholder="Custom column name"
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustom() } }}
-                  />
-                  <button type="button" onClick={addCustom} disabled={!customLabel.trim()}>Add</button>
-                </div>
-              </div>
-            )}
-
-            {showError && <p className="meta-guide-error">{showError}</p>}
-
-            <div className="meta-guide-actions">
-              <button type="button" className="meta-guide-ghost" disabled={loading} onClick={() => setStep(1)}>
-                ← Back
-              </button>
               <button type="button" className="meta-guide-primary" disabled={loading} onClick={goGenerate}>
                 {loading ? 'Creating quotation…' : 'Create quotation'}
                 {!loading && <span aria-hidden="true">→</span>}
               </button>
-            </div>
-            <p className="meta-guide-fine">
-              Next we’ll map your enquiry into this layout — then open the full quotation.
-            </p>
-          </>
-        )}
+            )}
+          </div>
+          <p className={`meta-guide-fine${step === 1 ? ' is-slot' : ''}`}>
+            {step === 1 ? '\u00a0' : 'Next we’ll map your enquiry into this layout — then open the full quotation.'}
+          </p>
+        </div>
       </div>
     </main>
   )

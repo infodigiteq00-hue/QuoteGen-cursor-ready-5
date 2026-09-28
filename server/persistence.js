@@ -15,7 +15,14 @@ import {
 import { formatKeywords } from '../shared/productKeywords.js'
 
 const LOGO_BUCKET = 'company-assets'
+const PAPER_STYLE_IDS = new Set(['corporate', 'formal', 'executive', 'modern', 'atelier', 'brief'])
 const MAX_LOGO_BYTES = 1.5 * 1024 * 1024
+
+function normalizeStoredPaperStyle(id) {
+  const value = String(id || '').trim()
+  if (value === 'warm') return 'formal'
+  return PAPER_STYLE_IDS.has(value) ? value : null
+}
 const INLINE_IMAGE_MAX = 1200 * 1024
 const logoUpload = multer({
   storage: multer.memoryStorage(),
@@ -130,7 +137,7 @@ function extractSidecarJsonArray(raw, key) {
 function parseBankSidecar(footerText) {
   const raw = String(footerText || '')
   const idx = raw.indexOf(BANK_MARK)
-  const emptyBank = { bankName: '', accountNo: '', ifsc: '', terms: '', accountName: '', branch: '', bankQrUrl: '', invoiceSeries: null, columnLayouts: [], activeColumnLayoutId: null, defaultUploadTemplateId: undefined, footerFit: null }
+  const emptyBank = { bankName: '', accountNo: '', ifsc: '', terms: '', accountName: '', branch: '', bankQrUrl: '', invoiceSeries: null, columnLayouts: [], activeColumnLayoutId: null, defaultUploadTemplateId: undefined, footerFit: null, paperStyle: null }
   if (idx === -1) {
     return { note: raw, bank: emptyBank, ok: true, missing: true }
   }
@@ -156,7 +163,8 @@ function parseBankSidecar(footerText) {
           defaultUploadTemplateId: Object.prototype.hasOwnProperty.call(parsed, 'defaultUploadTemplateId')
             ? (parsed.defaultUploadTemplateId || null)
             : undefined,
-          footerFit: parsed.footerFit && typeof parsed.footerFit === 'object' ? parsed.footerFit : null
+          footerFit: parsed.footerFit && typeof parsed.footerFit === 'object' ? parsed.footerFit : null,
+          paperStyle: normalizeStoredPaperStyle(parsed.paperStyle)
         }
       }
     }
@@ -201,7 +209,8 @@ function joinFooterWithBank(note, bank) {
     payload.defaultUploadTemplateId = bank.defaultUploadTemplateId || null
   }
   if (bank?.footerFit) payload.footerFit = normalizeFooterFit(bank.footerFit)
-  if (!payload.bankName && !payload.accountNo && !payload.ifsc && !payload.terms && !payload.accountName && !payload.branch && !payload.bankQrUrl && !payload.invoiceSeries && !payload.columnLayouts && !Object.prototype.hasOwnProperty.call(payload, 'defaultUploadTemplateId') && !payload.footerFit) return n
+  if (bank?.paperStyle) payload.paperStyle = String(bank.paperStyle)
+  if (!payload.bankName && !payload.accountNo && !payload.ifsc && !payload.terms && !payload.accountName && !payload.branch && !payload.bankQrUrl && !payload.invoiceSeries && !payload.columnLayouts && !Object.prototype.hasOwnProperty.call(payload, 'defaultUploadTemplateId') && !payload.footerFit && !payload.paperStyle) return n
   return `${n}${n ? '\n\n' : ''}${BANK_MARK}\n${JSON.stringify(payload)}`
 }
 
@@ -322,6 +331,7 @@ function mapCompanyProfile(row) {
       ? sidecar.bank.defaultUploadTemplateId
       : (row.default_upload_template_id || null),
     footerFit: normalizeFooterFit(sidecar.bank.footerFit),
+    paperStyle: normalizeStoredPaperStyle(sidecar.bank.paperStyle),
     series: {
       prefix: row.series_prefix ?? 'QG',
       padding: row.series_padding ?? 4,
@@ -707,7 +717,10 @@ export function registerPersistenceRoutes(app) {
           : existingSidecar.bank.defaultUploadTemplateId,
         footerFit: body.footerFit != null
           ? normalizeFooterFit(body.footerFit)
-          : existingSidecar.bank.footerFit
+          : existingSidecar.bank.footerFit,
+        paperStyle: body.paperStyle != null
+          ? (normalizeStoredPaperStyle(body.paperStyle) || existingSidecar.bank.paperStyle)
+          : existingSidecar.bank.paperStyle
       }
       const bankTouched = body.bankName != null || body.bankAccountNo != null || body.bankIfsc != null || body.bankAccountName != null || body.bankBranch != null
       const termsTouched = body.standardTerms != null
@@ -715,7 +728,8 @@ export function registerPersistenceRoutes(app) {
       const layoutsTouched = body.columnLayouts != null || body.activeColumnLayoutId != null
       const defaultLayoutTouched = body.defaultUploadTemplateId !== undefined
       const footerFitTouched = body.footerFit != null
-      if (body.footerText != null || bankTouched || termsTouched || invoiceTouched || layoutsTouched || defaultLayoutTouched || footerFitTouched) {
+      const paperStyleTouched = body.paperStyle != null && Boolean(normalizeStoredPaperStyle(body.paperStyle))
+      if (body.footerText != null || bankTouched || termsTouched || invoiceTouched || layoutsTouched || defaultLayoutTouched || footerFitTouched || paperStyleTouched) {
         const note = incoming ? incoming.note : existingSidecar.note
         patch.footer_text = joinFooterWithBank(note, nextBank)
       }
@@ -818,7 +832,7 @@ If something isn't specified, keep the current value.`
         const existing = await ensureCompanyProfile(supabase, req.userId)
         const widthRaw = req.body?.logoWidth != null ? Number(req.body.logoWidth) : existing.logo_width
         const heightRaw = req.body?.logoHeight != null ? Number(req.body.logoHeight) : existing.logo_height
-        const logoWidth = Number.isFinite(widthRaw) && widthRaw > 0 ? Math.round(widthRaw) : 120
+        const logoWidth = Number.isFinite(widthRaw) && widthRaw > 0 ? Math.round(widthRaw) : 72
         const logoHeight = Number.isFinite(heightRaw) && heightRaw > 0 ? Math.round(heightRaw) : null
 
         const ext = mime.includes('svg') ? 'svg'

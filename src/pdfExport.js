@@ -59,6 +59,48 @@ function bakeOneField(original, copy = original) {
   } else {
     copy.setAttribute('value', original.value)
   }
+  copyComputedType(original, copy)
+}
+
+function copyComputedType(from, to) {
+  if (!from || !to || from.nodeType !== 1 || to.nodeType !== 1) return
+  if (typeof getComputedStyle !== 'function') return
+  try {
+    const st = getComputedStyle(from)
+    if (!st || st.display === 'none' || st.visibility === 'hidden') return
+    const set = (prop, value) => {
+      if (value == null || value === '') return
+      to.style.setProperty(prop, value, 'important')
+    }
+    set('font-family', st.fontFamily)
+    set('font-size', st.fontSize)
+    set('font-weight', st.fontWeight)
+    set('font-style', st.fontStyle)
+    set('letter-spacing', st.letterSpacing)
+    set('line-height', st.lineHeight)
+    set('color', st.color)
+    set('text-align', st.textAlign)
+    set('text-transform', st.textTransform)
+    set('font-variant-numeric', st.fontVariantNumeric)
+    set('font-feature-settings', st.fontFeatureSettings)
+    set('font-kerning', st.fontKerning)
+  } catch { /* computed style unavailable */ }
+}
+
+const SKIP_TYPE_TAGS = /^(SCRIPT|STYLE|LINK|IMG|SVG|CANVAS|VIDEO|PATH|BR|HR|COL|COLGROUP|SOURCE|META)$/i
+
+/** Copy live preview type (size, weight, family, tracking) onto the export clone. */
+function bakeLiveTypography(source, clone) {
+  if (!source || !clone) return
+  const walk = (from, to) => {
+    if (!from || !to) return
+    if (!SKIP_TYPE_TAGS.test(from.tagName || '')) copyComputedType(from, to)
+    const fromKids = from.children
+    const toKids = to.children
+    const n = Math.min(fromKids.length, toKids.length)
+    for (let i = 0; i < n; i += 1) walk(fromKids[i], toKids[i])
+  }
+  walk(source, clone)
 }
 
 function bakeClonedFields(root) {
@@ -150,6 +192,46 @@ async function fetchAssetDataUrl(src) {
   return null
 }
 
+async function inlineCssFontUrls(css) {
+  const source = String(css || '')
+  const found = [...source.matchAll(/url\((['"]?)(https?:\/\/[^'")]+)\1\)/gi)]
+  const unique = [...new Set(found.map((m) => m[2]))]
+  if (!unique.length) return source
+  const rewritten = await Promise.all(unique.map(async (url) => {
+    try {
+      const data = await fetchAssetDataUrl(url)
+      return data ? [url, data] : null
+    } catch {
+      return null
+    }
+  }))
+  let out = source
+  for (const pair of rewritten) {
+    if (!pair) continue
+    out = out.split(pair[0]).join(pair[1])
+  }
+  return out
+}
+
+async function inlineGoogleFontFaces() {
+  const hrefs = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+    .map((link) => link.href)
+    .filter((href) => /fonts\.googleapis\.com/i.test(href || ''))
+  if (!hrefs.length) {
+    hrefs.push('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;800&family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap')
+  }
+  const chunks = await Promise.all(hrefs.map(async (href) => {
+    try {
+      const response = await fetch(href, { mode: 'cors' })
+      if (!response.ok) return ''
+      return inlineCssFontUrls(await response.text())
+    } catch {
+      return ''
+    }
+  }))
+  return chunks.filter(Boolean).join('\n')
+}
+
 /** If a public Storage URL 400s, swap the <img> onto the authenticated proxy. */
 export function onQuoteAssetImgError(event) {
   const image = event.currentTarget
@@ -196,14 +278,12 @@ async function inlineLiveImages(roots) {
 
 /** A self-contained copy of the quotation sheet, ready to print as-is. */
 export async function buildPrintableDocument() {
-  const source = document.querySelector('.qg-studio-canvas')
-    || document.querySelector('article.upload-word-page')
-    || document.querySelector('.upload-excel-paper')
-    || document.querySelector('.upload-excel-table')?.closest('section, main, div')
+  const source = exportSourceElement()
     || document.querySelector('main')
     || document.documentElement
   const clone = source.cloneNode(true)
   bakeFieldValues(source, clone)
+  bakeLiveTypography(source, clone)
 
   const { css } = collectStyles()
   await inlineImages(clone)
@@ -237,14 +317,49 @@ function saveBlob(blob, fileName) {
   }, 60_000)
 }
 
+function studioPapersForExport() {
+  const trial = Array.from(document.querySelectorAll('[data-qg-trial-ready="1"] .qg-studio-paper'))
+  if (trial.length) return trial
+  const activeRoot = document.querySelector('.meta-guide-format-slide.is-active [data-qg-preview="1"]')
+    || document.querySelector('.meta-guide-final-scroll [data-qg-preview="1"]')
+  if (activeRoot) {
+    const papers = Array.from(activeRoot.querySelectorAll('.qg-studio-paper'))
+    if (papers.length) return papers
+  }
+  return Array.from(document.querySelectorAll('.qg-studio-paper')).filter(
+    (el) => !el.closest('[data-qg-preview="1"]')
+  )
+}
+
+/** Use the on-screen selected preview when present so the PDF matches what the user sees. */
+function exportSourceElement() {
+  const activePreview = document.querySelector('.meta-guide-format-slide.is-active [data-qg-preview="1"] .qg-studio-canvas')
+    || document.querySelector('.meta-guide-final-scroll [data-qg-preview="1"] .qg-studio-canvas')
+  if (activePreview) return activePreview
+  const trialReady = document.querySelector('[data-qg-trial-ready="1"] .qg-studio-canvas')
+  if (trialReady) return trialReady
+  const editor = Array.from(document.querySelectorAll('.qg-studio-canvas')).find(
+    (el) => !el.closest('[data-qg-preview="1"]') && !el.closest('.meta-guide-format-slide')
+  )
+  if (editor) return editor
+  return document.querySelector('.qg-studio-canvas')
+    || document.querySelector('article.upload-word-page')
+    || document.querySelector('.upload-excel-paper')
+    || document.querySelector('.upload-excel-table')?.closest('section, main, div')
+}
+
+function isPreviewMatchSource(source) {
+  return Boolean(source?.closest?.('[data-qg-preview="1"], [data-qg-trial-ready="1"], .meta-guide-scaled'))
+}
+
 function captureTargets() {
-  const papers = Array.from(document.querySelectorAll('.qg-studio-paper'))
+  const papers = studioPapersForExport()
   if (papers.length) return papers
   const word = Array.from(document.querySelectorAll('.upload-word-page'))
   if (word.length) return word
   const excel = document.querySelector('.upload-excel-paper') || document.querySelector('.upload-excel-table')
   if (excel) return [excel.classList?.contains('upload-excel-paper') ? excel : (excel.closest('.upload-excel-paper') || excel.closest('section, main, article') || excel)]
-  const canvas = document.querySelector('.qg-studio-canvas')
+  const canvas = exportSourceElement()
   return canvas ? [canvas] : []
 }
 
@@ -315,16 +430,22 @@ function revealTitles(root) {
   })
 }
 
-function hideCaptureChrome(clonedRoot) {
+function hideCaptureChrome(clonedRoot, { matchPreview = false } = {}) {
   clonedRoot.querySelectorAll(
-    '.qg-image-resize, .qg-col-resizer, .qg-footer-handle, .qg-footer-edit-btn, .qg-footer-fit-bar, .qg-drop-zone, .qg-export-list'
+    '.qg-image-resize, .qg-col-resizer, .qg-footer-handle, .qg-footer-edit-btn, .qg-footer-fit-bar, .qg-drop-zone, .qg-export-list, .qg-logo-resize, .qg-trial-logo-btn'
   ).forEach((node) => { node.remove() })
   clonedRoot.querySelectorAll('.no-print').forEach((node) => {
-    if (isSheetRun(node)) {
+    if (!matchPreview && isSheetRun(node)) {
       node.style.display = 'flex'
       return
     }
     node.remove()
+  })
+  clonedRoot.querySelectorAll('.qg-letterhead-mark').forEach((mark) => {
+    if (mark.querySelector('img[src]')) return
+    const letterhead = mark.closest('.qg-letterhead')
+    mark.remove()
+    letterhead?.classList.add('qg-letterhead--nologo')
   })
   clonedRoot.querySelectorAll('.print-only-cell').forEach((node) => {
     node.style.display = 'block'
@@ -390,22 +511,151 @@ function replaceFieldsWithText(root) {
     const text = node.value || ''
     const placeholder = node.getAttribute('placeholder') || ''
     const span = doc.createElement(node.tagName === 'TEXTAREA' || text.includes('\n') ? 'div' : 'span')
-    span.className = 'qg-pdf-field-text'
+    span.className = `${node.className || ''} qg-pdf-field-text`.trim()
     span.textContent = text || placeholder
-    span.style.display = 'block'
-    span.style.width = '100%'
-    span.style.whiteSpace = text.includes('\n') ? 'pre-wrap' : 'normal'
-    span.style.overflow = 'visible'
+    span.style.cssText = node.style.cssText
     span.style.background = 'transparent'
     span.style.border = 'none'
-    span.style.letterSpacing = 'normal'
-    if (!text) span.style.opacity = '0.55'
+    span.style.outline = 'none'
+    span.style.boxShadow = 'none'
+    span.style.overflow = 'visible'
+    if (node.tagName === 'TEXTAREA' || text.includes('\n')) {
+      span.style.display = 'block'
+      span.style.width = '100%'
+      span.style.whiteSpace = 'pre-wrap'
+    } else if (!span.style.display) {
+      span.style.display = 'inline-block'
+    }
+    if (!text) span.style.opacity = span.style.opacity || '0.55'
     node.replaceWith(span)
   })
 }
 
-function stripUnsupportedCssFunctions(css) {
-  const names = ['color-mix', 'oklch', 'oklab', 'lab', 'lch', 'light-dark', 'color']
+function splitTopLevelArgs(s) {
+  const parts = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (c === '(') depth += 1
+    else if (c === ')') depth -= 1
+    else if (c === ',' && depth === 0) {
+      parts.push(s.slice(start, i).trim())
+      start = i + 1
+    }
+  }
+  parts.push(s.slice(start).trim())
+  return parts.filter(Boolean)
+}
+
+function parseCssColor(raw, vars) {
+  const s = String(raw || '').trim()
+  if (!s || /^transparent$/i.test(s)) return { r: 0, g: 0, b: 0, a: 0 }
+  const varMatch = s.match(/^var\(\s*(--[\w-]+)\s*(?:,\s*(.+))?\s*\)$/i)
+  if (varMatch) return parseCssColor(vars[varMatch[1]] || varMatch[2] || '#1A73E8', vars)
+  const hex = s.match(/^#([0-9a-f]{3,8})$/i)
+  if (hex) {
+    let h = hex[1]
+    if (h.length === 3) h = h.split('').map((c) => c + c).join('')
+    const a = h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1
+    return {
+      r: parseInt(h.slice(0, 2), 16),
+      g: parseInt(h.slice(2, 4), 16),
+      b: parseInt(h.slice(4, 6), 16),
+      a
+    }
+  }
+  const rgb = s.match(/^rgba?\(\s*([\d.]+)[%]?\s*,\s*([\d.]+)[%]?\s*,\s*([\d.]+)[%]?(?:\s*[,/]\s*([\d.]+%?))?\s*\)$/i)
+  if (rgb) {
+    return {
+      r: Number(rgb[1]),
+      g: Number(rgb[2]),
+      b: Number(rgb[3]),
+      a: rgb[4] != null ? (String(rgb[4]).endsWith('%') ? Number(rgb[4]) / 100 : Number(rgb[4])) : 1
+    }
+  }
+  return null
+}
+
+function parseColorStop(raw, vars) {
+  const s = String(raw || '').trim()
+  const pct = s.match(/(\d+(?:\.\d+)?)\s*%\s*$/)
+  const colorRaw = pct ? s.slice(0, pct.index).trim() : s
+  return { color: parseCssColor(colorRaw, vars), p: pct ? Number(pct[1]) / 100 : null }
+}
+
+function formatCssColor({ r, g, b, a }) {
+  const rr = Math.max(0, Math.min(255, Math.round(r)))
+  const gg = Math.max(0, Math.min(255, Math.round(g)))
+  const bb = Math.max(0, Math.min(255, Math.round(b)))
+  if (a >= 0.999) return `rgb(${rr}, ${gg}, ${bb})`
+  if (a <= 0.001) return 'transparent'
+  return `rgba(${rr}, ${gg}, ${bb}, ${Math.round(a * 1000) / 1000})`
+}
+
+function mixSrgbColors(c1, p1, c2, p2) {
+  const a1 = c1.a * p1
+  const a2 = c2.a * p2
+  const a = a1 + a2
+  if (a <= 0) return { r: 0, g: 0, b: 0, a: 0 }
+  return {
+    r: (c1.r * a1 + c2.r * a2) / a,
+    g: (c1.g * a1 + c2.g * a2) / a,
+    b: (c1.b * a1 + c2.b * a2) / a,
+    a
+  }
+}
+
+function resolveColorMixCall(full, vars) {
+  const open = full.indexOf('(')
+  const inner = full.slice(open + 1, -1)
+  const args = splitTopLevelArgs(inner)
+  if (args.length < 3 || !/^in\s+/i.test(args[0])) return full
+  const stop1 = parseColorStop(args[1], vars)
+  const stop2 = parseColorStop(args[2], vars)
+  if (!stop1.color || !stop2.color) return full
+  let p1 = stop1.p
+  let p2 = stop2.p
+  if (p1 == null && p2 == null) {
+    p1 = 0.5
+    p2 = 0.5
+  } else if (p1 == null) p1 = 1 - p2
+  else if (p2 == null) p2 = 1 - p1
+  const sum = p1 + p2
+  if (sum <= 0) return 'transparent'
+  p1 /= sum
+  p2 /= sum
+  return formatCssColor(mixSrgbColors(stop1.color, p1, stop2.color, p2))
+}
+
+function extractFunctionCall(css, at, nameLen) {
+  let depth = 0
+  let j = at + nameLen
+  for (; j < css.length; j++) {
+    if (css[j] === '(') depth += 1
+    else if (css[j] === ')') {
+      depth -= 1
+      if (depth === 0) return css.slice(at, j + 1)
+    }
+  }
+  return ''
+}
+
+function readCssVarsFrom(el) {
+  const vars = { '--qg-accent': '#1A73E8' }
+  if (!el || typeof getComputedStyle !== 'function') return vars
+  try {
+    const st = getComputedStyle(el)
+    for (const name of ['--qg-accent', '--qg-accent-soft', '--qg-muted', '--qg-text', '--qg-table-head-bg', '--qg-table-border']) {
+      const v = st.getPropertyValue(name).trim()
+      if (v) vars[name] = v
+    }
+  } catch { /* detached */ }
+  return vars
+}
+
+function stripUnsupportedCssFunctions(css, vars = {}) {
+  const names = ['color-mix', 'oklch', 'oklab', 'lab', 'lch', 'light-dark']
   let out = String(css || '')
   for (const name of names) {
     const needle = `${name}(`
@@ -418,20 +668,14 @@ function stripUnsupportedCssFunctions(css) {
         break
       }
       result += out.slice(i, at)
-      let depth = 0
-      let j = at + needle.length - 1
-      for (; j < out.length; j++) {
-        if (out[j] === '(') depth++
-        else if (out[j] === ')') {
-          depth--
-          if (depth === 0) {
-            j++
-            break
-          }
-        }
+      const call = extractFunctionCall(out, at, needle.length - 1)
+      if (!call) {
+        result += out.slice(at)
+        break
       }
-      result += 'transparent'
-      i = j
+      if (name === 'color-mix') result += resolveColorMixCall(call, vars)
+      else result += 'transparent'
+      i = at + call.length
     }
     out = result
   }
@@ -477,12 +721,12 @@ function stripPrintMediaBlocks(css) {
   return out
 }
 
-function neutralizeCloneCss(doc) {
+function neutralizeCloneCss(doc, vars = {}) {
   doc.querySelectorAll('style').forEach((style) => {
-    style.textContent = stripUnsupportedCssFunctions(style.textContent)
+    style.textContent = stripUnsupportedCssFunctions(style.textContent, vars)
   })
   doc.querySelectorAll('[style]').forEach((el) => {
-    const next = stripUnsupportedCssFunctions(el.getAttribute('style') || '')
+    const next = stripUnsupportedCssFunctions(el.getAttribute('style') || '', vars)
     if (next) el.setAttribute('style', next)
   })
 }
@@ -558,9 +802,14 @@ function paperWidthPx(element) {
 function withCaptureLayout() {
   const html = document.documentElement
   html.classList.add('qg-pdf-capture')
-  const frames = Array.from(document.querySelectorAll('.qg-studio-paper-frame, .upload-word-page, .upload-excel-paper'))
-  const studioPapers = Array.from(document.querySelectorAll('.qg-studio-paper'))
-  const canvases = Array.from(document.querySelectorAll('.qg-studio-canvas'))
+  const trialRoot = document.querySelector('[data-qg-trial-ready="1"]')
+  const frames = Array.from((trialRoot || document).querySelectorAll('.qg-studio-paper-frame, .upload-word-page, .upload-excel-paper'))
+  const studioPapers = trialRoot
+    ? Array.from(trialRoot.querySelectorAll('.qg-studio-paper'))
+    : Array.from(document.querySelectorAll('.qg-studio-paper'))
+  const canvases = trialRoot
+    ? Array.from(trialRoot.querySelectorAll('.qg-studio-canvas'))
+    : Array.from(document.querySelectorAll('.qg-studio-canvas'))
   const uploadPages = Array.from(document.querySelectorAll('.upload-word-page'))
   const excelPapers = Array.from(document.querySelectorAll('.upload-excel-paper'))
   const previous = []
@@ -885,25 +1134,37 @@ async function downloadFromScreen(fileName) {
 
 /** HTML of the live A4 preview, with fields baked and editor chrome removed. */
 export async function buildPreviewExportHtml() {
-  const source = document.querySelector('.qg-studio-canvas')
-    || document.querySelector('article.upload-word-page')
-    || document.querySelector('.upload-excel-paper')
-    || document.querySelector('.upload-excel-table')?.closest('section, main, div')
+  const source = exportSourceElement()
   if (!source) throw new Error('nothing on screen to export')
+  const matchPreview = isPreviewMatchSource(source)
+  const cssVars = readCssVarsFrom(source.querySelector('.qg-studio-paper') || source)
+  try { await document.fonts.ready } catch { /* ignore */ }
   const clone = source.cloneNode(true)
   bakeFieldValues(source, clone)
-  hideCaptureChrome(clone)
+  bakeLiveTypography(source, clone)
+  hideCaptureChrome(clone, { matchPreview })
   await inlineImages(clone)
+  const fontCss = await inlineGoogleFontFaces()
   const { css: rawCss } = collectStyles()
   // Drop @media print — it reflows sheets (height:auto) and breaks preview pagination.
-  const css = stripPrintMediaBlocks(stripUnsupportedCssFunctions(rawCss))
+  const css = stripPrintMediaBlocks(stripUnsupportedCssFunctions(rawCss, cssVars))
+  const sheetRunCss = matchPreview
+    ? `
+    .qg-sheet-run-header,
+    .qg-sheet-run-footer,
+    .qg-print-run-header,
+    .qg-print-run-footer,
+    .qg-trial-logo-btn,
+    .qg-logo-resize { display: none !important; }`
+    : `
+    .qg-sheet-run-header.no-print,
+    .qg-sheet-run-footer.no-print { display: flex !important; }`
   const pageCss = `
     @page { size: 210mm 297mm; margin: 0; }
     @page qg-studio { size: 210mm 297mm; margin: 0; }
     html, body { margin: 0; padding: 0; background: #fff; zoom: 1 !important; }
     .no-print { display: none !important; }
-    .qg-sheet-run-header.no-print,
-    .qg-sheet-run-footer.no-print { display: flex !important; }
+    ${sheetRunCss}
     .qg-col-title, .qg-col-title--capture { display: inline !important; }
     .qg-studio-canvas {
       padding: 0 !important;
@@ -958,6 +1219,21 @@ export async function buildPreviewExportHtml() {
     }
     .qg-footer-image { object-fit: contain !important; width: 100% !important; height: 100% !important; }
     img { object-fit: contain !important; }
+    .qg-letterhead-mark img {
+      width: 100% !important;
+      max-width: 100% !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+    }
+    .qg-letterhead--nologo .qg-letterhead-mark { display: none !important; width: 0 !important; }
+    .qg-mod-hero,
+    .qg-mod-hero::before,
+    .qg-mod-hero::after,
+    .qg-exec-rule,
+    .qg-brief-bar {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
     .qg-col-title { color: inherit !important; white-space: nowrap !important; }
     .quote-items-table { page-break-inside: avoid !important; }
     .quote-items-table tr { page-break-inside: avoid !important; }
@@ -969,7 +1245,7 @@ export async function buildPreviewExportHtml() {
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <base href="${baseHref.replace(/"/g, '&quot;')}"/>
-<style>${css}\n${pageCss}</style>
+<style>${fontCss}\n${css}\n${pageCss}</style>
 </head>
 <body>${clone.outerHTML}</body>
 </html>`

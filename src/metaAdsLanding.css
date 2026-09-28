@@ -1682,8 +1682,32 @@
     display: inline-flex;
   }
 
+  .meta-header {
+    height: auto;
+    min-height: 56px;
+    padding: 8px 0;
+  }
+
+  .meta-header-inner {
+    width: min(1180px, calc(100% - 20px));
+    gap: 8px;
+  }
+
+  .meta-brand {
+    gap: 8px;
+  }
+
+  .meta-brand img {
+    width: 30px;
+    height: 30px;
+  }
+
   .meta-brand-name {
-    font-size: 18px;
+    font-size: 16px;
+  }
+
+  .meta-brand-sub {
+    display: none;
   }
 
   .meta-header-actions .meta-phone {
@@ -1691,15 +1715,17 @@
   }
 
   .meta-header-actions {
-    gap: 10px;
+    gap: 6px;
+    flex: 0 0 auto;
   }
 
-  .meta-btn-signin {
-    padding: 0 14px;
-  }
-
-  .meta-btn-header {
-    padding: 0 16px;
+  .meta-btn.meta-btn-signin,
+  .meta-btn.meta-btn-header {
+    min-height: 36px;
+    padding: 0 12px;
+    font-size: 13px;
+    border-radius: 999px;
+    white-space: nowrap;
   }
 
   .meta-hero {
@@ -1723,6 +1749,15 @@
     white-space: normal;
     font-size: clamp(1.05rem, 4.5vw, 1.35rem);
     padding: 0 8px;
+  }
+}
+
+@media (min-width: 600px) and (max-width: 860px) {
+  .meta-brand-sub {
+    display: block;
+    font-size: 8px;
+    letter-spacing: 0.08em;
+    white-space: nowrap;
   }
 }
 

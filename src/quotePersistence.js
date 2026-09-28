@@ -192,7 +192,8 @@ function hydrateCompanyProfile(profile) {
     defaultUploadTemplateId: Object.prototype.hasOwnProperty.call(extra, 'defaultUploadTemplateId')
       ? extra.defaultUploadTemplateId
       : profile.defaultUploadTemplateId,
-    footerFit: extra.footerFit || profile.footerFit
+    footerFit: extra.footerFit || profile.footerFit,
+    paperStyle: extra.paperStyle || profile.paperStyle || null
   }
 }
 

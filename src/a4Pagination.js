@@ -9,7 +9,7 @@ export const A4_CONTENT_TOP_MARGIN = 10
 /** Packer reserve under last content — leave room so signatory + brand footer aren’t clipped. */
 export const A4_CONTENT_BOTTOM_MARGIN = 80
 /** If closing almost fits, absorb this much overflow instead of a near-empty page. */
-export const A4_CLOSING_SQUEEZE_PX = 28
+export const A4_CLOSING_SQUEEZE_PX = 72
 
 function num(value, fallback = 0) {
   const n = Number(value)
@@ -147,14 +147,12 @@ export function measureA4Blocks(root) {
   const closingFooter = closingEl?.querySelector('.qg-footer-image-wrap')
   // Inner content only — the closing block is flex-grown to fill the last sheet,
   // so measuring the wrapper would look like a whole extra page and never share.
-  const closingHeight = closingEl
-    ? Math.max(
-      (closingBody || closingFooter)
-        ? localHeight(closingBody) + localHeight(closingFooter) + boxExtras(closingEl)
-        : localHeight(closingEl),
-      0
-    )
-    : 0
+  const closingInner = (closingBody || closingFooter)
+    ? localHeight(closingBody) + localHeight(closingFooter) + boxExtras(closingEl)
+    : closingEl
+      ? Array.from(closingEl.children).reduce((sum, node) => sum + localHeight(node), 0) + boxExtras(closingEl)
+      : 0
+  const closingHeight = Math.max(closingInner, 0)
   return {
     headerHeight: heightOf('[data-qg-block="header"]'),
     metaHeight: heightOf('[data-qg-block="meta"]'),

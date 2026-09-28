@@ -346,7 +346,7 @@ img {
   object-fit: contain !important;
   image-rendering: auto !important;
 }
-input, textarea, select, .qg-inline-field {
+input, textarea, select, .qg-studio-table .qg-inline-field {
   overflow: visible !important;
   height: auto !important;
   min-height: 1.45em !important;

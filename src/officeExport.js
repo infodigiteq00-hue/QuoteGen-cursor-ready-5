@@ -11,6 +11,7 @@ import {
 import { formatIndianAmount } from '../shared/templateMap.js'
 import { normalizeFooterFit } from '../shared/footerFit.js'
 import { quotationFileName, capturePreviewCanvases } from './pdfExport.js'
+import { displayLogoWidth } from './QuoteStudio.jsx'
 
 function money(n) {
   if (n == null || n === '') return ''
@@ -102,8 +103,9 @@ export function buildQuotationWordHtml({ quote, profile, columns, totals, theme,
   const terms = quote?.terms || {}
   const notes = (quote?.notes || []).filter(Boolean)
   const headerText = String(profile?.headerText || '').trim()
+  const logoBox = displayLogoWidth(profile)
   const logo = profile?.logoUrl
-    ? `<img src="${escapeHtml(profile.logoUrl)}" alt="" style="max-height:64px;max-width:120px;width:auto;height:auto;object-fit:contain;" />`
+    ? `<img src="${escapeHtml(profile.logoUrl)}" alt="" style="max-height:${logoBox}px;max-width:${logoBox}px;width:auto;height:auto;object-fit:contain;" />`
     : ''
   const headerImage = profile?.headerImageUrl
     ? `<div style="margin:0 0 16px;"><img src="${escapeHtml(profile.headerImageUrl)}" alt="" style="width:100%;max-height:140px;object-fit:cover;" /></div>`
@@ -526,8 +528,8 @@ async function fillQuotationDataSheet(wb, { quote, profile, columns, totals, the
 
   if (logo) {
     const imageId = wb.addImage({ base64: logo.base64, extension: logo.extension })
-    const logoH = profile?.headerImageUrl && !profile?.logoUrl ? 90 : 48
-    const logoW = profile?.headerImageUrl && !profile?.logoUrl ? 420 : Math.min(140, Number(profile?.logoWidth) || 96)
+    const logoH = profile?.headerImageUrl && !profile?.logoUrl ? 90 : Math.round(displayLogoWidth(profile) * 0.67)
+    const logoW = profile?.headerImageUrl && !profile?.logoUrl ? 420 : displayLogoWidth(profile)
     sheet.getRow(r).height = logoH * 0.75
     sheet.addImage(imageId, {
       tl: { col: 0, row: r - 1 },

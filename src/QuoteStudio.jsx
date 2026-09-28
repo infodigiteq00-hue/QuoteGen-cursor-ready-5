@@ -134,42 +134,133 @@ function InlineField({ value, onChange, onBlur, placeholder, bold, large, right,
 }
 
 /* ─── Company letterhead block (text + logo, no header image) ────────────── */
-function CompanyLetterheadBlock({ profile, theme }) {
+const LOGO_SIZE_MIN = 32
+const LOGO_SIZE_MAX = 220
+/** Upload/server used to persist 120px as the “load” box. Default display is 60% of that. */
+const LOGO_LOAD_DEFAULT = 120
+export const LOGO_SIZE_DEFAULT = Math.round(LOGO_LOAD_DEFAULT * 0.6)
+const STOCK_LOGO_PX = new Set([46, 58, 64, 72, 96, 120])
+
+function clampLogoSize(n, fallback = LOGO_SIZE_DEFAULT) {
+  const v = Number(n)
+  if (!Number.isFinite(v) || v <= 0) return fallback
+  return Math.max(LOGO_SIZE_MIN, Math.min(LOGO_SIZE_MAX, Math.round(v)))
+}
+
+function isUserPickedLogoSize(n) {
+  const v = Math.round(Number(n))
+  if (!Number.isFinite(v) || v <= 0) return false
+  return !STOCK_LOGO_PX.has(v)
+}
+
+export function displayLogoWidth(profile) {
+  return isUserPickedLogoSize(profile?.logoWidth)
+    ? clampLogoSize(profile.logoWidth)
+    : LOGO_SIZE_DEFAULT
+}
+
+function CompanyLetterheadBlock({ profile, theme, onUploadLogo, logoBusy, onLogoSizeChange }) {
   const isFormal = theme.themeClass === 'qg-theme-formal'
+  const markRef = useRef(null)
   const name = profile?.companyName?.trim() || 'Your Company Name'
   const headerText = profile?.headerText?.trim() || ''
   const logoUrl = profile?.logoUrl
-  const width = Math.max(36, Math.min(120, Number(profile?.logoWidth) || 64))
-  const height = profile?.logoHeight != null
-    ? Math.max(36, Math.min(120, Number(profile.logoHeight) || 64))
+  const userSized = isUserPickedLogoSize(profile?.logoWidth)
+  const width = displayLogoWidth(profile)
+  const height = userSized && profile?.logoHeight != null
+    ? clampLogoSize(profile.logoHeight, width)
     : null
-  const mark = isFormal ? 46 : Math.min(width, 56)
-  const initial = name.charAt(0).toUpperCase() || 'Q'
+  const showUpload = Boolean(onUploadLogo) && !logoUrl
+  const showMark = Boolean(logoUrl) || showUpload
+  const canResize = Boolean(logoUrl && onLogoSizeChange)
+
+  const beginLogoResize = (e) => {
+    if (!canResize) return
+    e.preventDefault()
+    e.stopPropagation()
+    const point = e.touches?.[0] || e
+    const startX = point.clientX
+    const startW = width
+    const startH = height
+    const visual = markRef.current?.getBoundingClientRect()?.width || startW
+    const factor = visual / Math.max(1, startW)
+    const apply = (clientX) => {
+      const nextW = clampLogoSize(startW + (clientX - startX) / factor, startW)
+      const nextH = startH ? clampLogoSize(startH * (nextW / startW), startH) : null
+      onLogoSizeChange({ logoWidth: nextW, logoHeight: nextH })
+    }
+    const onMove = (ev) => {
+      const p = ev.touches?.[0] || ev
+      apply(p.clientX)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    window.addEventListener('touchmove', onMove, { passive: false })
+    window.addEventListener('touchend', onUp)
+  }
 
   return (
-    <div className={`qg-letterhead${isFormal ? ' qg-letterhead--formal' : ''}`}>
-      <div className="qg-letterhead-mark" style={{ width: isFormal ? mark : width }}>
+    <div className={`qg-letterhead${isFormal ? ' qg-letterhead--formal' : ''}${showMark ? '' : ' qg-letterhead--nologo'}`}>
+      {showMark ? (
+      <div
+        ref={markRef}
+        className="qg-letterhead-mark"
+        style={{ width, maxWidth: width, ['--qg-logo-w']: `${width}px` }}
+      >
         {logoUrl ? (
           <img
             src={logoUrl}
             alt={`${name} logo`}
             onError={onQuoteAssetImgError}
-            style={{ width: '100%', height: height || 'auto', maxHeight: height || (isFormal ? mark : 80), objectFit: 'contain', display: 'block' }}
+            style={{
+              width,
+              maxWidth: '100%',
+              minWidth: 0,
+              height: height || 'auto',
+              maxHeight: height || 'none',
+              objectFit: 'contain',
+              objectPosition: 'center center',
+              display: 'block'
+            }}
           />
         ) : (
-          <div
-            className="qg-letterhead-initial"
-            style={{
-              width: mark,
-              height: mark,
-              background: theme.accent,
-              fontSize: mark * 0.40,
+          <button
+            type="button"
+            className="qg-trial-logo-btn no-print"
+            disabled={logoBusy}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              if (!logoBusy) onUploadLogo()
             }}
+            aria-label="Upload company logo"
           >
-            {initial}
-          </div>
+            <span className="qg-trial-logo-btn-plus" aria-hidden="true">+</span>
+            <span>{logoBusy ? 'Adding…' : 'Add logo'}</span>
+          </button>
         )}
+        {canResize ? (
+          <button
+            type="button"
+            className="qg-logo-resize no-print"
+            aria-label="Drag to resize logo"
+            title="Drag to make the logo larger or smaller"
+            onMouseDown={beginLogoResize}
+            onTouchStart={beginLogoResize}
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M9 4V1H6M1 6v3h3M9 1L5.5 4.5M1 9l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
+        ) : null}
       </div>
+      ) : null}
       <div className="qg-letterhead-text">
         <p className="qg-letterhead-name" style={{ color: theme.accent }}>
           {name}
@@ -178,15 +269,11 @@ function CompanyLetterheadBlock({ profile, theme }) {
           <p className="qg-letterhead-address" style={{ color: theme.muted }}>
             {headerText}
           </p>
-        ) : isFormal ? (
+        ) : onUploadLogo ? (
           <p className="qg-letterhead-address qg-letterhead-address--hint no-print" style={{ color: theme.muted }}>
             Address, phone, or tagline
           </p>
-        ) : (
-          <p className="qg-letterhead-address" style={{ color: theme.muted }}>
-            Your address · City, State · PIN
-          </p>
-        )}
+        ) : null}
       </div>
     </div>
   )
@@ -203,11 +290,20 @@ function MetaRow({ label, children, theme }) {
 }
 
 /* ─── Paper header — handles BOTH cases cleanly ─────────────────────────── */
-export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isInvoice, onNumberCommit, grandTotal = '' }) {
+export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isInvoice, onNumberCommit, grandTotal = '', onUploadLogo, logoBusy, onLogoSizeChange }) {
   const fields = quote?.fields || {}
   const validUntil = fields.validUntil || quote.validUntil || ''
   const referenceNo = fields.referenceNo || quote.referenceNo || ''
   const hasHeaderImage = Boolean(profile?.headerImageUrl)
+  const letterheadBlock = (
+    <CompanyLetterheadBlock
+      profile={profile}
+      theme={theme}
+      onUploadLogo={onUploadLogo}
+      logoBusy={logoBusy}
+      onLogoSizeChange={onLogoSizeChange}
+    />
+  )
   const numberField = (
     <InlineField
       value={quote.number || ''}
@@ -283,7 +379,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
       <header className="qg-paper-header qg-exec-header">
         <div className="qg-exec-rule" aria-hidden="true" />
         <div className="qg-exec-top">
-          <CompanyLetterheadBlock profile={profile} theme={theme} />
+          {letterheadBlock}
           <div className="qg-exec-docmeta">
             <p className="qg-exec-eyebrow" style={{ color: theme.accent }}>{docLabel}</p>
             <div className="qg-exec-number">{numberField}</div>
@@ -329,7 +425,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
       <header className="qg-paper-header qg-mod-header">
         <div className="qg-mod-hero">
           <div className="qg-mod-hero-top">
-            <CompanyLetterheadBlock profile={profile} theme={theme} />
+            {letterheadBlock}
             <div className="qg-mod-number">
               <span className="qg-mod-number-dot" aria-hidden="true" />
               {numberField}
@@ -378,7 +474,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
     return (
       <header className="qg-paper-header qg-atl-header">
         <div className="qg-atl-top">
-          <CompanyLetterheadBlock profile={profile} theme={theme} />
+          {letterheadBlock}
           <div className="qg-atl-no">
             <span className="qg-atl-no-label">No.</span>
             {numberField}
@@ -427,7 +523,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
     return (
       <header className="qg-paper-header qg-brief-header">
         <div className="qg-brief-bar">
-          <CompanyLetterheadBlock profile={profile} theme={theme} />
+          {letterheadBlock}
           <div className="qg-brief-bar-right">
             <p className="qg-brief-doc">{docLabel}</p>
             <div className="qg-brief-no">{numberField}</div>
@@ -465,7 +561,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
     return (
       <header className="qg-paper-header qg-paper-header--formal">
         <div className="qg-formal-letterhead">
-          <CompanyLetterheadBlock profile={profile} theme={theme} />
+          {letterheadBlock}
           <div className="qg-formal-docmeta">
             <p className="qg-doc-title" style={{ color: theme.accent, fontFamily: theme.titleFont }}>{docLabel}</p>
             <div className="qg-formal-docmeta-no">{numberField}</div>
@@ -503,7 +599,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
   return (
     <header className="qg-paper-header" style={{ borderBottomColor: theme.tableBorder }}>
       <div className="qg-header-two-col">
-        <CompanyLetterheadBlock profile={profile} theme={theme} />
+        {letterheadBlock}
         <div className="qg-header-right">
           <p className="qg-doc-title" style={{ color: theme.accent, fontFamily: theme.titleFont }}>{docLabel}</p>
           <div className="qg-meta-table qg-meta-table--right" style={{ marginTop: 12 }}>
@@ -1033,7 +1129,14 @@ export function ExportMenu({ onExport, busy, label = 'Export', variant = 'primar
         onClick={() => setOpen(o => !o)}
         className={buttonClass}
       >
-        {busy ? 'Preparing…' : `${label} ▾`}
+        {busy ? 'Preparing…' : (
+          variant === 'footer' ? (
+            <>
+              <span className="qg-export-label-full">{label} ▾</span>
+              <span className="qg-export-label-short">Export ▾</span>
+            </>
+          ) : `${label} ▾`
+        )}
       </button>
       {menu}
     </div>
@@ -1052,7 +1155,7 @@ function clampFontSize(value, fallback) {
 /* Quick one-click: live preview → lightweight vector PDF (not screenshots). */
 export function PreviewPdfButton({ onExport, busy, variant = 'header' }) {
   const buttonClass = variant === 'footer'
-    ? 'qg-ready-export-btn qg-preview-pdf-btn'
+    ? 'qg-ready-export-btn'
     : variant === 'header'
       ? 'rounded-lg border border-[#1A73E8] bg-white px-4 py-2 text-sm font-semibold text-[#1A73E8] shadow-sm hover:bg-[#F5F9FF] disabled:opacity-60'
       : 'rounded-xl border border-[#1A73E8] bg-white px-5 py-2 text-sm font-semibold text-[#1A73E8] shadow-sm hover:bg-[#F5F9FF] disabled:opacity-60'
@@ -1064,7 +1167,12 @@ export function PreviewPdfButton({ onExport, busy, variant = 'header' }) {
       className={buttonClass}
       title="Download the quotation exactly as you see it in the preview"
     >
-      {busy ? 'Preparing PDF…' : 'Download preview in PDF'}
+      {busy ? 'Preparing PDF…' : (
+        <>
+          <span className="qg-preview-pdf-label-full">Download preview in PDF</span>
+          <span className="qg-preview-pdf-label-short">Download PDF</span>
+        </>
+      )}
     </button>
   )
 }
@@ -1090,23 +1198,23 @@ export function QuoteStudioToolbar({
   }
   return (
     <div className="qg-studio-toolbar no-print">
-      <div className="flex flex-wrap items-center gap-3">
-        <div>
-          <p className="text-sm font-semibold text-slate-800">Live preview</p>
-          <p className="mt-0.5 text-[11px] text-slate-500">{saveFlash || saveStatusLabel}</p>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {Object.values(PAPER_THEMES).map(t => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => onPaperStyleChange(t.id)}
-              className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-all ${paperStyle === t.id ? 'bg-[#1A73E8] text-white shadow-sm' : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50'}`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+      <div>
+        <p className="text-sm font-semibold text-slate-800">Live preview</p>
+        <p className="mt-0.5 text-[11px] text-slate-500">{saveFlash || saveStatusLabel}</p>
+      </div>
+      <div className="qg-studio-themes">
+        {Object.values(PAPER_THEMES).map(t => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onPaperStyleChange(t.id)}
+            className={`qg-studio-theme-pill ${paperStyle === t.id ? 'is-on' : ''}`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div className="qg-studio-toolbar-meta">
         <div className="qg-table-theme">
           <span className="qg-table-theme-label">Colour</span>
           <div className="qg-table-theme-swatches">
@@ -1168,13 +1276,12 @@ export function QuoteStudioToolbar({
           <span>px</span>
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="qg-studio-toolbar-exports flex flex-wrap items-center gap-2">
         <button type="button" onClick={onSaveFlash}
           className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
           Save
         </button>
         <PreviewPdfButton onExport={onExport} busy={pdfBusy} variant="header" />
-        <ExportMenu onExport={onExport} busy={pdfBusy} label="Export" variant="header" />
       </div>
       {pdfNote ? (
         <div
@@ -1191,49 +1298,20 @@ export function QuoteStudioToolbar({
 
 /* ─── Footer bar (Ready to export) ──────────────────────────────────────── */
 export function QuoteStudioFooterBar({ onExport, pdfBusy, onHome }) {
-  const [visible, setVisible] = React.useState(false)
-  const lastY = React.useRef(typeof window !== 'undefined' ? window.scrollY : 0)
-
   React.useEffect(() => {
-    const show = () => setVisible(true)
-    const hideIfTop = (y) => {
-      if (y <= 8) setVisible(false)
-    }
-    const onScroll = () => {
-      const y = window.scrollY || document.documentElement.scrollTop || 0
-      if (y > lastY.current + 1) show()
-      hideIfTop(y)
-      lastY.current = y
-    }
-    const onWheel = (e) => {
-      if (e.deltaY > 4) show()
-    }
-    lastY.current = window.scrollY || 0
-    window.addEventListener('scroll', onScroll, { passive: true })
-    window.addEventListener('wheel', onWheel, { passive: true })
-    onScroll()
-    return () => {
-      window.removeEventListener('scroll', onScroll)
-      window.removeEventListener('wheel', onWheel)
-      document.body.classList.remove('qg-export-dock-on')
-    }
-  }, [])
-
-  React.useEffect(() => {
-    document.body.classList.toggle('qg-export-dock-on', visible)
+    document.body.classList.add('qg-export-dock-on')
     return () => document.body.classList.remove('qg-export-dock-on')
-  }, [visible])
+  }, [])
 
   return (
     <>
       <div className="qg-studio-footer-slot no-print" aria-hidden="true" />
-      <div className={`qg-studio-footer no-print ${visible ? 'qg-studio-footer--show' : ''}`}>
-        <button type="button" onClick={onHome} className="text-sm font-medium text-slate-500 hover:text-slate-700">
+      <div className="qg-studio-footer qg-studio-footer--show no-print">
+        <button type="button" onClick={onHome} className="qg-studio-footer-home">
           ← Back to home
         </button>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="qg-studio-footer-actions">
           <PreviewPdfButton onExport={onExport} busy={pdfBusy} variant="footer" />
-          <ExportMenu onExport={onExport} busy={pdfBusy} label="Ready to export" variant="footer" />
         </div>
       </div>
     </>

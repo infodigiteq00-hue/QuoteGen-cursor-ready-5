@@ -116,12 +116,16 @@ export function normalizePaperStyle(id) {
   return isPaperStyleId(id) ? id : DEFAULT_PAPER_STYLE
 }
 
-export function readPreferredPaperStyle() {
+export function peekPreferredPaperStyle() {
   try {
     const stored = localStorage.getItem(PAPER_STYLE_STORAGE_KEY)
-    return normalizePaperStyle(stored)
+    return isPaperStyleId(stored) ? stored : null
   } catch { /* private mode */ }
-  return DEFAULT_PAPER_STYLE
+  return null
+}
+
+export function readPreferredPaperStyle() {
+  return peekPreferredPaperStyle() || DEFAULT_PAPER_STYLE
 }
 
 export function writePreferredPaperStyle(id) {

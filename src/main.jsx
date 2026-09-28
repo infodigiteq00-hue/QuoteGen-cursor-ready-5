@@ -70,9 +70,13 @@ import {
   QuoteStudioFooterBar,
   QuoteStudioToolbar,
   QuoteToSubjectBlock,
-  LayoutStyleCards
+  LayoutStyleCards,
+  LOGO_SIZE_DEFAULT,
+  displayLogoWidth
 } from './QuoteStudio.jsx'
-import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId, normalizePaperStyle } from './quotePaperThemes.js'
+import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, peekPreferredPaperStyle, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId, normalizePaperStyle } from './quotePaperThemes.js'
+import { peekPreferredColumns, readPreferredColumns, writePreferredColumns } from './quoteLayoutPrefs.js'
+import QuoteGenerateCeremony, { CEREMONY_MIN_MS } from './QuoteGenerateCeremony.jsx'
 import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, recordMetaLeadProgress } from './metaTrialLead.js'
 import { A4_WIDTH_PX, defaultA4Pages, measureA4Blocks, normalizeA4Pages, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
@@ -1071,7 +1075,7 @@ function App() {
   const [view, setView] = useState('home')
   const [customer, setCustomer] = useState({ name: '', company: '', gst: '', location: '', shippingSame: true, shippingLocation: '' })
   const [enquiry, setEnquiry] = useState('')
-  const [columns, setColumns] = useState(DEFAULT_DATA_COLUMNS)
+  const [columns, setColumns] = useState(() => readPreferredColumns(DEFAULT_DATA_COLUMNS))
   const [quote, setQuote] = useState(null)
   const [quoteId, setQuoteId] = useState(null)
   const [saveStatus, setSaveStatus] = useState('idle')
@@ -1110,9 +1114,16 @@ function App() {
   const [columnLayoutOpen, setColumnLayoutOpen] = useState(false)
   const [layoutPreview, setLayoutPreview] = useState(null)
   const [paperStyle, setPaperStyleState] = useState(() => readPreferredPaperStyle())
+  const paperStyleSaveRef = useRef(null)
   const rememberPaperStyle = (id) => {
     const next = writePreferredPaperStyle(id)
     setPaperStyleState(next)
+    if (paperStyleSaveRef.current) clearTimeout(paperStyleSaveRef.current)
+    paperStyleSaveRef.current = setTimeout(() => {
+      saveCompanyProfile({ paperStyle: next }).then((result) => {
+        if (result?.profile) setCompanyProfile(result.profile)
+      }).catch(() => { /* guest / persistence optional */ })
+    }, 450)
     return next
   }
   const [uploadLayoutName, setUploadLayoutName] = useState('')
@@ -1121,6 +1132,7 @@ function App() {
   const [newQuoteSession, setNewQuoteSession] = useState(0)
   const [knowledgeOpen, setKnowledgeOpen] = useState(true)
   const [metaTrialDemo, setMetaTrialDemo] = useState(false)
+  const [generateCeremony, setGenerateCeremony] = useState(null)
   const [metaLandingReturn, setMetaLandingReturn] = useState(false)
   const [metaTrialCompany, setMetaTrialCompany] = useState(false)
   const metaNextConsumedRef = useRef(false)
@@ -1257,7 +1269,34 @@ function App() {
         setCompanyDraft({})
         return
       }
-      if (profileRes.profile) setCompanyProfile(profileRes.profile)
+      if (profileRes.profile) {
+        const profile = profileRes.profile
+        setCompanyProfile(profile)
+        const stored = peekPreferredPaperStyle()
+        if (stored) {
+          setPaperStyleState(stored)
+          const accountStyle = isPaperStyleId(profile.paperStyle) ? profile.paperStyle : null
+          if (accountStyle !== stored) {
+            saveCompanyProfile({ paperStyle: stored }).then((result) => {
+              if (result?.profile) setCompanyProfile(result.profile)
+            }).catch(() => { /* best-effort account default */ })
+          }
+        } else if (profile.paperStyle) {
+          setPaperStyleState(writePreferredPaperStyle(profile.paperStyle))
+        }
+        const storedCols = peekPreferredColumns()
+        if (storedCols?.length) {
+          setColumns(storedCols)
+          if (columnLayoutKey(profile.columnLayout) !== columnLayoutKey(storedCols)) {
+            saveCompanyProfile({ columnLayout: storedCols }).then((result) => {
+              if (result?.profile) setCompanyProfile(result.profile)
+            }).catch(() => { /* best-effort account default */ })
+          }
+        } else if (profile.columnLayout?.length) {
+          const nextCols = writePreferredColumns(profile.columnLayout)
+          setColumns(nextCols)
+        }
+      }
     } catch {
       /* profile optional on landing */
     }
@@ -1518,9 +1557,12 @@ function App() {
   const goNewQuote = () => {
     const layouts = collectSavedLayouts(companyProfile, recentQuotations)
     const active = layouts.find(l => l.id === companyProfile?.activeColumnLayoutId) || layouts[0]
-    setColumns(active?.columns?.length
-      ? active.columns.map(c => ({ ...c }))
-      : (companyProfile?.columnLayout?.length ? companyProfile.columnLayout : DEFAULT_DATA_COLUMNS))
+    const storedCols = peekPreferredColumns()
+    setColumns(storedCols?.length
+      ? storedCols.map(c => ({ ...c }))
+      : active?.columns?.length
+        ? active.columns.map(c => ({ ...c }))
+        : (companyProfile?.columnLayout?.length ? companyProfile.columnLayout : DEFAULT_DATA_COLUMNS))
     setSelectedTemplateId(companyProfile?.defaultUploadTemplateId || '')
     setNewQuoteStep(1)
     setNewQuoteSession(n => n + 1)
@@ -1781,6 +1823,10 @@ function App() {
     const enquiryText = String(overrides.enquiry ?? enquiry).trim()
     const colsOverride = Array.isArray(overrides.columns) ? overrides.columns : null
     if (!enquiryText) return setError('Paste the customer enquiry to generate a quotation.')
+    const playCeremony = overrides.ceremony !== false
+    const colsForCeremony = colsOverride || columns
+    if (playCeremony) setGenerateCeremony({ enquiry: enquiryText, columns: colsForCeremony })
+    const ceremonyStarted = Date.now()
     setLoading(true); setError('')
     try {
       let colsForAi = colsOverride || columns
@@ -1798,7 +1844,8 @@ function App() {
       const response = await fetch('/api/generate-quotation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enquiry: enquiryText, customer, columns: colsForAi, layoutRoles })
+        body: JSON.stringify({ enquiry: enquiryText, customer, columns: colsForAi, layoutRoles }),
+        signal: AbortSignal.timeout(40000)
       })
       const data = await readApiResponse(response)
       if (!response.ok) throw new Error(data.error)
@@ -1817,7 +1864,7 @@ function App() {
         companyProfile: companySeedFromLead(readMetaAdsLead(), companyProfile).profile || companyProfile || undefined,
         layoutRef: selectedTemplateId || 'default',
         uploadTemplateId: selectedTemplateId || null,
-        paperStyle: selectedTemplateId ? undefined : readPreferredPaperStyle(),
+        paperStyle: selectedTemplateId ? undefined : (companyProfile?.paperStyle || readPreferredPaperStyle()),
         tableColorId: 'blue',
         watermarkEnabled: true,
         fields: {
@@ -1827,14 +1874,24 @@ function App() {
       }
 
       await openQuoteInEditor(built, { id: null, template: tplData || null })
+      if (playCeremony) {
+        const wait = CEREMONY_MIN_MS - (Date.now() - ceremonyStarted)
+        if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait))
+      }
       return built
     } catch (e) {
+      const timedOut = e?.name === 'TimeoutError' || e?.name === 'AbortError'
       setError(e.message === 'Failed to fetch'
         ? 'Cannot reach the API server. Run npm run dev in the project folder and keep that terminal open.'
-        : e.message || 'Something went wrong. Please retry.')
+        : timedOut
+          ? 'That took too long. Please try Create quotation again.'
+          : e.message || 'Something went wrong. Please retry.')
       return null
     }
-    finally { setLoading(false) }
+    finally {
+      setLoading(false)
+      if (playCeremony) setGenerateCeremony(null)
+    }
   }
 
   // "Fill it in myself" — no AI: one blank row in the layout they just picked.
@@ -1864,7 +1921,7 @@ function App() {
         companyProfile: companySeedFromLead(readMetaAdsLead(), companyProfile).profile || companyProfile || undefined,
         layoutRef: selectedTemplateId || 'default',
         uploadTemplateId: selectedTemplateId || null,
-        paperStyle: selectedTemplateId ? undefined : readPreferredPaperStyle(),
+        paperStyle: selectedTemplateId ? undefined : (companyProfile?.paperStyle || readPreferredPaperStyle()),
         tableColorId: 'blue',
         watermarkEnabled: true,
         fields: { validUntil: defaultValidUntil(15), referenceNo: '' }
@@ -2009,14 +2066,20 @@ function App() {
           setPersistenceConfigured(true)
         }}
         onGenerate={async (nextColumns) => {
+          writePreferredColumns(nextColumns)
           try {
             await saveCompanyProfile({ columnLayout: nextColumns })
           } catch { /* profile save is best-effort during trial */ }
-          return makeQuote({ columns: nextColumns, enquiry })
+          return makeQuote({ columns: nextColumns, enquiry, ceremony: false })
         }}
         onEnterEditor={() => {
           const preferred = readPreferredPaperStyle()
-          setQuote((q) => (q ? { ...q, paperStyle: q.paperStyle || preferred } : q))
+          rememberPaperStyle(preferred)
+          if (Array.isArray(quote?.columns) && quote.columns.length) {
+            writePreferredColumns(quote.columns)
+            setColumns(quote.columns)
+          }
+          setQuote((q) => (q ? { ...q, paperStyle: preferred } : q))
           setMetaTrialDemo(false)
           try { sessionStorage.removeItem('qg_meta_guide') } catch { /* ignore */ }
         }}
@@ -2025,6 +2088,15 @@ function App() {
           try { sessionStorage.removeItem('qg_meta_guide') } catch { /* ignore */ }
           setMetaLandingReturn(true)
         }}
+      />
+    )
+  }
+
+  if (generateCeremony) {
+    return (
+      <QuoteGenerateCeremony
+        enquiry={generateCeremony.enquiry}
+        columns={generateCeremony.columns}
       />
     )
   }
@@ -2136,7 +2208,7 @@ function App() {
       onHide={() => hideSidebar(true)}
     />
 
-    <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+    <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       <WsHeader
         title={wsPageTitle}
         hint={wsPageHint}
@@ -2150,7 +2222,7 @@ function App() {
         }}
       />
 
-      <div style={{ padding: isMobile ? '16px 16px 56px' : '24px 30px 64px', maxWidth: workspaceView === 'company' ? 'none' : 1440, width: '100%' }}>
+      <div style={{ padding: isMobile && workspaceView === 'new' ? '10px 12px 12px' : (isMobile ? '16px 16px 56px' : '24px 30px 64px'), maxWidth: workspaceView === 'company' ? 'none' : 1440, width: '100%', flex: workspaceView === 'new' ? 1 : undefined, minHeight: workspaceView === 'new' ? 0 : undefined, display: workspaceView === 'new' ? 'flex' : undefined, flexDirection: workspaceView === 'new' ? 'column' : undefined }}>
         {historyError && workspaceView !== 'new' && (
           <div style={{ marginBottom: 20, borderRadius: 12, background: '#FDF2F2', border: '1px solid #E7CFCF', padding: '12px 16px', fontSize: 14.5, color: '#B03A3A' }}>{historyError}</div>
         )}
@@ -2172,6 +2244,7 @@ function App() {
         )}
 
         {workspaceView === 'new' && (
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <WsNew
             key={newQuoteSession}
             enquiry={enquiry}
@@ -2202,6 +2275,7 @@ function App() {
             trialDemo={metaTrialDemo}
             onDismissTrialDemo={() => setMetaTrialDemo(false)}
           />
+          </div>
         )}
 
         {workspaceView === 'list' && (
@@ -2368,9 +2442,9 @@ function CompanyLetterhead({ profile, compact = false, hideLogo = false, showPla
   const headerText = profile?.headerText?.trim() || ''
   const logoUrl = hideLogo ? null : profile?.logoUrl
   const headerImageUrl = profile?.headerImageUrl
-  const width = Math.max(24, Math.min(320, Number(profile?.logoWidth) || 64))
-  const height = profile?.logoHeight != null
-    ? Math.max(24, Math.min(240, Number(profile.logoHeight) || 64))
+  const width = displayLogoWidth(profile)
+  const height = profile?.logoHeight != null && Number(profile.logoWidth) === width
+    ? Math.max(24, Math.min(240, Number(profile.logoHeight) || width))
     : null
   const initial = name.charAt(0).toUpperCase() || 'Q'
   const showMark = !hideLogo
@@ -2392,7 +2466,7 @@ function CompanyLetterhead({ profile, compact = false, hideLogo = false, showPla
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: dense ? 10 : 14 }}>
       {showMark && (
-        <div style={{ flexShrink: 0, width: Math.min(width, compact ? 40 : 80) }}>
+        <div style={{ flexShrink: 0, width: compact ? Math.min(width, 52) : width, maxWidth: compact ? Math.min(width, 52) : width, minWidth: 0, overflow: 'hidden' }}>
           {logoUrl ? (
             <img
               src={logoUrl}
@@ -2400,8 +2474,10 @@ function CompanyLetterhead({ profile, compact = false, hideLogo = false, showPla
               onError={onQuoteAssetImgError}
               style={{
                 width: '100%',
+                maxWidth: '100%',
+                minWidth: 0,
                 height: height || 'auto',
-                maxHeight: height || (compact || dense ? 48 : 80),
+                maxHeight: height || (compact || dense ? 64 : 160),
                 objectFit: 'contain',
                 display: 'block',
                 background: 'transparent'
@@ -3204,8 +3280,8 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
   const [footerFields, setFooterFields] = useState(() => parseFooterFields(profile?.footerText))
   const [headerMode, setHeaderMode] = useState(profile?.headerImageUrl ? 'image' : 'text')
   const [footerMode, setFooterMode] = useState(profile?.footerImageUrl ? 'image' : 'text')
-  const [logoWidth, setLogoWidth] = useState(profile?.logoWidth ?? 64)
-  const [logoHeight, setLogoHeight] = useState(profile?.logoHeight ?? 64)
+  const [logoWidth, setLogoWidth] = useState(displayLogoWidth(profile))
+  const [logoHeight, setLogoHeight] = useState(profile?.logoHeight ?? LOGO_SIZE_DEFAULT)
   const [lockAspect, setLockAspect] = useState(true)
   const [aspect, setAspect] = useState(
     profile?.logoWidth && profile?.logoHeight ? profile.logoWidth / profile.logoHeight : 1
@@ -3224,8 +3300,8 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
   useEffect(() => {
     if (!profile) return
     setCompanyName(profile.companyName || '')
-    setLogoWidth(profile.logoWidth ?? 120)
-    setLogoHeight(profile.logoHeight ?? 48)
+    setLogoWidth(displayLogoWidth(profile))
+    setLogoHeight(profile.logoHeight ?? LOGO_SIZE_DEFAULT)
     if (profile.logoWidth && profile.logoHeight) {
       setAspect(profile.logoWidth / profile.logoHeight)
     }
@@ -3266,8 +3342,8 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
     headerImageUrl: headerMode === 'image' ? profile?.headerImageUrl : null,
     footerImageUrl: footerMode === 'image' ? profile?.footerImageUrl : null,
     footerFit: profile?.footerFit,
-    logoWidth: Number(logoWidth) || 64,
-    logoHeight: Number(logoHeight) || 64
+    logoWidth: Number(logoWidth) || LOGO_SIZE_DEFAULT,
+    logoHeight: Number(logoHeight) || LOGO_SIZE_DEFAULT
   }
 
   const savedHeaderMode = profile?.headerImageUrl ? 'image' : 'text'
@@ -3276,7 +3352,7 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
     String(companyName || '') !== String(profile?.companyName || '') ||
     String(headerMode === 'text' ? headerText : '') !== String(profile?.headerText || '') ||
     String(footerMode === 'text' ? footerText : '') !== String(profile?.footerText || '') ||
-    Number(logoWidth) !== Number(profile?.logoWidth ?? logoWidth) ||
+    Number(logoWidth) !== displayLogoWidth(profile) ||
     Number(logoHeight) !== Number(profile?.logoHeight ?? logoHeight) ||
     headerMode !== savedHeaderMode ||
     footerMode !== savedFooterMode
@@ -3411,8 +3487,8 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
       const localPreview = await fileToDataUrl(file)
       if (localPreview) setLogoPreviewUrl(localPreview)
       const result = await uploadCompanyLogo(file, {
-        logoWidth: Number(logoWidth) || 64,
-        logoHeight: Number(logoHeight) || 64
+        logoWidth: Number(logoWidth) || LOGO_SIZE_DEFAULT,
+        logoHeight: Number(logoHeight) || LOGO_SIZE_DEFAULT
       })
       if (result.unavailable) {
         onUnavailable?.()
@@ -3596,7 +3672,7 @@ function CompanyBrandingPanel({ open, onToggle, profile, persistenceConfigured, 
               type="range"
               min={24}
               max={320}
-              value={Number(logoWidth) || 120}
+              value={Number(logoWidth) || LOGO_SIZE_DEFAULT}
               onChange={e => handleWidthChange(e.target.value)}
               disabled={!persistenceConfigured}
               className="mt-3 w-full accent-[#1A73E8]"
@@ -4293,7 +4369,7 @@ function SeriesSettingsPanel({ open, onToggle, profile, persistenceConfigured, o
   )
 }
 
-function ColumnBuilder({ columns, setColumns }) {
+function ColumnBuilder({ columns, setColumns, compact = false }) {
   const [showAdd, setShowAdd] = useState(false)
   const [customName, setCustomName] = useState('')
   const [customType, setCustomType] = useState('text')
@@ -4395,7 +4471,7 @@ function ColumnBuilder({ columns, setColumns }) {
   }
 
   return (
-    <div className="mt-5 rounded-2xl border border-sand bg-[#f7f9f7] p-4">
+    <div className={`ws-column-builder mt-5 rounded-2xl border border-sand bg-[#f7f9f7] p-4${compact ? ' is-compact' : ''}`}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-semibold text-slate-700">Quotation columns</p>
         <span className="hidden text-xs text-slate-400 sm:inline">Drag to reorder · click to rename · hover to remove</span>
@@ -4509,41 +4585,35 @@ function ColumnBuilder({ columns, setColumns }) {
         </table>
       </div>
 
-      <div className="relative mt-3 flex justify-end">
-        <button
-          type="button"
-          onClick={() => setShowAdd(!showAdd)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-sand bg-white px-3 py-1.5 text-xs font-semibold text-moss outline-none transition hover:border-moss hover:bg-blue-50 focus:ring-2 focus:ring-blue-50"
-        >
-          + Add column
-        </button>
-        {showAdd && (
-          <div className="absolute bottom-full right-0 z-30 mb-2 w-[22rem] rounded-2xl border border-sand bg-white p-4 shadow-soft">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold text-slate-700">Add column</p>
-              <button
-                type="button"
-                onClick={() => setShowAdd(false)}
-                title="Close"
-                className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-              >
-                ×
-              </button>
+      <div className="mt-3">
+        {!showAdd ? (
+          <button
+            type="button"
+            onClick={() => setShowAdd(true)}
+            className="ws-add-column-toggle"
+          >
+            + Add column
+          </button>
+        ) : (
+          <div className="ws-add-column-panel">
+            <div className="ws-add-column-head">
+              <p>Add more columns</p>
+              <button type="button" onClick={() => setShowAdd(false)}>Done</button>
             </div>
             <input
               value={customName}
               onChange={e => setCustomName(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !duplicateName) submitColumn() }}
-              placeholder="Column name (optional)"
+              placeholder="Custom column name"
               aria-label="Column name"
-              className="w-full rounded-lg border border-sand px-3 py-2 text-sm outline-none focus:border-moss focus:ring-2 focus:ring-blue-50"
+              className="ws-add-column-name"
             />
             {duplicateName && (
               <p className="mt-1.5 text-[11px] text-rose-500">A column called “{customName.trim()}” already exists.</p>
             )}
 
-            <p className="mb-1.5 mt-3 text-xs font-medium text-slate-600">Type</p>
-            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Column type">
+            <p className="ws-add-column-label">Type</p>
+            <div className="ws-add-column-chips" role="group" aria-label="Column type">
               {BUILDER_COLUMN_TYPES.map(option => (
                 <button
                   key={option.type}
@@ -4555,107 +4625,95 @@ function ColumnBuilder({ columns, setColumns }) {
                   }}
                   title={`${option.label} — ${option.hint}`}
                   aria-pressed={customType === option.type}
-                  className={`rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${customType === option.type ? 'border-moss bg-moss text-white' : 'border-sand bg-white text-slate-600 hover:border-moss hover:bg-blue-50 hover:text-moss'}`}
+                  className={`ws-add-column-chip${customType === option.type ? ' is-on' : ''}`}
                 >
                   {COLUMN_TYPE_LABELS[option.type] || option.label.replace(/ column$/i, '')}
                 </button>
               ))}
             </div>
-            <p className="mt-1.5 text-[11px] leading-tight text-slate-400">
+            <p className="ws-add-column-hint">
               {selectedType.hint}
               {!customName.trim() && <> · named “{selectedType.defaultLabel}” unless you type a name</>}
             </p>
 
             {(customType === 'tax' || customType === 'discount') && (
-              <div className="mt-3">
-                <p className="mb-1.5 text-xs font-medium text-slate-600">How should this work?</p>
-                <div className="flex gap-2">
-                  {[
-                    ['percent', '% wise'],
-                    ['amount', 'Amount wise']
-                  ].map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setSpecialMode(value)}
-                      className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${specialMode === value ? 'border-moss bg-blue-50 text-moss' : 'border-sand bg-white text-slate-600 hover:bg-slate-50'}`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+              <div className="ws-add-column-chips" style={{ marginTop: 10 }}>
+                {[
+                  ['percent', '% wise'],
+                  ['amount', 'Amount wise']
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setSpecialMode(value)}
+                    className={`ws-add-column-chip${specialMode === value ? ' is-on' : ''}`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             )}
 
             {customType === 'hsn' && (
-              <div className="mt-3">
-                <p className="mb-1.5 text-xs font-medium text-slate-600">Which code length?</p>
-                <div className="flex gap-2">
-                  {[
-                    ['4', '4 digit'],
-                    ['8', '8 digit']
-                  ].map(([value, label]) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setHsnDigits(value)}
-                      className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${hsnDigits === value ? 'border-moss bg-blue-50 text-moss' : 'border-sand bg-white text-slate-600 hover:bg-slate-50'}`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
+              <div className="ws-add-column-chips" style={{ marginTop: 10 }}>
+                {[
+                  ['4', '4 digit'],
+                  ['8', '8 digit']
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setHsnDigits(value)}
+                    className={`ws-add-column-chip${hsnDigits === value ? ' is-on' : ''}`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             )}
 
             {customType !== 'image' && customType !== 'attachment' && customType !== 'tax' && customType !== 'discount' && customType !== 'hsn' && (
-              <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-sand bg-[#f7f9f7] px-3 py-2">
+              <label className="ws-add-column-formula">
                 <input
                   type="checkbox"
                   checked={wantFormula || customType === 'formula'}
                   onChange={e => setWantFormula(e.target.checked)}
-                  className="mt-0.5"
                 />
                 <span>
-                  <span className="block text-xs font-semibold text-slate-700">Calculate with a formula</span>
-                  <span className="block text-[11px] leading-snug text-slate-500">Like Excel — Quantity × Rate, or a custom formula. Use Formula column type, or fx on Amount.</span>
+                  <strong>Calculate with a formula</strong>
+                  <em>Like Excel — Quantity × Rate, or a custom formula.</em>
                 </span>
               </label>
             )}
 
-            <div className="mt-3">
-              <p className="mb-1.5 text-xs font-medium text-slate-600">Amount formulas</p>
-              <div className="flex flex-wrap gap-1.5">
-                {NAMED_AMOUNT_COLUMN_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    title={preset.hint}
-                    onClick={() => {
-                      const col = buildNamedAmountColumn(preset, columns)
-                      if (!col || columnExists(col.label)) return
-                      let nextColumns = insertColumnsBeforeUnit(columns, [col])
-                      nextColumns = adaptAmountFormula(nextColumns).columns
-                      setColumns(nextColumns)
-                      setShowAdd(false)
-                      setCustomName('')
-                    }}
-                    className="rounded-lg border border-sand bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:border-moss hover:bg-blue-50 hover:text-moss"
-                  >
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
-              <p className="mt-1.5 text-[11px] leading-tight text-slate-400">
-                Built-in Amount stays as Quantity × Rate. These are extra calculated columns.
-              </p>
+            <p className="ws-add-column-label">Amount formulas</p>
+            <div className="ws-add-column-chips">
+              {NAMED_AMOUNT_COLUMN_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  title={preset.hint}
+                  onClick={() => {
+                    const col = buildNamedAmountColumn(preset, columns)
+                    if (!col || columnExists(col.label)) return
+                    let nextColumns = insertColumnsBeforeUnit(columns, [col])
+                    nextColumns = adaptAmountFormula(nextColumns).columns
+                    setColumns(nextColumns)
+                    setShowAdd(false)
+                    setCustomName('')
+                  }}
+                  className="ws-add-column-chip"
+                >
+                  + {preset.label}
+                </button>
+              ))}
             </div>
 
             <button
               type="button"
               onClick={submitColumn}
               disabled={duplicateName}
-              className="mt-3 w-full rounded-lg bg-moss px-3 py-2 text-xs font-semibold text-white transition hover:bg-[#1558b0] disabled:cursor-not-allowed disabled:opacity-40"
+              className="ws-add-column-submit"
             >
               Add column
             </button>
@@ -5357,17 +5415,17 @@ function defaultWidthForColumn(col, fontPx = LAYOUT_FONT_PX) {
 
 /** Same compact proportions as the Meta trial unlock / final-preview table. */
 function formalWidthForColumn(col) {
-  if (col?.id === 'description' || /desc|particular|item/i.test(String(col?.label || ''))) return 360
-  if (col?.id === 'unit' || /unit|uom/i.test(String(col?.label || ''))) return 64
-  if (col?.id === 'quantity' || /qty|quantity/i.test(String(col?.label || ''))) return 72
-  if (col?.id === 'rate' || /rate|price/i.test(String(col?.label || ''))) return 80
-  if (col?.id === 'amount' || /amount|total/i.test(String(col?.label || ''))) return 90
+  if (col?.id === 'description' || /desc|particular|item/i.test(String(col?.label || ''))) return 320
+  if (col?.id === 'unit' || /unit|uom/i.test(String(col?.label || ''))) return 56
+  if (col?.id === 'quantity' || /qty|quantity/i.test(String(col?.label || ''))) return 78
+  if (col?.id === 'rate' || /rate|price/i.test(String(col?.label || ''))) return 108
+  if (col?.id === 'amount' || /amount|total/i.test(String(col?.label || ''))) return 124
   if (isImageColumn(col)) return 72
   if (isAttachmentColumn(col)) return 88
-  if (columnType(col) === 'hsn') return 70
-  if (isNestedColumn(col)) return 70
-  if (columnType(col) === 'tax' || columnType(col) === 'discount') return 72
-  return 88
+  if (columnType(col) === 'hsn') return 76
+  if (isNestedColumn(col)) return 76
+  if (columnType(col) === 'tax' || columnType(col) === 'discount') return 80
+  return 96
 }
 
 function isCompactColumn(col) {
@@ -5401,11 +5459,13 @@ function contentWidthForNumericColumn(col, items, fontPx = LAYOUT_FONT_PX) {
   if (!isNumericFitColumn(col)) return 0
   const id = String(col.id || '').toLowerCase()
   const asMoney = id === 'amount' || id === 'rate' || isFormulaColumn(col)
-  let longest = String(col.label || '')
+  const candidates = [String(col.label || '')]
+  if (id === 'amount' || isFormulaColumn(col)) candidates.push('Qty × Rate')
   for (const item of items || []) {
     const shown = formattedNumericCell(item?.[col.id], asMoney)
-    if (shown.length > longest.length) longest = shown
+    if (shown) candidates.push(shown)
   }
+  const longest = candidates.reduce((best, next) => (next.length > best.length ? next : best), '')
   return widthForNumericText(longest, fontPx)
 }
 
@@ -5451,6 +5511,24 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const [logoColorNote, setLogoColorNote] = useState('')
   const logoExtractedUrl = useRef('')
   const profile = companyProfile || quote.companyProfile || null
+  const [logoSize, setLogoSize] = useState(null)
+  const logoSizeTimerRef = useRef(0)
+  const paperProfile = {
+    ...(profile || {}),
+    logoWidth: logoSize?.logoWidth ?? displayLogoWidth(profile),
+    logoHeight: logoSize?.logoHeight ?? profile?.logoHeight ?? null
+  }
+  const applyPaperLogoSize = ({ logoWidth, logoHeight }) => {
+    setLogoSize({ logoWidth, logoHeight })
+    window.clearTimeout(logoSizeTimerRef.current)
+    logoSizeTimerRef.current = window.setTimeout(() => {
+      saveCompanyProfile({ logoWidth, logoHeight })
+      updateQuote((q) => ({
+        ...q,
+        companyProfile: { ...(q.companyProfile || profile || {}), logoWidth, logoHeight }
+      }))
+    }, 400)
+  }
   const [historyQuotes, setHistoryQuotes] = useState([])
   const [catalogProducts, setCatalogProducts] = useState([])
   const suggestedFillSigRef = useRef('')
@@ -6201,7 +6279,6 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const getColWidth = (key) => {
     const base = getColWidthRaw(key)
     const col = columns.find(c => c.id === key || `${c.id}__rate` === key)
-    if (isFormalPaper && !columnWidths[key]) return base
     return Math.max(base, contentWidthForNumericColumn(col, items, LAYOUT_FONT_PX))
   }
   const rawColsWidth = columns.reduce((sum, col) => (
@@ -6212,11 +6289,13 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   if (isFormalPaper) {
     const descCol = columns.find(c => c.id === 'description' || /desc|particular|item/i.test(String(c?.label || '')))
     const descKey = descCol ? (isNestedColumn(descCol) ? `${descCol.id}__rate` : descCol.id) : null
-    const others = tableTotalWidthPx - (descKey && !columnWidths[descKey] ? getColWidth(descKey) : 0)
+    const others = SR_NO_COL_WIDTH + ROW_ACTIONS_COL_WIDTH + columns.reduce((sum, col) => {
+      const key = isNestedColumn(col) ? `${col.id}__rate` : col.id
+      if (descKey && key === descKey && !columnWidths[descKey]) return sum
+      return sum + getColWidth(key)
+    }, 0)
     if (descKey && !columnWidths[descKey]) {
-      const leftover = Math.max(220, A4_PRINTABLE_PX - others)
-      formalColWidths[descKey] = leftover
-      tableTotalWidthPx = others + leftover
+      formalColWidths[descKey] = Math.max(96, A4_PRINTABLE_PX - others)
     }
     tableTotalWidthPx = A4_PRINTABLE_PX
   }
@@ -6406,7 +6485,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       </div>
     </nav>
 
-  <div className="no-print mx-auto px-4 pt-4 sm:px-6" style={{ maxWidth: Math.max(900, paperWidthPx + 56) }}>
+  <div className="no-print mx-auto min-w-0 w-full px-4 pt-4 sm:px-6" style={{ maxWidth: Math.max(900, paperWidthPx + 56) }}>
     <QuoteStudioToolbar
       docLabel={docLabel}
       paperStyle={paperStyle}
@@ -6508,13 +6587,14 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         <div data-qg-block="header">
         <QuotePaperHeader
         theme={paperTheme}
-        profile={profile}
+        profile={paperProfile}
         quote={quote}
         update={update}
         docLabel={docLabel}
         isInvoice={isInvoice}
         onNumberCommit={commitQuoteNumberSeries}
         grandTotal={hasAmount ? money(quoteTotals.grandTotal) : ''}
+        onLogoSizeChange={applyPaperLogoSize}
       />
         </div>
         ) : null}
@@ -7602,18 +7682,18 @@ function WsHome({ greetingWord, greetingName, stats, recent, topClients, onOpen,
         <h1 style={{ margin: '0 0 10px', fontSize: 29, lineHeight: 1.15, letterSpacing: '-0.02em', fontWeight: 600 }}><span style={{ color: '#1A73E8' }}>Paste the enquiry.</span> Check the rates. <span style={{ color: '#1A73E8' }}>Send the quotation.</span></h1>
         <p style={{ margin: '0 0 6px', fontSize: 17, lineHeight: 1.55, color: '#4C5768', maxWidth: '64ch' }}>Email, WhatsApp message, phone notes, a PDF or a catalogue.</p>
         <p style={{ margin: '0 0 22px', fontSize: 17, lineHeight: 1.55, color: '#4C5768' }}>Quotegen does the magic.</p>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-          <button onClick={onNewQuote} style={wsPrimaryBtn}>
+        <div className="ws-home-actions">
+          <button type="button" onClick={onNewQuote} className="ws-flow-btn" style={wsPrimaryBtn}>
             <WsIcon path={WS_ICONS.plus} strokeWidth={2.6} />
             Make a new quote
           </button>
           {SHOW_OPEN_EDITOR ? (
-            <button onClick={onOpenEditor} style={wsSecondaryBtn}>
+            <button type="button" onClick={onOpenEditor} className="ws-flow-btn" style={wsSecondaryBtn}>
               <WsIcon path={WS_ICONS.editor} size={18} strokeWidth={2.2} />
               Open editor
             </button>
           ) : null}
-          <button onClick={() => onNav('list')} style={wsSecondaryBtn}>Open Recent quotations</button>
+          <button type="button" onClick={() => onNav('list')} className="ws-flow-btn" style={wsSecondaryBtn}>Open Recent quotations</button>
         </div>
       </section>
 
@@ -7724,6 +7804,9 @@ function LayoutChoicePreview({ kind = 'default' }) {
   )
 }
 
+/** Flip to true when custom Word/Excel upload should show on New quotation again. */
+const SHOW_CUSTOM_UPLOAD_LAYOUT = false
+
 function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, initialStep = 1, loading, error, detailsOpen, setDetailsOpen, customer, changeCustomer, columns, setColumns, savedLayouts = [], activeLayoutId = '', persistenceConfigured, onSavedProfile, uploadTemplates, selectedTemplateId, setSelectedTemplateId, paperStyle, setPaperStyle, isMobile, authUser = null, trialDemo = false, onDismissTrialDemo }) {
   const [step, setStep] = React.useState(initialStep)
   const [layoutChoice, setLayoutChoice] = React.useState('default') // 'default' | 'soon'
@@ -7750,6 +7833,8 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
   const recognitionRef = React.useRef(null)
   const voiceBaseRef = React.useRef('')
   const canProceed = enquiry.trim().length > 0
+  const showCustomUpload = SHOW_CUSTOM_UPLOAD_LAYOUT
+  const customBlocked = showCustomUpload && layoutChoice === 'soon'
   const layoutChanged = columnLayoutKey(columns) !== baselineKey
   const companySavedLayouts = savedLayouts.filter(l => l.source !== 'quote')
 
@@ -7874,12 +7959,23 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
 
   React.useEffect(() => {
     if (step !== 2 || appliedSavedRef.current || !savedLayouts.length || selectedTemplateId) return
+    const stored = peekPreferredColumns()
+    if (stored?.length) {
+      appliedSavedRef.current = true
+      const match = savedLayouts.find(l => columnLayoutKey(l.columns) === columnLayoutKey(stored))
+      if (match) setSelectedSavedId(match.id)
+      setColumns(stored.map(c => ({ ...c })))
+      if (match && match.source !== 'quote') setLayoutName(match.name)
+      setBaselineKey(columnLayoutKey(stored))
+      return
+    }
     const preferred = savedLayouts.find(l => l.id === (selectedSavedId || activeLayoutId)) || savedLayouts[0]
     if (!preferred?.columns?.length) return
     appliedSavedRef.current = true
     setSelectedSavedId(preferred.id)
     const next = preferred.columns.map(c => ({ ...c }))
     setColumns(next)
+    writePreferredColumns(next)
     if (preferred.source !== 'quote') setLayoutName(preferred.name)
     setBaselineKey(columnLayoutKey(next))
   }, [step, savedLayouts, selectedSavedId, activeLayoutId, selectedTemplateId, setColumns])
@@ -7918,6 +8014,7 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
       onSavedProfile?.(result.profile)
       setSelectedSavedId(id)
       setBaselineKey(columnLayoutKey(savedColumns))
+      writePreferredColumns(savedColumns)
       setLayoutNote(`Saved “${name}” — it will show in the list above.`)
       return true
     } catch (e) {
@@ -7936,6 +8033,7 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
     if (layout?.columns?.length) {
       const next = layout.columns.map(c => ({ ...c }))
       setColumns(next)
+      writePreferredColumns(next)
       if (layout.source !== 'quote') setLayoutName(layout.name)
       setBaselineKey(columnLayoutKey(next))
     }
@@ -8002,32 +8100,37 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
 
   if (step === 2) {
     return (
-      <div style={{ maxWidth: 680, margin: '0 auto' }}>
+      <div className="ws-new-step2">
+        <div className="ws-new-step2-body">
         {trialDemo && (
           <div style={{
-            marginBottom: 16,
+            marginBottom: 12,
             borderRadius: 14,
             border: '1px solid #C5D9F8',
             background: 'linear-gradient(180deg, #F3F8FF 0%, #EEF4FC 100%)',
-            padding: '14px 16px'
+            padding: '12px 14px'
           }}>
             <div style={{ fontSize: 14.5, fontWeight: 750, color: '#1A73E8' }}>Almost there</div>
             <div style={{ fontSize: 13.5, color: '#3D4859', marginTop: 2 }}>
-              Pick QuoteGen layout, then hit <strong>Generate quotation</strong> — watch the sample enquiry become a proper quote.
+              Check your columns, then hit <strong>Generate quotation</strong>.
             </div>
           </div>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 28 }}>
-          <button onClick={() => setStep(1)} style={{ border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', padding: '8px 16px', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#3D4859' }}>← Back</button>
+        <div className="ws-new-step2-head" style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: isMobile ? 12 : 20 }}>
+          <button onClick={() => setStep(1)} style={{ border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', padding: '8px 14px', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#3D4859', flex: '0 0 auto' }}>← Back</button>
           <div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: '#1a202c' }}>How should the quotation look?</div>
-            <div style={{ fontSize: 14, color: '#718096', marginTop: 2 }}>
-              {canProceed ? 'Pick one — you can switch later too.' : 'Pick a layout, then we’ll open a blank quotation in it.'}
+            <div style={{ fontSize: isMobile ? 18 : 20, fontWeight: 800, color: '#1a202c' }}>
+              {showCustomUpload ? 'How should the quotation look?' : 'Which columns do you usually want?'}
+            </div>
+            <div style={{ fontSize: 13.5, color: '#718096', marginTop: 2 }}>
+              {showCustomUpload
+                ? (canProceed ? 'Pick one — you can switch later too.' : 'Pick a layout, then we’ll open a blank quotation in it.')
+                : 'This is your default layout. Add more columns if you need them.'}
             </div>
           </div>
         </div>
 
-        {/* 2 big option cards */}
+        {showCustomUpload ? (
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
           {/* Option 1: QuoteGen default */}
           <button
@@ -8078,11 +8181,12 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
             </div>
           </button>
         </div>
+        ) : null}
 
         {/* Sub-options depending on choice */}
-        {layoutChoice === 'default' && (
-          <div style={{ marginTop: 20, border: '1.5px solid #e8edf3', borderRadius: 14, padding: 18, background: '#fff' }}>
-            <div style={{ marginBottom: 16 }}>
+        {(layoutChoice === 'default' || !showCustomUpload) && (
+          <div className="ws-column-card" style={{ marginTop: showCustomUpload ? 20 : 0, border: '1.5px solid #e8edf3', borderRadius: 14, padding: isMobile ? 12 : 18, background: '#fff' }}>
+            <div style={{ marginBottom: isMobile ? 10 : 16 }}>
                 <label style={{ display: 'block', fontSize: 13.5, fontWeight: 700, color: '#3D4859', marginBottom: 6 }}>Saved column layouts</label>
                 <select
                   value={selectedSavedId}
@@ -8094,17 +8198,19 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
                     <option key={layout.id} value={layout.id}>{layout.name}</option>
                   ))}
                 </select>
+                {!isMobile && (
                 <p style={{ marginTop: 6, fontSize: 12.5, color: '#94a3b8' }}>
                   {savedLayouts.length
                     ? 'Same layouts as Generate — pick one you already use, then fill the rows yourself.'
                     : 'Save a layout below and it will appear here for next time.'}
                 </p>
+                )}
               </div>
 
-            <div style={{ fontSize: 13.5, fontWeight: 700, color: '#3D4859', marginBottom: 12 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: '#3D4859', marginBottom: isMobile ? 8 : 12 }}>
               {savedLayouts.length > 0 ? 'Or set up columns' : 'Columns to include'}
             </div>
-            <ColumnBuilder columns={columns} setColumns={setColumns} />
+            <ColumnBuilder columns={columns} setColumns={setColumns} compact={isMobile} />
 
             {layoutChanged && (
             <div style={{ marginTop: 16 }}>
@@ -8155,7 +8261,7 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
           </div>
         )}
 
-        {layoutChoice === 'soon' && (
+        {showCustomUpload && layoutChoice === 'soon' && (
           <div style={{ marginTop: 20, border: '1.5px solid #e8edf3', borderRadius: 14, padding: 20, background: '#fff' }}>
             <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8', marginBottom: 8 }}>Feature — coming soon</div>
             <p style={{ margin: '0 0 12px', fontSize: 15, color: '#3D4859', lineHeight: 1.55 }}>
@@ -8191,7 +8297,7 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
         )}
 
         {/* Optional customer details */}
-        <button onClick={() => setDetailsOpen(!detailsOpen)} style={{ marginTop: 18, border: 0, background: 'none', color: '#1A73E8', fontSize: 14.5, fontWeight: 700, cursor: 'pointer', padding: 0 }}>
+        <button onClick={() => setDetailsOpen(!detailsOpen)} style={{ marginTop: isMobile ? 10 : 18, border: 0, background: 'none', color: '#1A73E8', fontSize: 14.5, fontWeight: 700, cursor: 'pointer', padding: 0 }}>
           {detailsOpen ? 'Hide customer details ↑' : '+ Add customer details (optional)'}
         </button>
         {detailsOpen && (
@@ -8208,33 +8314,35 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
         )}
 
         {error && <p style={{ marginTop: 14, borderRadius: 10, background: '#FDF2F2', padding: '10px 14px', fontSize: 14.5, color: '#B03A3A' }}>{error}</p>}
+        </div>
 
-        <div style={{ marginTop: 24, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <div className="ws-new-step2-foot">
+        <div className="ws-flow-actions ws-flow-actions--pair">
           {canProceed ? (
             <button
-              disabled={loading || layoutSaving || layoutChoice === 'soon'}
+              disabled={loading || layoutSaving || customBlocked}
               onClick={() => { setLayoutChoice('default'); continueWithLayout(onGenerate) }}
-              style={{ ...wsPrimaryBtn, opacity: (loading || layoutSaving || layoutChoice === 'soon') ? 0.5 : 1, fontSize: 17, padding: '0 32px', minHeight: 52 }}
+              className="ws-flow-btn"
+              style={{ ...wsPrimaryBtn, opacity: (loading || layoutSaving || customBlocked) ? 0.5 : 1, fontSize: 17, minHeight: 52 }}
             >
               {loading ? 'Understanding enquiry…' : 'Generate quotation →'}
             </button>
           ) : null}
           <button
             onClick={() => { setLayoutChoice('default'); continueWithLayout(onManual) }}
-            disabled={loading || layoutSaving || layoutChoice === 'soon'}
+            disabled={loading || layoutSaving || customBlocked}
+            className="ws-flow-btn"
             style={{
               ...(canProceed ? wsSecondaryBtn : wsPrimaryBtn),
               minHeight: 52,
               fontSize: canProceed ? undefined : 17,
-              padding: canProceed ? '0 28px' : '0 32px',
-              whiteSpace: 'nowrap',
-              minWidth: canProceed ? 210 : undefined,
-              opacity: (loading || layoutSaving || layoutChoice === 'soon') ? 0.5 : 1
+              opacity: (loading || layoutSaving || customBlocked) ? 0.5 : 1
             }}
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             {canProceed ? 'Fill it in myself' : (loading ? 'Opening…' : 'Open blank quotation →')}
           </button>
+        </div>
         </div>
       </div>
     )
@@ -8321,33 +8429,37 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
           onChange={onAttachInputChange}
           style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0 }}
         />
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 20 }}>
+        <div className="ws-flow-actions">
           <button
             type="button"
             disabled={!canProceed}
             onClick={() => setStep(2)}
-            style={{ ...wsPrimaryBtn, opacity: canProceed ? 1 : 0.45, fontSize: 16, padding: '0 28px', minHeight: 52 }}
+            className="ws-flow-btn"
+            style={{ ...wsPrimaryBtn, opacity: canProceed ? 1 : 0.45, fontSize: 16, minHeight: 52 }}
           >
             Next →
           </button>
-          <label
-            htmlFor={attachInputId}
-            style={{
-              ...wsSecondaryBtn,
-              minHeight: 52,
-              opacity: ingestBusy ? 0.55 : 1,
-              cursor: ingestBusy ? 'wait' : 'pointer',
-              pointerEvents: ingestBusy ? 'none' : 'auto'
-            }}
-          >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-            {ingestBusy ? 'Reading…' : 'Attach files or photos'}
-          </label>
-          <button type="button" onClick={toggleVoice} style={{ ...wsSecondaryBtn, minHeight: 52, background: voiceState === 'listening' ? '#E7EEFB' : '#fff', borderColor: voiceState === 'listening' ? '#1A73E8' : '#D5DDE9' }}>
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-            {voiceState === 'listening' ? 'Listening… tap to stop' : 'Speak it'}
-          </button>
-          <button type="button" onClick={() => setStep(2)} style={{ ...wsSecondaryBtn, minHeight: 52, padding: '0 28px', whiteSpace: 'nowrap', minWidth: 210 }}>
+          <div className="ws-flow-actions-row">
+            <label
+              htmlFor={attachInputId}
+              className="ws-flow-btn"
+              style={{
+                ...wsSecondaryBtn,
+                minHeight: 52,
+                opacity: ingestBusy ? 0.55 : 1,
+                cursor: ingestBusy ? 'wait' : 'pointer',
+                pointerEvents: ingestBusy ? 'none' : 'auto'
+              }}
+            >
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+              {ingestBusy ? 'Reading…' : 'Attach files'}
+            </label>
+            <button type="button" onClick={toggleVoice} className="ws-flow-btn" style={{ ...wsSecondaryBtn, minHeight: 52, background: voiceState === 'listening' ? '#E7EEFB' : '#fff', borderColor: voiceState === 'listening' ? '#1A73E8' : '#D5DDE9' }}>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              {voiceState === 'listening' ? 'Listening…' : 'Speak it'}
+            </button>
+          </div>
+          <button type="button" onClick={() => setStep(2)} className="ws-flow-btn" style={{ ...wsSecondaryBtn, minHeight: 52 }}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Fill it in myself
           </button>

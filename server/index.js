@@ -75,10 +75,12 @@ const DEFAULT_DATA_COLUMNS = [
   { id: 'amount', label: 'Amount' }
 ]
 
-function createClient() {
+function createClient(timeoutMs = 18000) {
   const baseURL = process.env.OPENAI_BASE_URL
   return new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
+    timeout: timeoutMs,
+    maxRetries: 0,
     ...(baseURL ? { baseURL } : {}),
     ...(baseURL?.includes('openrouter.ai') ? {
       defaultHeaders: {
@@ -220,32 +222,61 @@ function normalizeItems(items, columns) {
 async function callAI(system, user, requestId, options = {}) {
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
   const baseURL = process.env.OPENAI_BASE_URL
-  const client = createClient()
+  const timeoutMs = options.timeoutMs ?? 18000
+  const retries = options.retries ?? 1
   const maxTokens = options.max_tokens ?? 16000
   const temperature = options.temperature ?? 0
-  console.info(`[${requestId}] calling AI`, { model, baseURL: baseURL || 'https://api.openai.com/v1', maxTokens, temperature })
-  const completion = await client.chat.completions.create({
-    model,
-    max_tokens: maxTokens,
-    temperature,
-    response_format: { type: 'json_object' },
-    messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
-  })
-  const finishReason = completion.choices?.[0]?.finish_reason
-  const usage = completion.usage || null
-  console.info(`[${requestId}] AI response received`, {
-    responseId: completion.id,
-    finishReason,
-    usage
-  })
-  if (finishReason === 'length') {
-    console.warn(`[${requestId}] AI output hit max_tokens (${maxTokens}); JSON may omit trailing line items`)
+  const client = createClient(timeoutMs)
+  console.info(`[${requestId}] calling AI`, { model, baseURL: baseURL || 'https://api.openai.com/v1', maxTokens, temperature, timeoutMs })
+  let lastError
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const completion = await client.chat.completions.create({
+        model,
+        max_tokens: maxTokens,
+        temperature,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
+      })
+      const finishReason = completion.choices?.[0]?.finish_reason
+      const usage = completion.usage || null
+      console.info(`[${requestId}] AI response received`, {
+        responseId: completion.id,
+        finishReason,
+        usage,
+        attempt: attempt + 1
+      })
+      if (finishReason === 'length') {
+        console.warn(`[${requestId}] AI output hit max_tokens (${maxTokens}); JSON may omit trailing line items`)
+      }
+      return {
+        data: JSON.parse(completion.choices[0].message.content),
+        finishReason,
+        usage
+      }
+    } catch (error) {
+      lastError = error
+      const retryable = isRetryableAiError(error)
+      console.warn(`[${requestId}] AI attempt ${attempt + 1} failed`, {
+        message: error?.message,
+        status: error?.status,
+        retryable
+      })
+      if (!retryable || attempt >= retries) break
+      await sleepMs(800 * (attempt + 1))
+    }
   }
-  return {
-    data: JSON.parse(completion.choices[0].message.content),
-    finishReason,
-    usage
-  }
+  throw lastError
+}
+
+function isRetryableAiError(error) {
+  const status = Number(error?.status || error?.code || 0)
+  const msg = String(error?.message || '')
+  return status === 429 || status === 408 || status === 503 || /timeout|ETIMEDOUT|Retry shortly|timed out/i.test(msg)
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function metadataPrompt(layoutRoles = []) {
@@ -489,15 +520,21 @@ app.post('/api/generate-quotation', async (req, res) => {
     let draft
     let extraction = 'ai'
     if (catalog.length >= 3) {
-      const { data } = await callAI(
-        metadataPrompt(layoutRoles),
-        `Customer details already provided by the user: ${JSON.stringify(emptyCustomer)}\n\n${catalog.length} line items were already extracted from the repeating catalog list (line ref + item code + description + qty + unit). Return items as [].\n\nRaw enquiry:\n${enquiry}${knowledgeBlock}`,
-        requestId,
-        { max_tokens: 2000, temperature: 0 }
-      )
-      draft = data
+      try {
+        const { data } = await callAI(
+          metadataPrompt(layoutRoles),
+          `Customer details already provided by the user: ${JSON.stringify(emptyCustomer)}\n\n${catalog.length} line items were already extracted from the repeating catalog list (line ref + item code + description + qty + unit). Return items as [].\n\nRaw enquiry:\n${enquiry}${knowledgeBlock}`,
+          requestId,
+          { max_tokens: 2000, temperature: 0, retries: 0, timeoutMs: 12000 }
+        )
+        draft = data
+      } catch (error) {
+        console.warn(`[${requestId}] metadata AI skipped; using catalog items`, error?.message || error)
+        draft = fallback(enquiry, emptyCustomer, columns)
+        extraction = 'catalog-offline'
+      }
       draft.items = catalogItemsToQuoteRows(catalog, columns, blankItemFor(columns))
-      extraction = 'catalog'
+      if (extraction !== 'catalog-offline') extraction = 'catalog'
       if (hintedCount && catalog.length < hintedCount) {
         console.warn(`[${requestId}] catalog parser found ${catalog.length} items but counted ${hintedCount} line refs`)
       }
@@ -534,7 +571,32 @@ app.post('/api/generate-quotation', async (req, res) => {
       extractionMeta: { catalogExtracted: catalog.length, lineRefHint: hintedCount, itemCount: (enriched.items || []).length }
     })
   } catch (error) {
-    aiError(error, requestId, res)
+    console.error(`[${requestId}] AI request failed; returning local draft`, {
+      name: error?.name,
+      message: error?.message || 'Unknown AI error',
+      status: error?.status,
+      code: error?.code
+    })
+    const catalog = extractCatalogLineItems(enquiry)
+    const draft = fallback(enquiry, emptyCustomer, columns)
+    if (catalog.length >= 3) {
+      draft.items = catalogItemsToQuoteRows(catalog, columns, blankItemFor(columns))
+    }
+    draft.referenceNo = normalizeReferenceNo(draft.referenceNo) || extractEnquiryReference(enquiry) || ''
+    try {
+      const enriched = await enrichWithKnowledge(draft, columns, enquiry, requestId, req.userId)
+      return res.json({
+        ...enriched,
+        referenceNo: draft.referenceNo,
+        columns,
+        mode: 'fallback',
+        extraction: catalog.length >= 3 ? 'catalog' : 'demo',
+        extractionMeta: { catalogExtracted: catalog.length, itemCount: (enriched.items || []).length }
+      })
+    } catch (fallbackError) {
+      console.error(`[${requestId}] local draft failed`, fallbackError?.message || fallbackError)
+      return aiError(error, requestId, res)
+    }
   }
 })
 
