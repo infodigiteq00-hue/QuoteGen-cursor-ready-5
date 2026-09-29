@@ -80,6 +80,7 @@ export function SuggestField({
   value,
   onChange,
   onPick,
+  onEnter,
   onBlur,
   onFocus,
   suggestions = [],
@@ -145,20 +146,36 @@ export function SuggestField({
   }
 
   const onKeyDown = (e) => {
-    if (!list.length) return
     if (e.key === 'ArrowDown') {
+      if (!list.length) return
       e.preventDefault()
       setOpen(true)
       setActive(i => (i + 1) % list.length)
-    } else if (e.key === 'ArrowUp') {
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      if (!list.length) return
       e.preventDefault()
       setOpen(true)
       setActive(i => (i - 1 + list.length) % list.length)
-    } else if (e.key === 'Enter' && open) {
+      return
+    }
+    if (e.key === 'Escape') {
+      if (open) {
+        e.preventDefault()
+        setOpen(false)
+      }
+      return
+    }
+    if (e.key !== 'Enter') return
+    if (open && list.length) {
       e.preventDefault()
       pick(list[active])
-    } else if (e.key === 'Escape') {
-      setOpen(false)
+      return
+    }
+    if (onEnter) {
+      e.preventDefault()
+      onEnter(e)
     }
   }
 

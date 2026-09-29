@@ -722,7 +722,7 @@ export default function UploadedTemplateQuote({
   const structureSavingRef = useRef(false)
   const wordStructRef = useRef({ addRowAfterItem: () => {}, addColAfter: () => {} })
   const profile = companyProfile || quote.companyProfile || null
-  const paperTheme = resolvePaperTheme(quote.paperStyle || 'formal', accentForTableColor(quote.tableColorId || 'blue', quote.logoPalette))
+  const paperTheme = resolvePaperTheme(quote.paperStyle || 'formal', accentForTableColor(quote.tableColorId || 'blue', quote.logoPalette, quote.customAccent || quote.tableAccent))
   const docLabel = resolveDocLabel(quote)
 
   // Uploaded layouts keep their own Total/GST/Discount rows verbatim, so the

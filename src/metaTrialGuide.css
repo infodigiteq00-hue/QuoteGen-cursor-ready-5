@@ -249,6 +249,15 @@
   background: #1666d0;
 }
 
+.meta-guide-primary.meta-guide-pdf-cta:not(:disabled):not(.is-idle) {
+  background: #1B9A57;
+  box-shadow: 0 4px 14px rgba(27, 154, 87, 0.28);
+}
+
+.meta-guide-primary.meta-guide-pdf-cta:hover:not(:disabled) {
+  background: #168A4C;
+}
+
 .meta-guide-primary:disabled,
 .meta-guide-primary.is-idle {
   background: rgba(255, 255, 255, 0.04);
@@ -2235,6 +2244,37 @@ button.meta-guide-chip.is-on {
 .meta-guide-color-swatch.is-on {
   box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.45);
   border-color: #fff;
+}
+.meta-guide-color-or {
+  margin: 0 2px 0 6px;
+  color: #9aa6bd;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 500;
+}
+.meta-guide-color-custom {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  color: #9aa6bd;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.meta-guide-color-custom.is-on {
+  color: #fff;
+}
+.meta-guide-color-custom-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .meta-guide-unlock-kicker {

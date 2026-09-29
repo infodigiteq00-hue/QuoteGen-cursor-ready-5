@@ -2,6 +2,7 @@ import multer from 'multer'
 import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { computeQuoteTotals } from '../shared/quoteColumns.js'
 import { normalizeFooterFit } from '../shared/footerFit.js'
+import { normalizeHeaderMeta } from '../shared/headerMeta.js'
 import { createAiClient } from './hsnGst.js'
 import { assertCanCreateQuotation } from './accountAccess.js'
 import {
@@ -98,6 +99,7 @@ async function presentCompanyProfile(supabase, row) {
   // Inline branding so PDF / preview never depend on private or flaky Storage URLs.
   profile.logoUrl = await displayImageUrl(supabase, profile.logoUrl, profile.logoPath)
   profile.bankQrUrl = await displayImageUrl(supabase, profile.bankQrUrl, profile.bankQrPath)
+  profile.signatoryUrl = await displayImageUrl(supabase, profile.signatoryUrl, profile.signatoryPath)
   profile.headerImageUrl = await displayImageUrl(supabase, profile.headerImageUrl, profile.headerImagePath)
   profile.footerImageUrl = await displayImageUrl(supabase, profile.footerImageUrl, profile.footerImagePath)
   return profile
@@ -106,6 +108,28 @@ async function presentCompanyProfile(supabase, row) {
 function sidecarQrUrl(value) {
   const raw = String(value || '')
   return raw.startsWith('data:image/') ? raw : ''
+}
+
+function sidecarImageUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (raw.startsWith('data:image/')) return raw
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('/')) return raw
+  return ''
+}
+
+const COMMERCIAL_TERM_KEYS = ['validity', 'delivery', 'payment', 'taxes', 'freight']
+
+function normalizeCommercialTerms(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const out = {}
+  let any = false
+  for (const key of COMMERCIAL_TERM_KEYS) {
+    if (raw[key] == null) continue
+    out[key] = String(raw[key])
+    if (String(raw[key]).trim()) any = true
+  }
+  return any ? out : (Object.keys(out).length ? out : null)
 }
 
 const BANK_MARK = '__QG_BANK__'
@@ -137,7 +161,7 @@ function extractSidecarJsonArray(raw, key) {
 function parseBankSidecar(footerText) {
   const raw = String(footerText || '')
   const idx = raw.indexOf(BANK_MARK)
-  const emptyBank = { bankName: '', accountNo: '', ifsc: '', terms: '', accountName: '', branch: '', bankQrUrl: '', invoiceSeries: null, columnLayouts: [], activeColumnLayoutId: null, defaultUploadTemplateId: undefined, footerFit: null, paperStyle: null }
+  const emptyBank = { bankName: '', accountNo: '', ifsc: '', terms: '', accountName: '', branch: '', bankQrUrl: '', signatoryUrl: '', signatoryPath: '', signatoryWidth: null, signatoryHeight: null, commercialTerms: null, invoiceSeries: null, columnLayouts: [], activeColumnLayoutId: null, defaultUploadTemplateId: undefined, footerFit: null, paperStyle: null, headerMeta: null }
   if (idx === -1) {
     return { note: raw, bank: emptyBank, ok: true, missing: true }
   }
@@ -157,6 +181,11 @@ function parseBankSidecar(footerText) {
           accountName: String(parsed.accountName || parsed.bankAccountName || ''),
           branch: String(parsed.branch || parsed.bankBranch || ''),
           bankQrUrl: sidecarQrUrl(parsed.bankQrUrl),
+          signatoryUrl: sidecarImageUrl(parsed.signatoryUrl),
+          signatoryPath: String(parsed.signatoryPath || ''),
+          signatoryWidth: Number(parsed.signatoryWidth) > 0 ? Math.round(Number(parsed.signatoryWidth)) : null,
+          signatoryHeight: Number(parsed.signatoryHeight) > 0 ? Math.round(Number(parsed.signatoryHeight)) : null,
+          commercialTerms: normalizeCommercialTerms(parsed.commercialTerms),
           invoiceSeries: parsed.invoiceSeries && typeof parsed.invoiceSeries === 'object' ? parsed.invoiceSeries : null,
           columnLayouts: Array.isArray(parsed.columnLayouts) ? parsed.columnLayouts : [],
           activeColumnLayoutId: parsed.activeColumnLayoutId || null,
@@ -164,7 +193,8 @@ function parseBankSidecar(footerText) {
             ? (parsed.defaultUploadTemplateId || null)
             : undefined,
           footerFit: parsed.footerFit && typeof parsed.footerFit === 'object' ? parsed.footerFit : null,
-          paperStyle: normalizeStoredPaperStyle(parsed.paperStyle)
+          paperStyle: normalizeStoredPaperStyle(parsed.paperStyle),
+          headerMeta: parsed.headerMeta && typeof parsed.headerMeta === 'object' ? normalizeHeaderMeta(parsed.headerMeta) : null
         }
       }
     }
@@ -194,6 +224,13 @@ function joinFooterWithBank(note, bank) {
   }
   const qr = sidecarQrUrl(bank?.bankQrUrl)
   if (qr) payload.bankQrUrl = qr
+  const signatoryUrl = sidecarImageUrl(bank?.signatoryUrl)
+  if (signatoryUrl) payload.signatoryUrl = signatoryUrl
+  if (bank?.signatoryPath) payload.signatoryPath = String(bank.signatoryPath)
+  if (Number(bank?.signatoryWidth) > 0) payload.signatoryWidth = Math.round(Number(bank.signatoryWidth))
+  if (Number(bank?.signatoryHeight) > 0) payload.signatoryHeight = Math.round(Number(bank.signatoryHeight))
+  const commercial = normalizeCommercialTerms(bank?.commercialTerms)
+  if (commercial) payload.commercialTerms = commercial
   if (bank?.invoiceSeries && typeof bank.invoiceSeries === 'object') {
     payload.invoiceSeries = {
       defaultType: bank.invoiceSeries.defaultType || DEFAULT_INVOICE_SERIES_TYPE,
@@ -210,7 +247,8 @@ function joinFooterWithBank(note, bank) {
   }
   if (bank?.footerFit) payload.footerFit = normalizeFooterFit(bank.footerFit)
   if (bank?.paperStyle) payload.paperStyle = String(bank.paperStyle)
-  if (!payload.bankName && !payload.accountNo && !payload.ifsc && !payload.terms && !payload.accountName && !payload.branch && !payload.bankQrUrl && !payload.invoiceSeries && !payload.columnLayouts && !Object.prototype.hasOwnProperty.call(payload, 'defaultUploadTemplateId') && !payload.footerFit && !payload.paperStyle) return n
+  if (bank?.headerMeta && typeof bank.headerMeta === 'object') payload.headerMeta = normalizeHeaderMeta(bank.headerMeta)
+  if (!payload.bankName && !payload.accountNo && !payload.ifsc && !payload.terms && !payload.accountName && !payload.branch && !payload.bankQrUrl && !payload.signatoryUrl && !payload.commercialTerms && !payload.invoiceSeries && !payload.columnLayouts && !Object.prototype.hasOwnProperty.call(payload, 'defaultUploadTemplateId') && !payload.footerFit && !payload.paperStyle && !payload.headerMeta) return n
   return `${n}${n ? '\n\n' : ''}${BANK_MARK}\n${JSON.stringify(payload)}`
 }
 
@@ -238,7 +276,12 @@ function bankFromRow(row) {
     bankBranch: String(sidecar.branch || ''),
     standardTerms: String(row?.standard_terms || sidecar.terms || ''),
     bankQrUrl: row?.bank_qr_url || sidecar.bankQrUrl || null,
-    bankQrPath: row?.bank_qr_path || null
+    bankQrPath: row?.bank_qr_path || null,
+    signatoryUrl: sidecar.signatoryUrl || null,
+    signatoryPath: sidecar.signatoryPath || null,
+    signatoryWidth: sidecar.signatoryWidth || null,
+    signatoryHeight: sidecar.signatoryHeight || null,
+    commercialTerms: sidecar.commercialTerms || null
   }
 }
 
@@ -322,6 +365,11 @@ function mapCompanyProfile(row) {
     bankBranch: bank.bankBranch,
     bankQrUrl: bank.bankQrUrl,
     bankQrPath: bank.bankQrPath,
+    signatoryUrl: bank.signatoryUrl,
+    signatoryPath: bank.signatoryPath,
+    signatoryWidth: bank.signatoryWidth,
+    signatoryHeight: bank.signatoryHeight,
+    commercialTerms: bank.commercialTerms,
     standardTerms: bank.standardTerms,
     hsnCodeFormat: row.hsn_code_format || '4',
     columnLayout: activeLayout?.columns || dbColumns,
@@ -332,6 +380,7 @@ function mapCompanyProfile(row) {
       : (row.default_upload_template_id || null),
     footerFit: normalizeFooterFit(sidecar.bank.footerFit),
     paperStyle: normalizeStoredPaperStyle(sidecar.bank.paperStyle),
+    headerMeta: sidecar.bank.headerMeta ? normalizeHeaderMeta(sidecar.bank.headerMeta) : null,
     series: {
       prefix: row.series_prefix ?? 'QG',
       padding: row.series_padding ?? 4,
@@ -720,16 +769,37 @@ export function registerPersistenceRoutes(app) {
           : existingSidecar.bank.footerFit,
         paperStyle: body.paperStyle != null
           ? (normalizeStoredPaperStyle(body.paperStyle) || existingSidecar.bank.paperStyle)
-          : existingSidecar.bank.paperStyle
+          : existingSidecar.bank.paperStyle,
+        headerMeta: body.headerMeta != null
+          ? normalizeHeaderMeta(body.headerMeta)
+          : (existingSidecar.bank.headerMeta || (incoming?.bank.headerMeta ? normalizeHeaderMeta(incoming.bank.headerMeta) : null)),
+        signatoryUrl: body.signatoryUrl !== undefined
+          ? sidecarImageUrl(body.signatoryUrl)
+          : (existingSidecar.bank.signatoryUrl || sidecarImageUrl(incoming?.bank.signatoryUrl)),
+        signatoryPath: body.signatoryPath !== undefined
+          ? (body.signatoryPath || '')
+          : (existingSidecar.bank.signatoryPath || incoming?.bank.signatoryPath || ''),
+        signatoryWidth: body.signatoryWidth !== undefined
+          ? (Number(body.signatoryWidth) > 0 ? Math.round(Number(body.signatoryWidth)) : null)
+          : (existingSidecar.bank.signatoryWidth || incoming?.bank.signatoryWidth || null),
+        signatoryHeight: body.signatoryHeight !== undefined
+          ? (Number(body.signatoryHeight) > 0 ? Math.round(Number(body.signatoryHeight)) : null)
+          : (existingSidecar.bank.signatoryHeight || incoming?.bank.signatoryHeight || null),
+        commercialTerms: body.commercialTerms != null
+          ? normalizeCommercialTerms(body.commercialTerms)
+          : (existingSidecar.bank.commercialTerms || incoming?.bank.commercialTerms || null)
       }
       const bankTouched = body.bankName != null || body.bankAccountNo != null || body.bankIfsc != null || body.bankAccountName != null || body.bankBranch != null
       const termsTouched = body.standardTerms != null
+      const commercialTouched = body.commercialTerms != null
+      const signatoryTouched = body.signatoryUrl !== undefined || body.signatoryPath !== undefined || body.signatoryWidth !== undefined || body.signatoryHeight !== undefined
       const invoiceTouched = incomingPack != null
       const layoutsTouched = body.columnLayouts != null || body.activeColumnLayoutId != null
       const defaultLayoutTouched = body.defaultUploadTemplateId !== undefined
       const footerFitTouched = body.footerFit != null
       const paperStyleTouched = body.paperStyle != null && Boolean(normalizeStoredPaperStyle(body.paperStyle))
-      if (body.footerText != null || bankTouched || termsTouched || invoiceTouched || layoutsTouched || defaultLayoutTouched || footerFitTouched || paperStyleTouched) {
+      const headerMetaTouched = body.headerMeta != null
+      if (body.footerText != null || bankTouched || termsTouched || commercialTouched || signatoryTouched || invoiceTouched || layoutsTouched || defaultLayoutTouched || footerFitTouched || paperStyleTouched || headerMetaTouched) {
         const note = incoming ? incoming.note : existingSidecar.note
         patch.footer_text = joinFooterWithBank(note, nextBank)
       }
@@ -999,6 +1069,79 @@ If something isn't specified, keep the current value.`
           footer_text: joinFooterWithBank(sidecar.note, { ...sidecar.bank, bankQrUrl: '' })
         })
       }
+      res.json({ profile: await presentCompanyProfile(supabase, data) })
+    } catch (error) {
+      supabaseError(error, res, requestId)
+    }
+  })
+
+  app.post('/api/company-profile/signatory', (req, res) => {
+    const requestId = `cp-signatory-${Date.now()}`
+    logoUpload.single('image')(req, res, async (err) => {
+      const supabase = requireDb(res, requestId)
+      if (!supabase) return
+      if (err) {
+        const message = err.code === 'LIMIT_FILE_SIZE'
+          ? 'Signature image must be under 1.5 MB.'
+          : (err.message || 'Signature upload failed')
+        return res.status(400).json({ error: message, code: 'VALIDATION_ERROR', requestId })
+      }
+      try {
+        const file = req.file
+        if (!file?.buffer?.length) {
+          return res.status(400).json({ error: 'Signature image is required.', code: 'VALIDATION_ERROR', requestId })
+        }
+        const mime = String(file.mimetype || '')
+        if (!/^image\/(png|jpeg|jpg|webp|gif|svg\+xml)$/i.test(mime)) {
+          return res.status(400).json({ error: 'Signature must be an image (png, jpg, webp, gif, or svg).', code: 'VALIDATION_ERROR', requestId })
+        }
+        const existing = await ensureCompanyProfile(supabase, req.userId)
+        const path = `signatory/${existing.id}.${extensionForMime(mime)}`
+        let stored
+        try {
+          stored = await storeCompanyImage(supabase, path, file)
+        } catch (storageError) {
+          console.warn(`[${requestId}] storage upload failed, falling back to data URL`, storageError?.message || storageError)
+          if (file.buffer.length > INLINE_IMAGE_MAX) {
+            return res.status(502).json({
+              error: 'Could not store the signature, and the file is too large for inline fallback.',
+              code: 'STORAGE_ERROR',
+              requestId
+            })
+          }
+          stored = { url: dataUrlFromBuffer(file.buffer, mime), path: null }
+        }
+        const sidecar = parseBankSidecar(existing.footer_text)
+        if (sidecar.bank.signatoryPath && sidecar.bank.signatoryPath !== stored.path) {
+          await supabase.storage.from(LOGO_BUCKET).remove([sidecar.bank.signatoryPath]).catch(() => {})
+        }
+        const data = await updateCompanyProfileRow(supabase, existing.id, req.userId, {
+          footer_text: joinFooterWithBank(sidecar.note, {
+            ...sidecar.bank,
+            signatoryUrl: stored.url,
+            signatoryPath: stored.path || ''
+          })
+        })
+        res.json({ profile: await presentCompanyProfile(supabase, data) })
+      } catch (error) {
+        supabaseError(error, res, requestId)
+      }
+    })
+  })
+
+  app.delete('/api/company-profile/signatory', async (req, res) => {
+    const requestId = `cp-signatory-del-${Date.now()}`
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+    try {
+      const existing = await ensureCompanyProfile(supabase, req.userId)
+      const sidecar = parseBankSidecar(existing.footer_text)
+      if (sidecar.bank.signatoryPath) {
+        await supabase.storage.from(LOGO_BUCKET).remove([sidecar.bank.signatoryPath]).catch(() => {})
+      }
+      const data = await updateCompanyProfileRow(supabase, existing.id, req.userId, {
+        footer_text: joinFooterWithBank(sidecar.note, { ...sidecar.bank, signatoryUrl: '', signatoryPath: '' })
+      })
       res.json({ profile: await presentCompanyProfile(supabase, data) })
     } catch (error) {
       supabaseError(error, res, requestId)

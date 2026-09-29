@@ -1,6 +1,7 @@
 /** Client helpers for quotation series + autosave (talks to Express only). */
 import { attachmentUrlKey, imagePathKey, isAttachmentColumn, isImageColumn, normalizeColumnList } from '../shared/quoteColumns.js'
 import { quoteAssetSrc, storagePathFromUrl } from './pdfExport.js'
+import { normalizeHeaderMeta } from '../shared/headerMeta.js'
 
 export function formatSeriesPreview({ prefix = 'QG', padding = 4, nextNumber = 1, includeYear = true } = {}) {
   const safePadding = Math.min(12, Math.max(1, Number(padding) || 4))
@@ -167,6 +168,10 @@ function hydrateCompanyProfile(profile) {
     bankBranch: profile.bankBranch || extra.branch || extra.bankBranch || '',
     bankQrUrl: profile.bankQrUrl || extra.bankQrUrl || null,
     standardTerms: profile.standardTerms || extra.terms || extra.standardTerms || '',
+    signatoryUrl: profile.signatoryUrl || extra.signatoryUrl || null,
+    signatoryWidth: profile.signatoryWidth || extra.signatoryWidth || null,
+    signatoryHeight: profile.signatoryHeight || extra.signatoryHeight || null,
+    commercialTerms: profile.commercialTerms || extra.commercialTerms || null,
     invoiceSeries: extra.invoiceSeries && typeof extra.invoiceSeries === 'object'
       ? {
           ...(profile.invoiceSeries || {}),
@@ -193,7 +198,10 @@ function hydrateCompanyProfile(profile) {
       ? extra.defaultUploadTemplateId
       : profile.defaultUploadTemplateId,
     footerFit: extra.footerFit || profile.footerFit,
-    paperStyle: extra.paperStyle || profile.paperStyle || null
+    paperStyle: extra.paperStyle || profile.paperStyle || null,
+    headerMeta: (extra.headerMeta || profile.headerMeta)
+      ? normalizeHeaderMeta(extra.headerMeta || profile.headerMeta)
+      : null
   }
 }
 
@@ -279,6 +287,28 @@ export async function removeCompanyBankQr() {
     return { unavailable: true, profile: null, error: data.error }
   }
   if (!response.ok) throw new Error(data.error || 'Could not remove bank QR')
+  return { unavailable: false, profile: hydrateCompanyProfile(data.profile) }
+}
+
+export async function uploadCompanySignatory(file) {
+  const form = new FormData()
+  form.append('image', file)
+  const response = await fetch('/api/company-profile/signatory', { method: 'POST', body: form })
+  const data = await response.json().catch(() => ({}))
+  if (isPersistenceUnavailable(response, data)) {
+    return { unavailable: true, profile: null, error: data.error }
+  }
+  if (!response.ok) throw new Error(data.error || 'Could not upload signature')
+  return { unavailable: false, profile: hydrateCompanyProfile(data.profile) }
+}
+
+export async function removeCompanySignatory() {
+  const response = await fetch('/api/company-profile/signatory', { method: 'DELETE' })
+  const data = await response.json().catch(() => ({}))
+  if (isPersistenceUnavailable(response, data)) {
+    return { unavailable: true, profile: null, error: data.error }
+  }
+  if (!response.ok) throw new Error(data.error || 'Could not remove signature')
   return { unavailable: false, profile: hydrateCompanyProfile(data.profile) }
 }
 
@@ -421,9 +451,11 @@ export function buildQuotationPayload(quote, { layoutRef, uploadTemplateId } = {
     layoutRef: layoutRef ?? quote.layoutRef ?? null,
     uploadTemplateId: uploadTemplateId ?? quote.uploadTemplateId ?? null,
     paperStyle: quote.paperStyle || null,
+    headerMeta: quote.headerMeta != null ? normalizeHeaderMeta(quote.headerMeta) : undefined,
     watermarkEnabled: quote.watermarkEnabled !== false,
     tableColorId: quote.tableColorId || 'blue',
     tableAccent: quote.tableAccent || null,
+    customAccent: quote.customAccent || null,
     logoPalette: quote.logoPalette || null
   }
   return {
@@ -499,9 +531,11 @@ export function quotationToEditorState(quotation) {
     layoutRef: data.layoutRef ?? quotation?.layoutRef ?? null,
     uploadTemplateId: data.uploadTemplateId ?? null,
     paperStyle: data.paperStyle || null,
+    headerMeta: data.headerMeta != null ? normalizeHeaderMeta(data.headerMeta) : undefined,
     watermarkEnabled: data.watermarkEnabled !== false,
     tableColorId: data.tableColorId || 'blue',
     tableAccent: data.tableAccent || null,
+    customAccent: data.customAccent || null,
     logoPalette: data.logoPalette || null,
     // Authoritative revision lives in the column, not the JSON snapshot.
     revision: quotation?.revision

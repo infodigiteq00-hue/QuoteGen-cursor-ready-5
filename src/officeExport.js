@@ -10,6 +10,7 @@ import {
 } from '../shared/quoteColumns.js'
 import { formatIndianAmount } from '../shared/templateMap.js'
 import { normalizeFooterFit } from '../shared/footerFit.js'
+import { normalizeHeaderMeta } from '../shared/headerMeta.js'
 import { quotationFileName, capturePreviewCanvases } from './pdfExport.js'
 import { displayLogoWidth } from './QuoteStudio.jsx'
 
@@ -145,6 +146,7 @@ export function buildQuotationWordHtml({ quote, profile, columns, totals, theme,
   }).join('')
 
   const footerFit = normalizeFooterFit(profile?.footerFit)
+  const headerMeta = normalizeHeaderMeta(quote?.headerMeta)
   const footerImage = profile?.footerImageUrl
     ? `<div style="margin:28px auto 0;width:${footerFit.width}%;text-align:center;">
          <img src="${escapeHtml(profile.footerImageUrl)}" alt="" style="display:inline-block;max-width:100%;max-height:${Math.min(160, footerFit.height)}px;width:auto;height:auto;object-fit:contain;" />
@@ -172,14 +174,14 @@ export function buildQuotationWordHtml({ quote, profile, columns, totals, theme,
       </td>
       <td style="vertical-align:top;text-align:right;">
         <div style="font-size:18pt;font-weight:500;letter-spacing:.08em;color:${accent};font-family:${titleFont};">${escapeHtml(docLabel || 'QUOTATION')}</div>
-        <div style="margin-top:10px;color:${accent};font-size:9pt;font-weight:700;">NO.</div>
-        <div>${escapeHtml(quote?.number || '')}</div>
+        ${headerMeta.quoteNumber ? `<div style="margin-top:10px;color:${accent};font-size:9pt;font-weight:700;">NO.</div>
+        <div>${escapeHtml(quote?.number || '')}</div>` : ''}
         <div style="margin-top:6px;color:${accent};font-size:9pt;font-weight:700;">DATE</div>
         <div>${escapeHtml(quote?.date || '')}</div>
-        <div style="margin-top:6px;color:${accent};font-size:9pt;font-weight:700;">VALID TILL</div>
-        <div>${escapeHtml(quote?.fields?.validUntil || quote?.validUntil || '')}</div>
-        <div style="margin-top:6px;color:${accent};font-size:9pt;font-weight:700;">REF. NO.</div>
-        <div>${escapeHtml(quote?.fields?.referenceNo || quote?.referenceNo || '')}</div>
+        ${headerMeta.validTill ? `<div style="margin-top:6px;color:${accent};font-size:9pt;font-weight:700;">VALID TILL</div>
+        <div>${escapeHtml(quote?.fields?.validUntil || quote?.validUntil || '')}</div>` : ''}
+        ${headerMeta.reference ? `<div style="margin-top:6px;color:${accent};font-size:9pt;font-weight:700;">REF. NO.</div>
+        <div>${escapeHtml(quote?.fields?.referenceNo || quote?.referenceNo || '')}</div>` : ''}
       </td>
     </tr>
   </table>
@@ -553,20 +555,28 @@ async function fillQuotationDataSheet(wb, { quote, profile, columns, totals, the
   r += 1
   sheet.getCell(r, 1).value = docLabel || 'QUOTATION'
   sheet.getCell(r, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: `FF${accent}` } }
-  sheet.getCell(r, 2).value = quote?.number || ''
+  const headerMeta = normalizeHeaderMeta(quote?.headerMeta)
+  if (headerMeta.quoteNumber) {
+    sheet.getCell(r, 2).value = quote?.number || ''
+  }
   r += 1
   sheet.getCell(r, 1).value = 'Date'
   sheet.getCell(r, 1).font = { color: { argb: `FF${accent}` }, bold: true, size: 9 }
   sheet.getCell(r, 2).value = quote?.date || ''
   r += 1
-  sheet.getCell(r, 1).value = 'Valid till'
-  sheet.getCell(r, 1).font = { color: { argb: `FF${accent}` }, bold: true, size: 9 }
-  sheet.getCell(r, 2).value = quote?.fields?.validUntil || quote?.validUntil || ''
+  if (headerMeta.validTill) {
+    sheet.getCell(r, 1).value = 'Valid till'
+    sheet.getCell(r, 1).font = { color: { argb: `FF${accent}` }, bold: true, size: 9 }
+    sheet.getCell(r, 2).value = quote?.fields?.validUntil || quote?.validUntil || ''
+    r += 1
+  }
+  if (headerMeta.reference) {
+    sheet.getCell(r, 1).value = 'Ref. No.'
+    sheet.getCell(r, 1).font = { color: { argb: `FF${accent}` }, bold: true, size: 9 }
+    sheet.getCell(r, 2).value = quote?.fields?.referenceNo || quote?.referenceNo || ''
+    r += 1
+  }
   r += 1
-  sheet.getCell(r, 1).value = 'Ref. No.'
-  sheet.getCell(r, 1).font = { color: { argb: `FF${accent}` }, bold: true, size: 9 }
-  sheet.getCell(r, 2).value = quote?.fields?.referenceNo || quote?.referenceNo || ''
-  r += 2
   sheet.getCell(r, 1).value = 'TO'
   sheet.getCell(r, 1).font = { bold: true, color: { argb: `FF${accent}` }, size: 12 }
   const shipSeparate = customer.shippingSame === false

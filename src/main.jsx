@@ -54,6 +54,8 @@ import {
   uploadCompanyBanner,
   uploadCompanyLogo,
   uploadCompanyBankQr,
+  uploadCompanySignatory,
+  removeCompanySignatory,
   uploadQuoteFile,
   uploadQuoteImage
 } from './quotePersistence.js'
@@ -71,10 +73,11 @@ import {
   QuoteStudioToolbar,
   QuoteToSubjectBlock,
   LayoutStyleCards,
+  InlineField,
   LOGO_SIZE_DEFAULT,
   displayLogoWidth
 } from './QuoteStudio.jsx'
-import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, peekPreferredPaperStyle, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId, normalizePaperStyle } from './quotePaperThemes.js'
+import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, normalizeAccentHex, peekPreferredPaperStyle, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId, normalizePaperStyle } from './quotePaperThemes.js'
 import { peekPreferredColumns, readPreferredColumns, writePreferredColumns } from './quoteLayoutPrefs.js'
 import QuoteGenerateCeremony, { CEREMONY_MIN_MS } from './QuoteGenerateCeremony.jsx'
 import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, recordMetaLeadProgress, markMetaTrialUnpaid, markMetaTrialPaid, isMetaTrialUnpaid, isMetaGuideActive } from './metaTrialLead.js'
@@ -85,6 +88,7 @@ import FormulaGuide from './FormulaGuide.jsx'
 import RichTextField, { RichTextView } from './RichTextField.jsx'
 import FloatingPop from './FloatingPop.jsx'
 import { footerFitCssVars, normalizeFooterFit, patchFooterFit } from '../shared/footerFit.js'
+import { normalizeHeaderMeta } from '../shared/headerMeta.js'
 import {
   amountCellState,
   amountEditPatch,
@@ -322,6 +326,19 @@ function splitDescription(value) {
   return { primary: text, secondary: '' }
 }
 
+function descriptionPartsForEdit(value) {
+  const text = stripMarkdownBold(value)
+  const i = text.indexOf('\n')
+  if (i >= 0) return { title: text.slice(0, i).replace(/\s+$/, ''), sub: text.slice(i + 1) }
+  return { title: text, sub: '' }
+}
+
+function joinDescription(title, sub) {
+  const t = String(title || '').replace(/\n/g, ' ').replace(/\s+$/, '')
+  const s = String(sub || '').replace(/^\n+/, '')
+  return s.trim() ? `${t}\n${s}` : t
+}
+
 async function readApiResponse(response) {
   const text = await response.text()
   if (!text) {
@@ -435,66 +452,123 @@ function productSuggestionItems(products, query) {
 
 function DescriptionCell({ value, onChange, onBlurExtra, products, onPickProduct }) {
   const [editing, setEditing] = useState(false)
+  const [focusPart, setFocusPart] = useState('title')
   const pickedRef = useRef(false)
+  const wrapRef = useRef(null)
+  const subRef = useRef(null)
   const clean = stripMarkdownBold(value)
   const { primary, secondary } = splitDescription(clean)
-  const [draft, setDraft] = useState(clean)
+  const editParts = descriptionPartsForEdit(clean)
+  const [title, setTitle] = useState(editParts.title)
+  const [sub, setSub] = useState(editParts.sub)
   useEffect(() => {
-    if (!editing) setDraft(stripMarkdownBold(value))
+    if (editing) return
+    const next = descriptionPartsForEdit(stripMarkdownBold(value))
+    setTitle(next.title)
+    setSub(next.sub)
   }, [value, editing])
 
   const suggestions = useMemo(() => {
-    if (!editing || String(draft || '').trim().length < 1) return []
-    return productSuggestionItems(products, draft)
-  }, [editing, draft, products])
+    if (!editing || String(title || '').trim().length < 1) return []
+    return productSuggestionItems(products, title)
+  }, [editing, title, products])
 
-  // Resting view: first line bold (title), details muted — same as original.
-  // Edit mode only while focused, so typing stays snappy without losing hierarchy.
+  const push = (nextTitle, nextSub) => {
+    setTitle(nextTitle)
+    setSub(nextSub)
+    onChange(joinDescription(nextTitle, nextSub))
+  }
+
+  const startEdit = (part) => {
+    const next = descriptionPartsForEdit(stripMarkdownBold(value))
+    setTitle(next.title)
+    setSub(next.sub)
+    setFocusPart(part)
+    setEditing(true)
+  }
+
+  const leaveIfOutside = () => {
+    window.setTimeout(() => {
+      if (pickedRef.current) {
+        pickedRef.current = false
+        return
+      }
+      const active = document.activeElement
+      if (wrapRef.current?.contains(active)) return
+      if (active?.closest?.('.qg-suggest-list')) return
+      setEditing(false)
+      onBlurExtra?.()
+    }, 80)
+  }
+
   if (!editing) {
     return (
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setEditing(true)}
-        onKeyDown={e => { if (e.key === 'Enter') setEditing(true) }}
-        className="description-cell min-w-0 w-full cursor-text rounded p-2 leading-snug hover:bg-slate-50"
-      >
-        {primary
-          ? <p className="font-semibold text-ink">{primary}</p>
-          : <span className="text-slate-300">—</span>}
-        {secondary && <p className="mt-1 whitespace-pre-line text-xs font-normal leading-relaxed text-slate-500">{secondary}</p>}
+      <div className="description-cell min-w-0 w-full rounded p-2 leading-snug hover:bg-slate-50">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => startEdit('title')}
+          onKeyDown={e => { if (e.key === 'Enter') startEdit('title') }}
+          className="cursor-text"
+        >
+          {primary
+            ? <p className="font-semibold text-ink">{primary}</p>
+            : <span className="text-slate-300">Product name</span>}
+        </div>
+        {secondary ? (
+          <p
+            role="button"
+            tabIndex={0}
+            onClick={() => startEdit('sub')}
+            onKeyDown={e => { if (e.key === 'Enter') startEdit('sub') }}
+            className="mt-1 cursor-text whitespace-pre-line text-xs font-normal leading-relaxed text-slate-500"
+          >
+            {secondary}
+          </p>
+        ) : (
+          <button
+            type="button"
+            className="qg-desc-add no-print"
+            onClick={() => startEdit('sub')}
+          >
+            Add description
+          </button>
+        )}
       </div>
     )
   }
 
   return (
     <>
-      <SuggestField
-        multiline
-        autoFocus
-        value={draft}
-        onChange={(v) => {
-          const next = stripMarkdownBold(v)
-          setDraft(next)
-          onChange(next)
-        }}
-        suggestions={suggestions}
-        onPick={(item) => {
-          pickedRef.current = true
-          onPickProduct?.(item.product)
-          setEditing(false)
-        }}
-        onBlur={() => {
-          if (pickedRef.current) {
-            pickedRef.current = false
-            return
-          }
-          setEditing(false)
-          onBlurExtra?.()
-        }}
-        placeholder={'Product name on first line\ndetails on lines below'}
-        className="no-print w-full min-w-0 resize-y rounded p-2 text-sm outline-none ring-2 ring-blue-50 hover:bg-slate-50 focus:bg-blue-50"
-      />
+      <div ref={wrapRef} className="description-cell qg-desc-edit min-w-0 w-full rounded p-1 leading-snug">
+        <SuggestField
+          bold
+          autoFocus={focusPart === 'title'}
+          value={title}
+          onChange={(v) => push(stripMarkdownBold(v).replace(/\n/g, ' '), sub)}
+          suggestions={suggestions}
+          onPick={(item) => {
+            pickedRef.current = true
+            onPickProduct?.(item.product)
+            setEditing(false)
+          }}
+          onEnter={() => subRef.current?.focus()}
+          onBlur={leaveIfOutside}
+          placeholder="Product name"
+          className="qg-desc-edit-title no-print w-full min-w-0 rounded px-1 py-0.5 text-sm"
+        />
+        <SuggestField
+          grow
+          autoFocus={focusPart === 'sub'}
+          inputRef={subRef}
+          value={sub}
+          onChange={(v) => push(title, stripMarkdownBold(v))}
+          suggestions={[]}
+          onBlur={leaveIfOutside}
+          placeholder="Add description"
+          className="qg-desc-edit-sub no-print w-full min-w-0 rounded px-1 py-0.5"
+        />
+      </div>
       <div className="description-cell hidden min-w-0 print:block">
         {primary ? <p className="font-semibold text-ink">{primary}</p> : null}
         {secondary && <p className="mt-1 whitespace-pre-line text-xs font-normal leading-relaxed text-slate-500">{secondary}</p>}
@@ -1870,10 +1944,13 @@ function App() {
         paperStyle: selectedTemplateId ? undefined : (companyProfile?.paperStyle || readPreferredPaperStyle()),
         tableColorId: 'blue',
         watermarkEnabled: true,
+        headerMeta: normalizeHeaderMeta(companyProfile?.headerMeta),
         fields: {
           validUntil: defaultValidUntil(15),
-          referenceNo: String(data.referenceNo || '').trim()
-        }
+          referenceNo: String(data.referenceNo || '').trim(),
+          standardTerms: companyProfile?.standardTerms || ''
+        },
+        terms: { ...defaultTerms, ...(companyProfile?.commercialTerms || {}), ...(data.terms || {}) }
       }
 
       await openQuoteInEditor(built, { id: null, template: tplData || null })
@@ -1918,7 +1995,7 @@ function App() {
         customer: { name: '', company: '', gst: '', location: '', shippingSame: true, shippingLocation: '', ...customer },
         notes: [],
         clarifications: [],
-        terms: {},
+        terms: { ...defaultTerms, ...(companyProfile?.commercialTerms || {}) },
         number: quoteNumber,
         date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
         companyProfile: companySeedFromLead(readMetaAdsLead(), companyProfile).profile || companyProfile || undefined,
@@ -1927,7 +2004,12 @@ function App() {
         paperStyle: selectedTemplateId ? undefined : (companyProfile?.paperStyle || readPreferredPaperStyle()),
         tableColorId: 'blue',
         watermarkEnabled: true,
-        fields: { validUntil: defaultValidUntil(15), referenceNo: '' }
+        headerMeta: normalizeHeaderMeta(companyProfile?.headerMeta),
+        fields: {
+          validUntil: defaultValidUntil(15),
+          referenceNo: '',
+          standardTerms: companyProfile?.standardTerms || ''
+        }
       }
       await openQuoteInEditor(built, { id: null, template: tplData || null })
     } catch (e) {
@@ -2130,6 +2212,7 @@ function App() {
         onFooterFitChange={applyFooterFit}
         seriesSyncedRef={lastSeriesSyncedNumberRef}
         onRememberPaperStyle={rememberPaperStyle}
+        onSavedProfile={(profile) => { if (profile) setCompanyProfile(profile) }}
       />
     )
   }
@@ -2681,6 +2764,95 @@ function PageEndBand({ children, dense = false }) {
   )
 }
 
+const SIGNATURE_SIZE_MIN = 40
+const SIGNATURE_SIZE_MAX = 180
+const SIGNATURE_SIZE_DEFAULT = 96
+
+function clampSignatureSize(n, fallback = SIGNATURE_SIZE_DEFAULT) {
+  const v = Number(n)
+  if (!Number.isFinite(v) || v <= 0) return fallback
+  return Math.max(SIGNATURE_SIZE_MIN, Math.min(SIGNATURE_SIZE_MAX, Math.round(v)))
+}
+
+function SignatoryStamp({ profile, onSizeChange }) {
+  const wrapRef = useRef(null)
+  const url = profile?.signatoryUrl
+  const width = clampSignatureSize(profile?.signatoryWidth, SIGNATURE_SIZE_DEFAULT)
+  const height = profile?.signatoryHeight != null
+    ? clampSignatureSize(profile.signatoryHeight, width)
+    : null
+  const canResize = Boolean(url && onSizeChange)
+
+  const beginResize = (e) => {
+    if (!canResize) return
+    e.preventDefault()
+    e.stopPropagation()
+    const point = e.touches?.[0] || e
+    const startX = point.clientX
+    const startW = width
+    const startH = height
+    const visual = wrapRef.current?.getBoundingClientRect()?.width || startW
+    const factor = visual / Math.max(1, startW)
+    const apply = (clientX) => {
+      const nextW = clampSignatureSize(startW + (clientX - startX) / factor, startW)
+      const nextH = startH ? clampSignatureSize(startH * (nextW / startW), startH) : null
+      onSizeChange({ signatoryWidth: nextW, signatoryHeight: nextH })
+    }
+    const onMove = (ev) => {
+      const p = ev.touches?.[0] || ev
+      apply(p.clientX)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    window.addEventListener('touchmove', onMove, { passive: false })
+    window.addEventListener('touchend', onUp)
+  }
+
+  if (!url) return null
+  return (
+    <div
+      ref={wrapRef}
+      className="qg-signatory-mark"
+      style={{ width, maxWidth: '100%' }}
+    >
+      <img
+        src={url}
+        alt="Authorized signatory"
+        className="qg-signatory-stamp"
+        onError={onQuoteAssetImgError}
+        style={{
+          width: '100%',
+          height: height || 'auto',
+          maxHeight: height || SIGNATURE_SIZE_MAX,
+          objectFit: 'contain',
+          objectPosition: 'bottom',
+          display: 'block'
+        }}
+      />
+      {canResize ? (
+        <button
+          type="button"
+          className="qg-logo-resize no-print"
+          aria-label="Drag to resize signature"
+          title="Drag to make the signature larger or smaller"
+          onMouseDown={beginResize}
+          onTouchStart={beginResize}
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M9 4V1H6M1 6v3h3M9 1L5.5 4.5M1 9l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
 function bankDetailRows(profile) {
   return [
     { label: 'Bank Name', value: profile?.bankName?.trim() || '' },
@@ -2694,16 +2866,45 @@ function bankDetailLines(profile) {
   return bankDetailRows(profile).filter(row => row.value).map(row => `${row.label}: ${row.value}`)
 }
 
-function CompanyBankDetails({ profile, className = '', showEmpty = false, heading = true, dense = false }) {
-  const rows = bankDetailRows(profile)
-  const display = showEmpty ? rows : rows.filter(row => row.value)
+function CompanyBankDetails({
+  profile,
+  className = '',
+  showEmpty = false,
+  heading = true,
+  dense = false,
+  editable = false,
+  onChange,
+  onUploadQr,
+  qrBusy = false
+}) {
+  const rows = [
+    { label: 'Bank Name', key: 'bankName', placeholder: 'Bank name' },
+    { label: 'Account Name', key: 'bankAccountName', placeholder: 'Account name' },
+    { label: 'Account No', key: 'bankAccountNo', placeholder: 'Account number' },
+    { label: 'IFSC / SWIFT', key: 'bankIfsc', placeholder: 'IFSC / SWIFT' }
+  ]
+  const values = {
+    bankName: profile?.bankName || '',
+    bankAccountName: profile?.bankAccountName || (editable ? '' : (profile?.companyName || '')),
+    bankAccountNo: profile?.bankAccountNo || '',
+    bankIfsc: profile?.bankIfsc || ''
+  }
+  const display = editable || showEmpty
+    ? rows
+    : rows.filter((row) => String(values[row.key] || '').trim())
   const qrUrl = profile?.bankQrUrl || null
-  if (!display.length && !qrUrl) return null
+  if (!editable && !display.length && !qrUrl) return null
   return (
     <section className={className}>
       {heading && (
         <h3 className={`qg-section-heading mb-2 border-b pb-1.5 ${dense ? 'text-[10px]' : 'text-[11px]'}`} style={{ borderColor: 'var(--qg-table-border, #e8edf3)' }}>Bank details</h3>
       )}
+      {editable && !qrUrl ? (
+        <button type="button" className="qg-paper-add-btn no-print mb-3" onClick={onUploadQr} disabled={qrBusy}>
+          <span aria-hidden="true">+</span>
+          {qrBusy ? 'Adding…' : 'Add QR'}
+        </button>
+      ) : null}
       <div className={`qg-bank-block${qrUrl ? ' qg-bank-block--with-qr' : ''}`}>
         {qrUrl ? (
           <>
@@ -2715,16 +2916,32 @@ function CompanyBankDetails({ profile, className = '', showEmpty = false, headin
                 onError={onQuoteAssetImgError}
               />
               <p className={dense ? 'qg-bank-qr-hint qg-bank-qr-hint-dense' : 'qg-bank-qr-hint'}>Scan with any UPI payment app</p>
+              {editable ? (
+                <button type="button" className="qg-paper-remove no-print" onClick={onUploadQr} disabled={qrBusy}>
+                  {qrBusy ? 'Uploading…' : 'Replace QR'}
+                </button>
+              ) : null}
             </div>
             <span className="qg-bank-divider" aria-hidden="true" />
           </>
         ) : null}
         <div className={dense ? 'text-[11px] leading-5 text-slate-700' : 'text-sm leading-7 text-slate-700'}>
-          {display.map(row => (
-            <p key={row.label}>
-              <span className="text-slate-600">{row.label}:</span>
-              {row.value ? ` ${row.value}` : ''}
-            </p>
+          {display.map((row) => (
+            editable ? (
+              <div key={row.key} className="qg-bank-inline-row">
+                <span className="w-28 shrink-0 text-slate-600">{row.label}:</span>
+                <InlineField
+                  value={values[row.key]}
+                  onChange={(v) => onChange?.({ [row.key]: v })}
+                  placeholder={row.placeholder}
+                />
+              </div>
+            ) : (
+              <p key={row.key}>
+                <span className="text-slate-600">{row.label}:</span>
+                {values[row.key] ? ` ${values[row.key]}` : ''}
+              </p>
+            )
           ))}
         </div>
       </div>
@@ -5468,7 +5685,7 @@ function contentWidthForNumericColumn(col, items, fontPx = LAYOUT_FONT_PX) {
   return widthForNumericText(longest, fontPx)
 }
 
-function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, totals, saveStatus = 'idle', onNew, onHome, onRetry, onRestored, onConvertToInvoice, companyProfile, persistenceConfigured, onColumnsChange, canUndo, canRedo, onUndo, onRedo, onFooterFitChange, seriesSyncedRef, onRememberPaperStyle }) {
+function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, totals, saveStatus = 'idle', onNew, onHome, onRetry, onRestored, onConvertToInvoice, companyProfile, persistenceConfigured, onColumnsChange, canUndo, canRedo, onUndo, onRedo, onFooterFitChange, seriesSyncedRef, onRememberPaperStyle, onSavedProfile }) {
   const [autofilling, setAutofilling] = useState(false)
   const [autofillNote, setAutofillNote] = useState('')
   const [hsnNote, setHsnNote] = useState('')
@@ -5512,10 +5729,14 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const profile = companyProfile || quote.companyProfile || null
   const [logoSize, setLogoSize] = useState(null)
   const logoSizeTimerRef = useRef(0)
+  const [signatureSize, setSignatureSize] = useState(null)
+  const signatureSizeTimerRef = useRef(0)
   const paperProfile = {
     ...(profile || {}),
     logoWidth: logoSize?.logoWidth ?? displayLogoWidth(profile),
-    logoHeight: logoSize?.logoHeight ?? profile?.logoHeight ?? null
+    logoHeight: logoSize?.logoHeight ?? profile?.logoHeight ?? null,
+    signatoryWidth: signatureSize?.signatoryWidth ?? profile?.signatoryWidth ?? null,
+    signatoryHeight: signatureSize?.signatoryHeight ?? profile?.signatoryHeight ?? null
   }
   const applyPaperLogoSize = ({ logoWidth, logoHeight }) => {
     setLogoSize({ logoWidth, logoHeight })
@@ -5527,6 +5748,98 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         companyProfile: { ...(q.companyProfile || profile || {}), logoWidth, logoHeight }
       }))
     }, 400)
+  }
+  const applyPaperSignatureSize = ({ signatoryWidth, signatoryHeight }) => {
+    setSignatureSize({ signatoryWidth, signatoryHeight })
+    window.clearTimeout(signatureSizeTimerRef.current)
+    signatureSizeTimerRef.current = window.setTimeout(() => {
+      saveCompanyProfile({ signatoryWidth, signatoryHeight })
+      updateQuote((q) => ({
+        ...q,
+        companyProfile: { ...(q.companyProfile || profile || {}), signatoryWidth, signatoryHeight }
+      }))
+    }, 400)
+  }
+  const paperLogoRef = useRef(null)
+  const paperQrRef = useRef(null)
+  const paperSignatoryRef = useRef(null)
+  const persistProfileTimer = useRef(0)
+  const [logoBusy, setLogoBusy] = useState(false)
+  const [qrBusy, setQrBusy] = useState(false)
+  const [signatoryBusy, setSignatoryBusy] = useState(false)
+
+  const applySavedProfile = (next) => {
+    if (!next) return
+    onSavedProfile?.(next)
+    updateQuote((q) => ({ ...q, companyProfile: { ...(q.companyProfile || {}), ...next } }))
+  }
+
+  const persistProfile = (partial) => {
+    if (!partial || !Object.keys(partial).length) return
+    applySavedProfile({ ...(profile || {}), ...partial })
+    window.clearTimeout(persistProfileTimer.current)
+    persistProfileTimer.current = window.setTimeout(async () => {
+      if (!persistenceConfigured) return
+      try {
+        const result = await saveCompanyProfile(partial)
+        if (result?.unavailable) return
+        if (result?.profile) applySavedProfile(result.profile)
+      } catch { /* keep the optimistic paper values */ }
+    }, 450)
+  }
+
+  const pickPaperImage = (input, accept) => {
+    const inputEl = input?.current
+    if (!inputEl) return
+    if (accept) inputEl.accept = accept
+    inputEl.click()
+  }
+
+  const handlePaperLogoFile = async (file) => {
+    if (!file) return
+    setLogoBusy(true)
+    try {
+      const result = await uploadCompanyLogo(file, { logoWidth: 72 })
+      if (result?.unavailable) {
+        applySavedProfile({ ...(profile || {}), logoUrl: URL.createObjectURL(file) })
+        return
+      }
+      if (result?.profile) applySavedProfile(result.profile)
+    } catch {
+      /* leave current logo */
+    } finally {
+      setLogoBusy(false)
+    }
+  }
+
+  const handlePaperQrFile = async (file) => {
+    if (!file) return
+    setQrBusy(true)
+    try {
+      const result = await uploadCompanyBankQr(file)
+      if (result?.profile) applySavedProfile(result.profile)
+    } catch {
+      /* leave current QR */
+    } finally {
+      setQrBusy(false)
+    }
+  }
+
+  const handlePaperSignatoryFile = async (file) => {
+    if (!file) return
+    setSignatoryBusy(true)
+    try {
+      const result = await uploadCompanySignatory(file)
+      if (result?.unavailable) {
+        applySavedProfile({ ...(profile || {}), signatoryUrl: URL.createObjectURL(file) })
+        return
+      }
+      if (result?.profile) applySavedProfile(result.profile)
+    } catch {
+      /* leave current stamp */
+    } finally {
+      setSignatoryBusy(false)
+    }
   }
   const [historyQuotes, setHistoryQuotes] = useState([])
   const [catalogProducts, setCatalogProducts] = useState([])
@@ -5555,7 +5868,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   }, [quote.paperStyle, quote.companyProfile?.paperStyle, quoteId])
 
   const tableColorId = quote.tableColorId || 'blue'
-  const chosenAccent = accentForTableColor(tableColorId, quote.logoPalette)
+  const chosenAccent = accentForTableColor(tableColorId, quote.logoPalette, quote.customAccent || quote.tableAccent)
   const paperTheme = resolvePaperTheme(paperStyle, chosenAccent)
 
   const applyLogoPalette = (palette, colorId = tableColorId) => {
@@ -5564,7 +5877,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       ...q,
       logoPalette: palette || null,
       tableColorId: nextId,
-      tableAccent: accentForTableColor(nextId, palette)
+      tableAccent: accentForTableColor(nextId, palette, q.customAccent)
     }))
   }
 
@@ -5594,7 +5907,18 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     }
   }
 
-  const setTableColor = async (id) => {
+  const setTableColor = async (id, hex) => {
+    if (id === 'custom') {
+      const next = normalizeAccentHex(hex, quote.customAccent || quote.tableAccent || DEFAULT_ACCENT)
+      updateQuote(q => ({
+        ...q,
+        tableColorId: 'custom',
+        customAccent: next,
+        tableAccent: next
+      }))
+      setLogoColorNote('')
+      return
+    }
     if (id === 'blue') {
       updateQuote(q => ({ ...q, tableColorId: 'blue', tableAccent: DEFAULT_ACCENT }))
       setLogoColorNote('')
@@ -5622,7 +5946,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
           return {
             ...q,
             logoPalette: palette,
-            tableAccent: accentForTableColor(nextId, palette)
+            tableAccent: accentForTableColor(nextId, palette, q.customAccent)
           }
         })
         setLogoColorNote('')
@@ -6514,6 +6838,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       paperFontPx={paperFontPx}
       onFontChange={setPaperFontPx}
       tableColorId={tableColorId}
+      customAccent={quote.customAccent || (tableColorId === 'custom' ? quote.tableAccent : '')}
       logoPalette={quote.logoPalette}
       logoUrl={profile?.logoUrl}
       logoColorBusy={logoColorBusy}
@@ -6595,11 +6920,11 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       watermarkEnabled={watermarkEnabled}
       runningHeader={{
         left: profile?.companyName?.trim() || 'Quotation',
-        right: [quote.number, quote.date].filter(Boolean).join(' · ')
+        right: [normalizeHeaderMeta(quote.headerMeta).quoteNumber ? quote.number : null, quote.date].filter(Boolean).join(' · ')
       }}
       runningFooter={{
         left: profile?.companyName?.trim() ? `For ${profile.companyName.trim()}` : 'QuoteGen',
-        right: quote.number ? `Quotation ${quote.number}` : 'Continued'
+        right: (normalizeHeaderMeta(quote.headerMeta).quoteNumber && quote.number) ? `Quotation ${quote.number}` : 'Continued'
       }}
     >
       {pagePlan.map((page, pageIndex) => (
@@ -6616,6 +6941,14 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         onNumberCommit={commitQuoteNumberSeries}
         grandTotal={hasAmount ? money(quoteTotals.grandTotal) : ''}
         onLogoSizeChange={applyPaperLogoSize}
+        onUploadLogo={() => pickPaperImage(paperLogoRef, 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml')}
+        logoBusy={logoBusy}
+        onProfileChange={persistProfile}
+        onHeaderMetaChange={(meta) => {
+          const next = normalizeHeaderMeta(meta)
+          update(['headerMeta'], next)
+          persistProfile({ headerMeta: next })
+        }}
       />
         </div>
         ) : null}
@@ -7061,7 +7394,10 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                   className="mt-1 min-h-[4.5rem] text-sm leading-relaxed"
                   style={{ color: 'var(--qg-muted)' }}
                   value={termsHtml}
-                  onChange={v => update(['fields', 'standardTerms'], v)}
+                  onChange={v => {
+                    update(['fields', 'standardTerms'], v)
+                    persistProfile({ standardTerms: v })
+                  }}
                   placeholder="Standard terms for this quotation — click to edit. Use the toolbar for bold, italic, colour…"
                 />
               </section>
@@ -7105,18 +7441,30 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
             {Object.entries({ ...defaultTerms, ...quote.terms }).map(([key, val]) => (
               <div key={key} className="flex gap-2 border-b border-dashed py-2 text-sm" style={{ borderColor: 'var(--qg-table-border)' }}>
                 <span className="w-28 shrink-0 capitalize" style={{ color: 'var(--qg-muted)' }}>{key}</span>
-                <TermField value={val} onChange={v => update(['terms', key], v)} />
+                <TermField
+                  value={val}
+                  onChange={v => {
+                    update(['terms', key], v)
+                    persistProfile({ commercialTerms: { ...defaultTerms, ...(quote.terms || {}), [key]: v } })
+                  }}
+                />
               </div>
             ))}
           </div>
         </section>
         <footer className="mt-8 qg-signatory-block">
-          {profile?.bankName || profile?.bankAccountNo || profile?.bankQrUrl || isFormalPaper ? (
-            <>
-              <hr className="qg-section-rule" />
-              <CompanyBankDetails profile={profile} className="mb-8" showEmpty={isFormalPaper} />
-            </>
-          ) : null}
+          <>
+            <hr className="qg-section-rule" />
+            <CompanyBankDetails
+              profile={paperProfile}
+              className="mb-8"
+              showEmpty
+              editable
+              onChange={persistProfile}
+              onUploadQr={() => pickPaperImage(paperQrRef, 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml')}
+              qrBusy={qrBusy}
+            />
+          </>
           <hr className="qg-section-rule" />
           {isEditorialPaper ? (
             <div className="qg-exec-signoff">
@@ -7129,17 +7477,63 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
               <div className="qg-exec-sign qg-exec-sign--issuer">
                 <p className="qg-exec-sign-eyebrow">For</p>
                 <p className="qg-exec-sign-party">{profile?.companyName?.trim() || 'Your Company'}</p>
-                <div className="qg-exec-sign-line" />
+                <div className="qg-exec-sign-line">
+                  {paperProfile?.signatoryUrl ? (
+                    <SignatoryStamp profile={paperProfile} onSizeChange={applyPaperSignatureSize} />
+                  ) : (
+                    <button
+                      type="button"
+                      className="qg-paper-add-btn no-print"
+                      disabled={signatoryBusy}
+                      onClick={() => pickPaperImage(paperSignatoryRef, 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml')}
+                    >
+                      {signatoryBusy ? 'Adding…' : '+ Signature'}
+                    </button>
+                  )}
+                </div>
                 <p className="qg-exec-sign-caption">Authorized Signatory</p>
+                {paperProfile?.signatoryUrl ? (
+                  <button
+                    type="button"
+                    className="qg-paper-remove no-print"
+                    disabled={signatoryBusy}
+                    onClick={() => pickPaperImage(paperSignatoryRef, 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml')}
+                  >
+                    Replace signature
+                  </button>
+                ) : null}
               </div>
             </div>
           ) : (
           <div className="flex justify-end pb-1">
             <div className="w-52 text-center">
-              <div className="h-14" />
-              <div className="pt-2" style={{ borderTop: '1.5px solid var(--qg-muted, #5c6879)' }}>
+              <div className="qg-signatory-slot">
+                {paperProfile?.signatoryUrl ? (
+                  <SignatoryStamp profile={paperProfile} onSizeChange={applyPaperSignatureSize} />
+                ) : (
+                  <button
+                    type="button"
+                    className="qg-paper-add-btn no-print"
+                    disabled={signatoryBusy}
+                    onClick={() => pickPaperImage(paperSignatoryRef, 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml')}
+                  >
+                    {signatoryBusy ? 'Adding…' : '+ Signature'}
+                  </button>
+                )}
+              </div>
+              <div className="qg-signatory-rule">
                 <p className="text-xs font-semibold" style={{ color: 'var(--qg-text)' }}>Authorized Signatory</p>
                 <p className="mt-0.5 text-[11px]" style={{ color: 'var(--qg-muted)' }}>For {profile?.companyName?.trim() || 'Your Company'}</p>
+                {paperProfile?.signatoryUrl ? (
+                  <button
+                    type="button"
+                    className="qg-paper-remove no-print"
+                    disabled={signatoryBusy}
+                    onClick={() => pickPaperImage(paperSignatoryRef, 'image/png,image/jpeg,image/webp,image/gif,image/svg+xml')}
+                  >
+                    Replace signature
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>
@@ -7164,6 +7558,40 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
       ))}
     </QuoteStudioCanvas>
     </div>
+
+    <input
+      ref={paperLogoRef}
+      type="file"
+      accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+      className="hidden"
+      onChange={(e) => {
+        const file = e.target.files?.[0]
+        e.target.value = ''
+        if (file) handlePaperLogoFile(file)
+      }}
+    />
+    <input
+      ref={paperQrRef}
+      type="file"
+      accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+      className="hidden"
+      onChange={(e) => {
+        const file = e.target.files?.[0]
+        e.target.value = ''
+        if (file) handlePaperQrFile(file)
+      }}
+    />
+    <input
+      ref={paperSignatoryRef}
+      type="file"
+      accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+      className="hidden"
+      onChange={(e) => {
+        const file = e.target.files?.[0]
+        e.target.value = ''
+        if (file) handlePaperSignatoryFile(file)
+      }}
+    />
 
     <QuoteStudioFooterBar onExport={handleExport} pdfBusy={pdfBusy} onHome={onHome} />
 

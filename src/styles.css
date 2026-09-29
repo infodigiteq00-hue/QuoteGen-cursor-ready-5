@@ -271,8 +271,16 @@ select:focus {
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  width: 100%;
+  box-sizing: border-box;
+  flex: 1 1 calc(100% + 32px);
+  width: calc(100% + 32px);
+  max-width: none;
   min-width: 0;
+  margin-left: -16px;
+  margin-right: -16px;
+  padding: 8px 16px;
+  background: #F4F6F9;
+  border-radius: 0;
 }
 .qg-table-theme {
   display: flex;
@@ -309,6 +317,39 @@ select:focus {
 }
 .qg-table-swatch--on {
   box-shadow: 0 0 0 1.5px #94a3b8;
+}
+.qg-table-theme-or {
+  margin-left: 4px;
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 500;
+}
+.qg-table-theme-custom {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  line-height: 1;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.qg-table-theme-custom.is-on {
+  color: #1A73E8;
+  font-weight: 600;
+}
+.qg-table-theme-custom-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 .qg-table-theme-from-logo {
   margin-left: 2px;
@@ -444,11 +485,141 @@ select:focus {
   font-size: 1.26em;
   line-height: 1.25;
 }
+.qg-letterhead-name .qg-inline-field {
+  width: 100%;
+  font: inherit;
+  font-weight: 700;
+  color: inherit;
+}
 .qg-letterhead-address {
   margin: 4px 0 0;
   font-size: 0.8em;
   line-height: 1.5;
   white-space: pre-line;
+}
+.qg-letterhead-address .qg-inline-field {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  white-space: pre-line;
+}
+.qg-letterhead-logo-hit {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  width: 100%;
+}
+.qg-paper-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1.5px dashed #1A73E8;
+  border-radius: 8px;
+  background: rgba(26, 115, 232, 0.08);
+  color: #1A73E8;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.qg-paper-add-btn:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+.qg-paper-remove {
+  margin-top: 4px;
+  border: 0;
+  background: none;
+  color: #64748b;
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.qg-header-meta-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: inherit;
+  min-width: 0;
+}
+.qg-header-meta-hide {
+  align-self: inherit;
+  margin-top: 2px;
+  text-align: inherit;
+}
+.qg-header-meta-restore {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+.qg-header-meta-restore .qg-paper-add-btn {
+  min-height: 28px;
+}
+.qg-mod-number .qg-header-meta-slot {
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+.qg-mod-number .qg-header-meta-hide {
+  flex-basis: 100%;
+  margin-top: 0;
+  text-align: right;
+}
+.qg-exec-docmeta .qg-header-meta-slot,
+.qg-formal-docmeta .qg-header-meta-slot,
+.qg-atl-no .qg-header-meta-slot,
+.qg-brief-bar-right .qg-header-meta-slot,
+.qg-meta-table--right .qg-header-meta-slot {
+  align-items: flex-end;
+}
+.qg-signatory-mark {
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  max-width: 100%;
+  line-height: 0;
+  overflow: visible;
+}
+.qg-signatory-stamp {
+  height: 56px;
+  margin: 0 auto;
+  object-fit: contain;
+  max-width: 100%;
+}
+.qg-signatory-mark .qg-signatory-stamp {
+  height: auto;
+  margin: 0;
+}
+.qg-signatory-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 96px;
+  padding: 8px 4px 18px;
+  overflow: visible;
+}
+.qg-signatory-rule {
+  padding-top: 10px;
+  border-top: 1.5px solid var(--qg-muted, #5c6879);
+}
+.qg-bank-inline-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.qg-bank-inline-row .qg-inline-field {
+  flex: 1;
+  min-width: 0;
 }
 
 .qg-theme-formal .qg-paper-header {
@@ -833,6 +1004,17 @@ select:focus {
   color: var(--qg-accent-on, #fff);
   opacity: 0.82;
 }
+.qg-exec-fact--value .qg-header-meta-hide {
+  color: rgba(255, 255, 255, 0.88);
+}
+.qg-exec-fact--value .qg-header-meta-slot {
+  align-items: flex-end;
+  width: 100%;
+}
+.qg-mod-hero-bottom .qg-header-meta-slot,
+.qg-atl-mast .qg-header-meta-slot {
+  align-items: flex-end;
+}
 .qg-exec-fact-amount {
   font-family: Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif;
   font-size: 17px;
@@ -1073,8 +1255,27 @@ select:focus {
   white-space: nowrap;
 }
 .qg-exec-sign-line {
-  height: 52px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  box-sizing: border-box;
+  min-height: 72px;
+  height: auto;
+  padding-bottom: 8px;
   border-bottom: 1.5px solid var(--qg-text, #0b1220);
+  overflow: visible;
+}
+.qg-exec-sign--issuer .qg-exec-sign-line {
+  justify-content: flex-end;
+  padding-right: 12px;
+}
+.qg-exec-sign-line .qg-paper-add-btn {
+  min-height: 32px;
+  margin: 0;
+}
+.qg-exec-sign-line .qg-signatory-stamp {
+  height: auto;
+  margin: 0;
 }
 .qg-exec-sign-caption {
   margin: 6px 0 0;
@@ -1495,10 +1696,17 @@ select:focus {
   border-style: solid;
   border-color: #eaecf0;
   background: #f9fafb;
+  text-align: left;
 }
 .qg-theme-modern .qg-exec-sign-line {
-  height: 40px;
+  min-height: 72px;
+  height: auto;
+  padding-bottom: 8px;
   border-bottom: 1px solid #d0d5dd;
+}
+.qg-theme-modern .qg-exec-sign--issuer .qg-exec-sign-line {
+  justify-content: flex-start;
+  padding-right: 0;
 }
 .qg-theme-modern .qg-sheet-run-header,
 .qg-theme-modern .qg-sheet-run-footer {
@@ -1626,7 +1834,8 @@ select:focus {
 }
 .qg-atl-index {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   border-bottom: 1px solid #e4e0d6;
 }
 .qg-atl-cell {
@@ -1880,7 +2089,9 @@ select:focus {
   letter-spacing: -0.015em;
 }
 .qg-theme-atelier .qg-exec-sign-line {
-  height: 48px;
+  min-height: 72px;
+  height: auto;
+  padding-bottom: 8px;
   border-bottom: 1px solid var(--qg-text, #161410);
 }
 .qg-theme-atelier .qg-sheet-run-header {
@@ -1980,7 +2191,8 @@ select:focus {
 }
 .qg-brief-meta {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 0;
   padding: 12px 22px;
   border-top: 1px solid #e6eaef;
@@ -2191,7 +2403,9 @@ select:focus {
   padding: 0;
 }
 .qg-theme-brief .qg-exec-sign-line {
-  height: 36px;
+  min-height: 72px;
+  height: auto;
+  padding-bottom: 8px;
   border-bottom: 1px solid #1a2332;
 }
 .qg-theme-brief .qg-exec-sign-party {
@@ -2595,6 +2809,36 @@ textarea.qg-inline-field {
   font-size: 11.5px;
   color: #94a3b8;
   line-height: 1.3;
+}
+.qg-desc-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.qg-desc-edit-title .qg-inline-field {
+  font-weight: 700;
+  color: var(--qg-text, #0f172a);
+}
+.qg-desc-edit-sub .qg-inline-field {
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: #64748b;
+}
+.qg-desc-add {
+  display: block;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: text;
+}
+.qg-desc-add:hover {
+  color: #64748b;
 }
 
 /* Formula setup floats above the quotation table so overflow-x on
@@ -3378,29 +3622,31 @@ body.qg-export-dock-on .qg-commands-fab {
   padding: 0 36px;
   border: 0;
   border-radius: 999px;
-  background: #061A3D;
+  background: #1B9A57;
   color: #fff;
   font-size: 15.5px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 4px 14px rgba(6, 26, 61, 0.22);
-  transition: background .15s, transform .15s;
+  box-shadow: 0 4px 14px rgba(27, 154, 87, 0.28);
+  transition: background .15s, transform .15s, box-shadow .15s;
 }
 .qg-ready-export-btn:hover:not(:disabled) {
-  background: #0a274f;
+  background: #168A4C;
   transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(22, 138, 76, 0.32);
 }
 .qg-ready-export-btn:disabled { opacity: 0.65; cursor: wait; }
 .qg-ready-export-btn.qg-preview-pdf-btn {
-  background: #fff;
-  color: #1A73E8;
-  border: 1.5px solid #1A73E8;
-  box-shadow: none;
+  background: #1B9A57;
+  color: #fff;
+  border: 0;
+  box-shadow: 0 4px 14px rgba(27, 154, 87, 0.28);
 }
 .qg-ready-export-btn.qg-preview-pdf-btn:hover:not(:disabled) {
-  background: #F5F9FF;
-  color: #1558b0;
+  background: #168A4C;
+  color: #fff;
   transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(22, 138, 76, 0.32);
 }
 
 /* ── Advanced tools panel ── */

@@ -1,10 +1,11 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { onQuoteAssetImgError } from './pdfExport.js'
-import { resolvePaperTheme, PAPER_THEMES, tableColorSwatches } from './quotePaperThemes.js'
+import { resolvePaperTheme, PAPER_THEMES, tableColorSwatches, DEFAULT_ACCENT, normalizeAccentHex } from './quotePaperThemes.js'
 import { SuggestField } from './SuggestField.jsx'
 import { matchClients, shippingAddressesForCustomer } from './suggestCatalog.js'
 import { A4_HEIGHT_MM, A4_HEIGHT_PX, A4_WIDTH_MM, A4_WIDTH_PX } from './a4Pagination.js'
+import { headerMetaHasHidden, normalizeHeaderMeta, patchHeaderMeta } from '../shared/headerMeta.js'
 
 function pxToMm(px) {
   return Math.round((Number(px) || A4_WIDTH_PX) * 25.4 / 96)
@@ -72,7 +73,7 @@ function autoGrowField(el) {
   el.style.height = `${Math.max(el.scrollHeight, 24)}px`
 }
 
-function InlineField({ value, onChange, onBlur, placeholder, bold, large, right, mono, multiline, grow, style }) {
+export function InlineField({ value, onChange, onBlur, placeholder, bold, large, right, mono, multiline, grow, style }) {
   const focusedRef = React.useRef(false)
   const areaRef = React.useRef(null)
   const [draft, setDraft] = React.useState(value || '')
@@ -159,11 +160,12 @@ export function displayLogoWidth(profile) {
     : LOGO_SIZE_DEFAULT
 }
 
-function CompanyLetterheadBlock({ profile, theme, onUploadLogo, logoBusy, onLogoSizeChange }) {
+function CompanyLetterheadBlock({ profile, theme, onUploadLogo, logoBusy, onLogoSizeChange, onProfileChange }) {
   const isFormal = theme.themeClass === 'qg-theme-formal'
   const markRef = useRef(null)
-  const name = profile?.companyName?.trim() || 'Your Company Name'
-  const headerText = profile?.headerText?.trim() || ''
+  const editable = Boolean(onProfileChange || onUploadLogo)
+  const name = profile?.companyName || ''
+  const headerText = profile?.headerText || ''
   const logoUrl = profile?.logoUrl
   const userSized = isUserPickedLogoSize(profile?.logoWidth)
   const width = displayLogoWidth(profile)
@@ -214,9 +216,39 @@ function CompanyLetterheadBlock({ profile, theme, onUploadLogo, logoBusy, onLogo
         style={{ width, maxWidth: width, ['--qg-logo-w']: `${width}px` }}
       >
         {logoUrl ? (
+          onUploadLogo ? (
+            <button
+              type="button"
+              className="qg-letterhead-logo-hit"
+              disabled={logoBusy}
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                if (!logoBusy) onUploadLogo()
+              }}
+              aria-label="Replace company logo"
+              title="Replace logo"
+            >
+              <img
+                src={logoUrl}
+                alt={`${name.trim() || 'Company'} logo`}
+                onError={onQuoteAssetImgError}
+                style={{
+                  width,
+                  maxWidth: '100%',
+                  minWidth: 0,
+                  height: height || 'auto',
+                  maxHeight: height || 'none',
+                  objectFit: 'contain',
+                  objectPosition: 'center center',
+                  display: 'block'
+                }}
+              />
+            </button>
+          ) : (
           <img
             src={logoUrl}
-            alt={`${name} logo`}
+            alt={`${name.trim() || 'Company'} logo`}
             onError={onQuoteAssetImgError}
             style={{
               width,
@@ -229,6 +261,7 @@ function CompanyLetterheadBlock({ profile, theme, onUploadLogo, logoBusy, onLogo
               display: 'block'
             }}
           />
+          )
         ) : (
           <button
             type="button"
@@ -262,18 +295,39 @@ function CompanyLetterheadBlock({ profile, theme, onUploadLogo, logoBusy, onLogo
       </div>
       ) : null}
       <div className="qg-letterhead-text">
-        <p className="qg-letterhead-name" style={{ color: theme.accent }}>
-          {name}
-        </p>
-        {headerText ? (
-          <p className="qg-letterhead-address" style={{ color: theme.muted }}>
-            {headerText}
-          </p>
-        ) : onUploadLogo ? (
-          <p className="qg-letterhead-address qg-letterhead-address--hint no-print" style={{ color: theme.muted }}>
-            Address, phone, or tagline
-          </p>
-        ) : null}
+        {editable ? (
+          <>
+            <div className="qg-letterhead-name" style={{ color: theme.accent }}>
+              <InlineField
+                value={name}
+                onChange={v => onProfileChange?.({ companyName: v })}
+                placeholder="Your company name"
+                bold
+                large
+              />
+            </div>
+            <div className="qg-letterhead-address" style={{ color: theme.muted }}>
+              <InlineField
+                multiline
+                grow
+                value={headerText}
+                onChange={v => onProfileChange?.({ headerText: v })}
+                placeholder="Address, phone, or tagline"
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="qg-letterhead-name" style={{ color: theme.accent }}>
+              {name.trim() || 'Your Company Name'}
+            </p>
+            {headerText.trim() ? (
+              <p className="qg-letterhead-address" style={{ color: theme.muted }}>
+                {headerText}
+              </p>
+            ) : null}
+          </>
+        )}
       </div>
     </div>
   )
@@ -289,12 +343,72 @@ function MetaRow({ label, children, theme }) {
   )
 }
 
+function HeaderMetaHide({ onHide, label = 'Remove' }) {
+  if (!onHide) return null
+  return (
+    <button
+      type="button"
+      className="qg-paper-remove qg-header-meta-hide no-print"
+      onClick={onHide}
+      title="Hide on quotations. You can add it back any time."
+    >
+      {label}
+    </button>
+  )
+}
+
+function HeaderMetaSlot({ children, onHide, hideLabel }) {
+  return (
+    <div className="qg-header-meta-slot">
+      {children}
+      <HeaderMetaHide onHide={onHide} label={hideLabel} />
+    </div>
+  )
+}
+
+function HeaderMetaRestore({ meta, onShow }) {
+  if (!onShow || !headerMetaHasHidden(meta)) return null
+  const items = [
+    meta.quoteNumber ? null : { key: 'quoteNumber', label: '+ Quote no' },
+    meta.validTill ? null : { key: 'validTill', label: '+ Valid till' },
+    meta.reference ? null : { key: 'reference', label: '+ Reference' },
+    meta.totalValue ? null : { key: 'totalValue', label: '+ Quote value' }
+  ].filter(Boolean)
+  return (
+    <div className="qg-header-meta-restore no-print">
+      {items.map((item) => (
+        <button
+          key={item.key}
+          type="button"
+          className="qg-paper-add-btn"
+          onClick={() => onShow({ [item.key]: true })}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /* ─── Paper header — handles BOTH cases cleanly ─────────────────────────── */
-export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isInvoice, onNumberCommit, grandTotal = '', onUploadLogo, logoBusy, onLogoSizeChange }) {
+export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isInvoice, onNumberCommit, grandTotal = '', onUploadLogo, logoBusy, onLogoSizeChange, onProfileChange, onHeaderMetaChange }) {
   const fields = quote?.fields || {}
   const validUntil = fields.validUntil || quote.validUntil || ''
   const referenceNo = fields.referenceNo || quote.referenceNo || ''
   const hasHeaderImage = Boolean(profile?.headerImageUrl)
+  const headerMeta = normalizeHeaderMeta(quote?.headerMeta)
+  const canEditMeta = Boolean(onHeaderMetaChange)
+  const showNumber = headerMeta.quoteNumber
+  const showValid = headerMeta.validTill
+  const showRef = headerMeta.reference
+  const showTotal = headerMeta.totalValue
+  const setHeaderMeta = (patch) => onHeaderMetaChange?.(patchHeaderMeta(headerMeta, patch))
+  const restoreBar = <HeaderMetaRestore meta={headerMeta} onShow={canEditMeta ? setHeaderMeta : null} />
+  const hideNumber = canEditMeta ? () => setHeaderMeta({ quoteNumber: false }) : null
+  const hideValid = canEditMeta ? () => setHeaderMeta({ validTill: false }) : null
+  const hideRef = canEditMeta ? () => setHeaderMeta({ reference: false }) : null
+  const hideTotal = canEditMeta ? () => setHeaderMeta({ totalValue: false }) : null
+  const valueLabel = isInvoice ? 'Amount due' : 'Quote value'
   const letterheadBlock = (
     <CompanyLetterheadBlock
       profile={profile}
@@ -302,6 +416,7 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
       onUploadLogo={onUploadLogo}
       logoBusy={logoBusy}
       onLogoSizeChange={onLogoSizeChange}
+      onProfileChange={onProfileChange}
     />
   )
   const numberField = (
@@ -350,24 +465,37 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
         <div className="qg-doc-meta-strip" style={{ borderColor: theme.tableBorder, background: theme.metaBarBg }}>
           <p className="qg-doc-title" style={{ color: theme.accent, fontFamily: theme.titleFont }}>{docLabel}</p>
           <div className="qg-meta-table">
-            <MetaRow label="No." theme={theme}>
-              {numberField}
-            </MetaRow>
+            {showNumber ? (
+              <MetaRow label="No." theme={theme}>
+                <HeaderMetaSlot onHide={hideNumber} hideLabel="Remove quote no">
+                  {numberField}
+                </HeaderMetaSlot>
+              </MetaRow>
+            ) : null}
             <MetaRow label="Date" theme={theme}>
               <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} right placeholder="DD MMM YYYY" />
             </MetaRow>
-            <MetaRow label="Valid till" theme={theme}>
-              <DateField
-                value={validUntil}
-                onChange={v => update(['fields'], { ...fields, validUntil: v })}
-                right
-                placeholder="DD/MM/YYYY"
-              />
-            </MetaRow>
-            <MetaRow label="REF. NO." theme={theme}>
-              {referenceField}
-            </MetaRow>
+            {showValid ? (
+              <MetaRow label="Valid till" theme={theme}>
+                <HeaderMetaSlot onHide={hideValid} hideLabel="Remove valid till">
+                  <DateField
+                    value={validUntil}
+                    onChange={v => update(['fields'], { ...fields, validUntil: v })}
+                    right
+                    placeholder="DD/MM/YYYY"
+                  />
+                </HeaderMetaSlot>
+              </MetaRow>
+            ) : null}
+            {showRef ? (
+              <MetaRow label="REF. NO." theme={theme}>
+                <HeaderMetaSlot onHide={hideRef} hideLabel="Remove reference">
+                  {referenceField}
+                </HeaderMetaSlot>
+              </MetaRow>
+            ) : null}
           </div>
+          {restoreBar}
         </div>
       </header>
     )
@@ -382,7 +510,11 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
           {letterheadBlock}
           <div className="qg-exec-docmeta">
             <p className="qg-exec-eyebrow" style={{ color: theme.accent }}>{docLabel}</p>
-            <div className="qg-exec-number">{numberField}</div>
+            {showNumber ? (
+              <HeaderMetaSlot onHide={hideNumber} hideLabel="Remove quote no">
+                <div className="qg-exec-number">{numberField}</div>
+              </HeaderMetaSlot>
+            ) : null}
           </div>
         </div>
         <div className="qg-exec-facts">
@@ -390,29 +522,40 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
             <span className="qg-exec-fact-label">Date issued</span>
             <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} placeholder="DD MMM YYYY" />
           </div>
-          <div className="qg-exec-fact">
-            <span className="qg-exec-fact-label">Valid till</span>
-            <DateField
-              value={validUntil}
-              onChange={v => update(['fields'], { ...fields, validUntil: v })}
-              placeholder="DD/MM/YYYY"
-            />
-          </div>
-          <div className="qg-exec-fact">
-            <span className="qg-exec-fact-label">Reference</span>
-            <InlineField
-              value={referenceNo}
-              onChange={v => update(['fields'], { ...fields, referenceNo: v })}
-              placeholder="—"
-            />
-          </div>
-          {grandTotal ? (
+          {showValid ? (
+            <div className="qg-exec-fact">
+              <span className="qg-exec-fact-label">Valid till</span>
+              <HeaderMetaSlot onHide={hideValid} hideLabel="Remove valid till">
+                <DateField
+                  value={validUntil}
+                  onChange={v => update(['fields'], { ...fields, validUntil: v })}
+                  placeholder="DD/MM/YYYY"
+                />
+              </HeaderMetaSlot>
+            </div>
+          ) : null}
+          {showRef ? (
+            <div className="qg-exec-fact">
+              <span className="qg-exec-fact-label">Reference</span>
+              <HeaderMetaSlot onHide={hideRef} hideLabel="Remove reference">
+                <InlineField
+                  value={referenceNo}
+                  onChange={v => update(['fields'], { ...fields, referenceNo: v })}
+                  placeholder="—"
+                />
+              </HeaderMetaSlot>
+            </div>
+          ) : null}
+          {showTotal && grandTotal ? (
             <div className="qg-exec-fact qg-exec-fact--value">
-              <span className="qg-exec-fact-label">{isInvoice ? 'Amount due' : 'Quote value'}</span>
-              <strong className="qg-exec-fact-amount">{grandTotal}</strong>
+              <HeaderMetaSlot onHide={hideTotal} hideLabel="Remove quote value">
+                <span className="qg-exec-fact-label">{valueLabel}</span>
+                <strong className="qg-exec-fact-amount">{grandTotal}</strong>
+              </HeaderMetaSlot>
             </div>
           ) : null}
         </div>
+        {restoreBar}
       </header>
     )
   }
@@ -426,18 +569,24 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
         <div className="qg-mod-hero">
           <div className="qg-mod-hero-top">
             {letterheadBlock}
-            <div className="qg-mod-number">
-              <span className="qg-mod-number-dot" aria-hidden="true" />
-              {numberField}
-            </div>
+            {showNumber ? (
+              <div className="qg-mod-number">
+                <HeaderMetaSlot onHide={hideNumber} hideLabel="Remove quote no">
+                  <span className="qg-mod-number-dot" aria-hidden="true" />
+                  {numberField}
+                </HeaderMetaSlot>
+              </div>
+            ) : null}
           </div>
           <div className="qg-mod-hero-bottom">
             <h1 className="qg-mod-title">{title}<span style={{ color: theme.accent }}>.</span></h1>
-            {grandTotal ? (
-              <div className="qg-mod-value">
-                <span className="qg-mod-value-label">{isInvoice ? 'Amount due' : 'Total value'}</span>
-                <strong className="qg-mod-value-amount">{grandTotal}</strong>
-              </div>
+            {showTotal && grandTotal ? (
+              <HeaderMetaSlot onHide={hideTotal} hideLabel="Remove quote value">
+                <div className="qg-mod-value">
+                  <span className="qg-mod-value-label">{isInvoice ? 'Amount due' : 'Total value'}</span>
+                  <strong className="qg-mod-value-amount">{grandTotal}</strong>
+                </div>
+              </HeaderMetaSlot>
             ) : null}
           </div>
         </div>
@@ -446,23 +595,32 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
             <span className="qg-mod-chip-label">Issued</span>
             <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} placeholder="DD MMM YYYY" />
           </div>
-          <div className="qg-mod-chip">
-            <span className="qg-mod-chip-label">Valid till</span>
-            <DateField
-              value={validUntil}
-              onChange={v => update(['fields'], { ...fields, validUntil: v })}
-              placeholder="DD/MM/YYYY"
-            />
-          </div>
-          <div className="qg-mod-chip">
-            <span className="qg-mod-chip-label">Ref.</span>
-            <InlineField
-              value={referenceNo}
-              onChange={v => update(['fields'], { ...fields, referenceNo: v })}
-              placeholder="—"
-            />
-          </div>
+          {showValid ? (
+            <div className="qg-mod-chip">
+              <span className="qg-mod-chip-label">Valid till</span>
+              <HeaderMetaSlot onHide={hideValid} hideLabel="Remove valid till">
+                <DateField
+                  value={validUntil}
+                  onChange={v => update(['fields'], { ...fields, validUntil: v })}
+                  placeholder="DD/MM/YYYY"
+                />
+              </HeaderMetaSlot>
+            </div>
+          ) : null}
+          {showRef ? (
+            <div className="qg-mod-chip">
+              <span className="qg-mod-chip-label">Ref.</span>
+              <HeaderMetaSlot onHide={hideRef} hideLabel="Remove reference">
+                <InlineField
+                  value={referenceNo}
+                  onChange={v => update(['fields'], { ...fields, referenceNo: v })}
+                  placeholder="—"
+                />
+              </HeaderMetaSlot>
+            </div>
+          ) : null}
         </div>
+        {restoreBar}
       </header>
     )
   }
@@ -475,18 +633,24 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
       <header className="qg-paper-header qg-atl-header">
         <div className="qg-atl-top">
           {letterheadBlock}
-          <div className="qg-atl-no">
-            <span className="qg-atl-no-label">No.</span>
-            {numberField}
-          </div>
+          {showNumber ? (
+            <div className="qg-atl-no">
+              <HeaderMetaSlot onHide={hideNumber} hideLabel="Remove quote no">
+                <span className="qg-atl-no-label">No.</span>
+                {numberField}
+              </HeaderMetaSlot>
+            </div>
+          ) : null}
         </div>
         <div className="qg-atl-mast">
           <h1 className="qg-atl-title">{title}</h1>
-          {grandTotal ? (
-            <div className="qg-atl-value">
-              <span className="qg-atl-value-label">{isInvoice ? 'Amount due' : 'Proposal value'}</span>
-              <strong className="qg-atl-value-amount">{grandTotal}</strong>
-            </div>
+          {showTotal && grandTotal ? (
+            <HeaderMetaSlot onHide={hideTotal} hideLabel="Remove quote value">
+              <div className="qg-atl-value">
+                <span className="qg-atl-value-label">{isInvoice ? 'Amount due' : 'Proposal value'}</span>
+                <strong className="qg-atl-value-amount">{grandTotal}</strong>
+              </div>
+            </HeaderMetaSlot>
           ) : null}
         </div>
         <div className="qg-atl-index">
@@ -495,25 +659,34 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
             <span className="qg-atl-cell-label">Issued</span>
             <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} placeholder="DD MMM YYYY" />
           </div>
-          <div className="qg-atl-cell">
-            <span className="qg-atl-cell-n">02</span>
-            <span className="qg-atl-cell-label">Valid till</span>
-            <DateField
-              value={validUntil}
-              onChange={v => update(['fields'], { ...fields, validUntil: v })}
-              placeholder="DD/MM/YYYY"
-            />
-          </div>
-          <div className="qg-atl-cell">
-            <span className="qg-atl-cell-n">03</span>
-            <span className="qg-atl-cell-label">Reference</span>
-            <InlineField
-              value={referenceNo}
-              onChange={v => update(['fields'], { ...fields, referenceNo: v })}
-              placeholder="—"
-            />
-          </div>
+          {showValid ? (
+            <div className="qg-atl-cell">
+              <span className="qg-atl-cell-n">02</span>
+              <span className="qg-atl-cell-label">Valid till</span>
+              <HeaderMetaSlot onHide={hideValid} hideLabel="Remove valid till">
+                <DateField
+                  value={validUntil}
+                  onChange={v => update(['fields'], { ...fields, validUntil: v })}
+                  placeholder="DD/MM/YYYY"
+                />
+              </HeaderMetaSlot>
+            </div>
+          ) : null}
+          {showRef ? (
+            <div className="qg-atl-cell">
+              <span className="qg-atl-cell-n">{showValid ? '03' : '02'}</span>
+              <span className="qg-atl-cell-label">Reference</span>
+              <HeaderMetaSlot onHide={hideRef} hideLabel="Remove reference">
+                <InlineField
+                  value={referenceNo}
+                  onChange={v => update(['fields'], { ...fields, referenceNo: v })}
+                  placeholder="—"
+                />
+              </HeaderMetaSlot>
+            </div>
+          ) : null}
         </div>
+        {restoreBar}
       </header>
     )
   }
@@ -526,8 +699,16 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
           {letterheadBlock}
           <div className="qg-brief-bar-right">
             <p className="qg-brief-doc">{docLabel}</p>
-            <div className="qg-brief-no">{numberField}</div>
-            {grandTotal ? <strong className="qg-brief-total">{grandTotal}</strong> : null}
+            {showNumber ? (
+              <HeaderMetaSlot onHide={hideNumber} hideLabel="Remove quote no">
+                <div className="qg-brief-no">{numberField}</div>
+              </HeaderMetaSlot>
+            ) : null}
+            {showTotal && grandTotal ? (
+              <HeaderMetaSlot onHide={hideTotal} hideLabel="Remove quote value">
+                <strong className="qg-brief-total">{grandTotal}</strong>
+              </HeaderMetaSlot>
+            ) : null}
           </div>
         </div>
         <div className="qg-brief-meta">
@@ -535,23 +716,32 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
             <em>Date</em>
             <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} placeholder="DD MMM YYYY" />
           </span>
-          <span className="qg-brief-pair">
-            <em>Valid till</em>
-            <DateField
-              value={validUntil}
-              onChange={v => update(['fields'], { ...fields, validUntil: v })}
-              placeholder="DD/MM/YYYY"
-            />
-          </span>
-          <span className="qg-brief-pair">
-            <em>Ref.</em>
-            <InlineField
-              value={referenceNo}
-              onChange={v => update(['fields'], { ...fields, referenceNo: v })}
-              placeholder="—"
-            />
-          </span>
+          {showValid ? (
+            <span className="qg-brief-pair">
+              <em>Valid till</em>
+              <HeaderMetaSlot onHide={hideValid} hideLabel="Remove valid till">
+                <DateField
+                  value={validUntil}
+                  onChange={v => update(['fields'], { ...fields, validUntil: v })}
+                  placeholder="DD/MM/YYYY"
+                />
+              </HeaderMetaSlot>
+            </span>
+          ) : null}
+          {showRef ? (
+            <span className="qg-brief-pair">
+              <em>Ref.</em>
+              <HeaderMetaSlot onHide={hideRef} hideLabel="Remove reference">
+                <InlineField
+                  value={referenceNo}
+                  onChange={v => update(['fields'], { ...fields, referenceNo: v })}
+                  placeholder="—"
+                />
+              </HeaderMetaSlot>
+            </span>
+          ) : null}
         </div>
+        {restoreBar}
       </header>
     )
   }
@@ -564,33 +754,48 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
           {letterheadBlock}
           <div className="qg-formal-docmeta">
             <p className="qg-doc-title" style={{ color: theme.accent, fontFamily: theme.titleFont }}>{docLabel}</p>
-            <div className="qg-formal-docmeta-no">{numberField}</div>
+            {showNumber ? (
+              <HeaderMetaSlot onHide={hideNumber} hideLabel="Remove quote no">
+                <div className="qg-formal-docmeta-no">{numberField}</div>
+              </HeaderMetaSlot>
+            ) : null}
             <div className="qg-formal-docmeta-date">
               <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} right placeholder="DD MMM YYYY" />
             </div>
           </div>
         </div>
+        {(showValid || showRef || (canEditMeta && headerMetaHasHidden(headerMeta))) ? (
         <div className="qg-formal-meta-bar">
-          <span className="qg-formal-meta-pair">
-            <em>Valid till</em>
-            <DateField
-              value={validUntil}
-              onChange={v => update(['fields'], { ...fields, validUntil: v })}
-              right
-              placeholder="DD/MM/YYYY"
-            />
-          </span>
-          <span className="qg-formal-meta-pair">
-            <em>Ref.</em>
-            <InlineField
-              value={referenceNo}
-              onChange={v => update(['fields'], { ...fields, referenceNo: v })}
-              right
-              mono
-              placeholder="—"
-            />
-          </span>
+          {showValid ? (
+            <span className="qg-formal-meta-pair">
+              <em>Valid till</em>
+              <HeaderMetaSlot onHide={hideValid} hideLabel="Remove valid till">
+                <DateField
+                  value={validUntil}
+                  onChange={v => update(['fields'], { ...fields, validUntil: v })}
+                  right
+                  placeholder="DD/MM/YYYY"
+                />
+              </HeaderMetaSlot>
+            </span>
+          ) : null}
+          {showRef ? (
+            <span className="qg-formal-meta-pair">
+              <em>Ref.</em>
+              <HeaderMetaSlot onHide={hideRef} hideLabel="Remove reference">
+                <InlineField
+                  value={referenceNo}
+                  onChange={v => update(['fields'], { ...fields, referenceNo: v })}
+                  right
+                  mono
+                  placeholder="—"
+                />
+              </HeaderMetaSlot>
+            </span>
+          ) : null}
+          {restoreBar}
         </div>
+        ) : null}
       </header>
     )
   }
@@ -603,24 +808,37 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
         <div className="qg-header-right">
           <p className="qg-doc-title" style={{ color: theme.accent, fontFamily: theme.titleFont }}>{docLabel}</p>
           <div className="qg-meta-table qg-meta-table--right" style={{ marginTop: 12 }}>
-            <MetaRow label="No." theme={theme}>
-              {numberField}
-            </MetaRow>
+            {showNumber ? (
+              <MetaRow label="No." theme={theme}>
+                <HeaderMetaSlot onHide={hideNumber} hideLabel="Remove quote no">
+                  {numberField}
+                </HeaderMetaSlot>
+              </MetaRow>
+            ) : null}
             <MetaRow label="Date" theme={theme}>
               <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} right placeholder="DD MMM YYYY" />
             </MetaRow>
-            <MetaRow label="Valid till" theme={theme}>
-              <DateField
-                value={validUntil}
-                onChange={v => update(['fields'], { ...fields, validUntil: v })}
-                right
-                placeholder="DD/MM/YYYY"
-              />
-            </MetaRow>
-            <MetaRow label="REF. NO." theme={theme}>
-              {referenceField}
-            </MetaRow>
+            {showValid ? (
+              <MetaRow label="Valid till" theme={theme}>
+                <HeaderMetaSlot onHide={hideValid} hideLabel="Remove valid till">
+                  <DateField
+                    value={validUntil}
+                    onChange={v => update(['fields'], { ...fields, validUntil: v })}
+                    right
+                    placeholder="DD/MM/YYYY"
+                  />
+                </HeaderMetaSlot>
+              </MetaRow>
+            ) : null}
+            {showRef ? (
+              <MetaRow label="REF. NO." theme={theme}>
+                <HeaderMetaSlot onHide={hideRef} hideLabel="Remove reference">
+                  {referenceField}
+                </HeaderMetaSlot>
+              </MetaRow>
+            ) : null}
           </div>
+          {restoreBar}
         </div>
       </div>
     </header>
@@ -1076,7 +1294,7 @@ export function ExportMenu({ onExport, busy, label = 'Export', variant = 'primar
   }, [open, opensUp])
 
   const formats = [
-    { id: 'pdf', name: 'Download preview in PDF', hint: 'Exact pages as on screen — light vector PDF' },
+    { id: 'pdf', name: 'Download PDF', hint: 'Exact pages as on screen — light vector PDF' },
     { id: 'word', name: 'Word', hint: '.doc — A4, same layout as the preview' },
     { id: 'excel', name: 'Excel', hint: '.xlsx — A4, same layout as the preview' }
   ]
@@ -1155,7 +1373,7 @@ function clampFontSize(value, fallback) {
 /* Quick one-click: live preview → lightweight vector PDF (not screenshots). */
 export function PreviewPdfButton({ onExport, busy, variant = 'header' }) {
   const buttonClass = variant === 'footer'
-    ? 'qg-ready-export-btn'
+    ? 'qg-ready-export-btn qg-preview-pdf-btn'
     : variant === 'header'
       ? 'rounded-lg border border-[#1A73E8] bg-white px-4 py-2 text-sm font-semibold text-[#1A73E8] shadow-sm hover:bg-[#F5F9FF] disabled:opacity-60'
       : 'rounded-xl border border-[#1A73E8] bg-white px-5 py-2 text-sm font-semibold text-[#1A73E8] shadow-sm hover:bg-[#F5F9FF] disabled:opacity-60'
@@ -1165,14 +1383,9 @@ export function PreviewPdfButton({ onExport, busy, variant = 'header' }) {
       disabled={busy}
       onClick={() => onExport?.('pdf')}
       className={buttonClass}
-      title="Download the quotation exactly as you see it in the preview"
+      title="Download PDF"
     >
-      {busy ? 'Preparing PDF…' : (
-        <>
-          <span className="qg-preview-pdf-label-full">Download preview in PDF</span>
-          <span className="qg-preview-pdf-label-short">Download PDF</span>
-        </>
-      )}
+      {busy ? 'Preparing PDF…' : 'Download PDF'}
     </button>
   )
 }
@@ -1180,7 +1393,7 @@ export function PreviewPdfButton({ onExport, busy, variant = 'header' }) {
 export function QuoteStudioToolbar({
   paperStyle, onPaperStyleChange,
   paperFontPx, onFontChange,
-  tableColorId, logoPalette, logoUrl, logoColorBusy,
+  tableColorId, customAccent, logoPalette, logoUrl, logoColorBusy,
   onTableColorChange, onDetectFromLogo,
   watermarkEnabled = true, onWatermarkChange,
   saveFlash, saveStatusLabel,
@@ -1188,6 +1401,9 @@ export function QuoteStudioToolbar({
   onExport, pdfBusy, pdfNote
 }) {
   const swatches = tableColorSwatches(logoPalette)
+  const pickerHex = normalizeAccentHex(customAccent, DEFAULT_ACCENT).toLowerCase()
+  const customOn = tableColorId === 'custom'
+  const customColorId = React.useId()
   const [fontDraft, setFontDraft] = React.useState(String(paperFontPx))
   React.useEffect(() => { setFontDraft(String(paperFontPx)) }, [paperFontPx])
 
@@ -1240,6 +1456,25 @@ export function QuoteStudioToolbar({
                 {logoColorBusy ? 'Reading…' : 'From logo'}
               </button>
             ) : null}
+            <span className="qg-table-theme-or">or</span>
+            <input
+              id={customColorId}
+              type="color"
+              value={pickerHex}
+              className="qg-table-theme-custom-input"
+              aria-label="Custom colour"
+              onChange={(e) => onTableColorChange('custom', e.target.value)}
+            />
+            <label
+              htmlFor={customColorId}
+              className={`qg-table-theme-custom ${customOn ? 'is-on' : ''}`}
+              title="Pick any colour"
+              onClick={() => {
+                if (!customOn) onTableColorChange('custom', pickerHex)
+              }}
+            >
+              Custom
+            </label>
           </div>
         </div>
         <label className="flex cursor-pointer items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">

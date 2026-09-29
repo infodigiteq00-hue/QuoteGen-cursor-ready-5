@@ -188,10 +188,23 @@ export function resolvePaperTheme(id, tableAccent) {
   return resolved
 }
 
-export function accentForTableColor(id, palette) {
+export function accentForTableColor(id, palette, customHex) {
+  if (id === 'custom') return normalizeAccentHex(customHex)
   if (id === 'logo-primary' && palette?.primary) return palette.primary
   if (id === 'logo-secondary' && palette?.secondary) return palette.secondary
   return DEFAULT_ACCENT
+}
+
+export function normalizeAccentHex(hex, fallback = DEFAULT_ACCENT) {
+  const raw = String(hex || '').trim()
+  const short = raw.match(/^#?([0-9a-f]{3})$/i)
+  if (short) {
+    const [a, b, c] = short[1]
+    return `#${a}${a}${b}${b}${c}${c}`.toUpperCase()
+  }
+  const full = raw.match(/^#?([0-9a-f]{6})$/i)
+  if (full) return `#${full[1]}`.toUpperCase()
+  return fallback
 }
 
 export function tableColorSwatches(palette) {

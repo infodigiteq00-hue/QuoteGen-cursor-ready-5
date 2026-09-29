@@ -2,7 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ingestEnquiryFiles, uploadCompanyLogo } from './quotePersistence.js'
 import { downloadQuotationPdf, quotationFileName } from './pdfExport.js'
 import { QuotePaperHeader, QuoteStudioCanvas } from './QuoteStudio.jsx'
-import { PAPER_THEMES, normalizePaperStyle, readPreferredPaperStyle, resolvePaperTheme, writePreferredPaperStyle, extractImagePalette, accentForTableColor, tableColorSwatches } from './quotePaperThemes.js'
+import { PAPER_THEMES, normalizePaperStyle, readPreferredPaperStyle, resolvePaperTheme, writePreferredPaperStyle, extractImagePalette, accentForTableColor, normalizeAccentHex, tableColorSwatches } from './quotePaperThemes.js'
 import { peekPreferredColumns, writePreferredColumns } from './quoteLayoutPrefs.js'
 import QuoteGenerateCeremony, { CEREMONY_MIN_MS } from './QuoteGenerateCeremony.jsx'
 import { defaultA4Pages, measureA4Blocks, packA4Pages, pagesEqual } from './a4Pagination.js'
@@ -822,7 +822,7 @@ function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', c
   const clientLocation = String(quote?.customer?.location || '').trim()
   const hasClient = Boolean(clientName || clientCompany || clientGst || clientLocation)
   const resolvedId = normalizePaperStyle(themeId)
-  const chosenAccent = accentForTableColor(quote?.tableColorId, quote?.logoPalette)
+  const chosenAccent = accentForTableColor(quote?.tableColorId, quote?.logoPalette, quote?.customAccent || quote?.tableAccent)
   const theme = resolvePaperTheme(resolvedId, chosenAccent)
   const colWidths = trialExportColWidths(columns)
   const rootRef = useRef(null)
@@ -1533,12 +1533,15 @@ export default function MetaTrialGuide({
     }, 400)
   }
 
-  const applyTableColor = (id) => {
+  const applyTableColor = (id, hex) => {
     const palette = revealQuote?.logoPalette || null
     const tableColorId = id || 'blue'
-    const tableAccent = accentForTableColor(tableColorId, palette)
-    setRevealQuote((q) => (q ? { ...q, tableColorId, tableAccent, logoPalette: palette } : q))
-    onPatchQuote?.({ tableColorId, tableAccent, logoPalette: palette })
+    const customAccent = tableColorId === 'custom'
+      ? normalizeAccentHex(hex, revealQuote?.customAccent || revealQuote?.tableAccent)
+      : (revealQuote?.customAccent || null)
+    const tableAccent = accentForTableColor(tableColorId, palette, customAccent)
+    setRevealQuote((q) => (q ? { ...q, tableColorId, tableAccent, customAccent: customAccent || q.customAccent || null, logoPalette: palette } : q))
+    onPatchQuote?.({ tableColorId, tableAccent, customAccent: customAccent || revealQuote?.customAccent || null, logoPalette: palette })
   }
 
   const matchColoursFromLogo = async (url) => {
@@ -1923,6 +1926,29 @@ export default function MetaTrialGuide({
                     onClick={() => applyTableColor(swatch.id)}
                   />
                 ))}
+                {String(guideProfile?.logoUrl || '').trim() ? (
+                  <em className="meta-guide-color-or">or</em>
+                ) : null}
+                <input
+                  id="meta-guide-custom-color"
+                  type="color"
+                  className="meta-guide-color-custom-input"
+                  value={normalizeAccentHex(revealQuote?.customAccent || revealQuote?.tableAccent).toLowerCase()}
+                  aria-label="Custom colour"
+                  onChange={(e) => applyTableColor('custom', e.target.value)}
+                />
+                <label
+                  htmlFor="meta-guide-custom-color"
+                  className={`meta-guide-color-custom${(revealQuote?.tableColorId || 'blue') === 'custom' ? ' is-on' : ''}`}
+                  title="Pick any colour"
+                  onClick={() => {
+                    if ((revealQuote?.tableColorId || 'blue') !== 'custom') {
+                      applyTableColor('custom', revealQuote?.customAccent || revealQuote?.tableAccent)
+                    }
+                  }}
+                >
+                  Custom
+                </label>
               </div>
               <em>Matched from your logo — tap to change</em>
             </div>
@@ -1961,7 +1987,7 @@ export default function MetaTrialGuide({
             </button>
             <button
               type="button"
-              className="meta-guide-primary"
+              className="meta-guide-primary meta-guide-pdf-cta"
               disabled={pdfBusy || logoBusy}
               onClick={() => { void downloadFormalPdf() }}
             >
@@ -2383,7 +2409,7 @@ export default function MetaTrialGuide({
             </button>
             <button
               type="button"
-              className="meta-guide-primary meta-guide-primary-inline"
+              className="meta-guide-primary meta-guide-primary-inline meta-guide-pdf-cta"
               onClick={() => { void downloadFormalPdf() }}
               disabled={pdfBusy}
             >

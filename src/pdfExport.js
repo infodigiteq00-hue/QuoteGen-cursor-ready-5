@@ -432,7 +432,7 @@ function revealTitles(root) {
 
 function hideCaptureChrome(clonedRoot, { matchPreview = false } = {}) {
   clonedRoot.querySelectorAll(
-    '.qg-image-resize, .qg-col-resizer, .qg-footer-handle, .qg-footer-edit-btn, .qg-footer-fit-bar, .qg-drop-zone, .qg-export-list, .qg-logo-resize, .qg-trial-logo-btn'
+    '.qg-image-resize, .qg-col-resizer, .qg-footer-handle, .qg-footer-edit-btn, .qg-footer-fit-bar, .qg-drop-zone, .qg-export-list, .qg-logo-resize, .qg-trial-logo-btn, .qg-paper-add-btn, .qg-paper-remove, .qg-header-meta-restore, .qg-header-meta-hide'
   ).forEach((node) => { node.remove() })
   clonedRoot.querySelectorAll('.no-print').forEach((node) => {
     if (!matchPreview && isSheetRun(node)) {
@@ -1155,6 +1155,10 @@ export async function buildPreviewExportHtml() {
     .qg-print-run-header,
     .qg-print-run-footer,
     .qg-trial-logo-btn,
+    .qg-paper-add-btn,
+    .qg-paper-remove,
+    .qg-header-meta-restore,
+    .qg-header-meta-hide,
     .qg-logo-resize { display: none !important; }`
     : `
     .qg-sheet-run-header.no-print,
@@ -1324,7 +1328,7 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
     if (code === 'CHROME_MISSING' || code === 'CHROME_SPAWN_FAILED') {
       const exhausted = /process threads|pthread_create|Resource temporarily unavailable/i.test(detail)
       const hint = exhausted
-        ? 'live server ran out of Chrome process threads. Restart the Railway service, then try Download preview in PDF again.'
+        ? 'live server ran out of Chrome process threads. Restart the Railway service, then try Download PDF again.'
         : 'live server could not start Chrome for PDF.'
       throw new Error(`${parts.join(' · ')} — ${hint}`)
     }

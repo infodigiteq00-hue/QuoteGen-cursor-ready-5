@@ -15,6 +15,7 @@ import {
 } from '../shared/quoteColumns.js'
 import { formatIndianAmount } from '../shared/templateMap.js'
 import { normalizeFooterFit } from '../shared/footerFit.js'
+import { normalizeHeaderMeta } from '../shared/headerMeta.js'
 import { A4_HEIGHT_MM, A4_WIDTH_MM } from './a4Pagination.js'
 
 function quotationFileNameLocal(quote, ext = 'pdf') {
@@ -213,12 +214,13 @@ export async function downloadStructuredQuotationPdf({
   doc.text(String(docLabel || 'QUOTATION'), PAGE_W - MARGIN, rightY + 5, { align: 'right' })
   rightY += 10
   doc.setFontSize(8)
+  const headerMeta = normalizeHeaderMeta(quote?.headerMeta)
   const meta = [
-    ['NO.', quote?.number || ''],
+    headerMeta.quoteNumber ? ['NO.', quote?.number || ''] : null,
     ['DATE', quote?.date || ''],
-    ['VALID TILL', quote?.fields?.validUntil || quote?.validUntil || ''],
-    ['REF. NO.', quote?.fields?.referenceNo || quote?.referenceNo || '']
-  ]
+    headerMeta.validTill ? ['VALID TILL', quote?.fields?.validUntil || quote?.validUntil || ''] : null,
+    headerMeta.reference ? ['REF. NO.', quote?.fields?.referenceNo || quote?.referenceNo || ''] : null
+  ].filter(Boolean)
   for (const [label, value] of meta) {
     doc.setFont('helvetica', 'bold')
     doc.setTextColor(ar, ag, ab)
