@@ -1441,6 +1441,17 @@
   padding: 48px 0 96px;
 }
 
+.meta-verified {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.meta-verified .meta-form-wrap {
+  width: min(560px, 100%);
+  padding: 0;
+}
+
 .meta-form-card {
   width: min(560px, 100%);
   margin: 0 auto;

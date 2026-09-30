@@ -1,6 +1,6 @@
 import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { sendAdminEmail, sendUserEmail } from './mail.js'
-import { canManageMetaAdsLeads } from './superAdmin.js'
+import { canManageMetaAdsLeads, isSuperAdmin } from './superAdmin.js'
 
 function requireDb(res, requestId) {
   if (!isSupabaseConfigured()) {
@@ -70,9 +70,13 @@ function serializeLead(row) {
     remarks: row.remarks || '',
     followUpAt: row.follow_up_at || null,
     reminderMinutes: reminderMinutesOf(row.reminder_minutes),
+    deactivated: Boolean(row.deactivated_at),
+    deactivatedAt: row.deactivated_at || null,
     createdAt: row.created_at
   }
 }
+
+const LEAD_COLUMNS = 'id, name, phone, email, company, source, path, query, status, intent, demo_at, purchased_at, purchase_amount, purchase_order_id, remarks, follow_up_at, reminder_minutes, deactivated_at, created_at'
 
 async function findLatestLead(supabase, { email, phone }) {
   const em = String(email || '').trim().toLowerCase()
@@ -390,7 +394,7 @@ export function registerPublicMetaAdsLeadRoutes(app) {
     if (!process.env.RESEND_API_KEY?.trim()) {
       console.error(`[${requestId}] RESEND_API_KEY missing — cannot email trial OTP`)
       return res.status(503).json({
-        error: 'Verification email isn’t available right now. Tap “Do this later — continue” for now.',
+        error: 'Verification email isn’t available right now. Please try again in a minute.',
         requestId
       })
     }
@@ -482,14 +486,18 @@ export function registerMetaAdsLeadRoutes(app) {
     try {
       const { data, error, count } = await supabase
         .from('meta_ads_leads')
-        .select('id, name, phone, email, company, source, path, query, status, intent, demo_at, purchased_at, purchase_amount, purchase_order_id, remarks, follow_up_at, reminder_minutes, created_at', { count: 'exact' })
+        .select(LEAD_COLUMNS, { count: 'exact' })
         .order('created_at', { ascending: false })
         .limit(500)
       if (error) throw error
 
       const leads = (data || []).map(serializeLead)
-      const counts = { lead: 0, demo: 0, purchased: 0 }
+      const counts = { lead: 0, demo: 0, purchased: 0, inactive: 0 }
       for (const lead of leads) {
+        if (lead.deactivated) {
+          counts.inactive += 1
+          continue
+        }
         if (lead.status === 'purchased') counts.purchased += 1
         else if (lead.status === 'demo') counts.demo += 1
         else counts.lead += 1
@@ -543,6 +551,9 @@ export function registerMetaAdsLeadRoutes(app) {
       }
       patch.reminder_minutes = minutes
     }
+    if (body.deactivated != null) {
+      patch.deactivated_at = body.deactivated ? new Date().toISOString() : null
+    }
     if (!Object.keys(patch).length) {
       return res.status(400).json({ error: 'Nothing to update.', code: 'VALIDATION', requestId })
     }
@@ -564,12 +575,42 @@ export function registerMetaAdsLeadRoutes(app) {
         .from('meta_ads_leads')
         .update(patch)
         .eq('id', id)
-        .select('id, name, phone, email, company, source, path, query, status, intent, demo_at, purchased_at, purchase_amount, purchase_order_id, remarks, follow_up_at, reminder_minutes, created_at')
+        .select(LEAD_COLUMNS)
         .single()
       if (error) throw error
       res.json({ lead: serializeLead(data), requestId })
     } catch (error) {
       console.error(`[${requestId}] meta ads lead update failed`, error?.code, error?.message)
+      if (/meta_ads_leads|schema cache|PGRST|42703/i.test(error?.message || '')) {
+        return migrationRequired(res, requestId)
+      }
+      supabaseError(error, res, requestId)
+    }
+  })
+
+  app.delete('/api/meta-ads-leads/:id', async (req, res) => {
+    const requestId = `mal-del-${Date.now()}`
+    if (!isSuperAdmin(req.userEmail)) {
+      return res.status(403).json({ error: 'Only the QuoteGen owner can delete a lead.', code: 'FORBIDDEN', requestId })
+    }
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+
+    const id = String(req.params.id || '').trim()
+    if (!id) return res.status(400).json({ error: 'Lead id is required.', code: 'VALIDATION', requestId })
+
+    try {
+      const { data, error } = await supabase
+        .from('meta_ads_leads')
+        .delete()
+        .eq('id', id)
+        .select('id')
+        .maybeSingle()
+      if (error) throw error
+      if (!data) return res.status(404).json({ error: 'Lead not found.', code: 'NOT_FOUND', requestId })
+      res.json({ ok: true, id: data.id, requestId })
+    } catch (error) {
+      console.error(`[${requestId}] meta ads lead delete failed`, error?.code, error?.message)
       if (/meta_ads_leads|schema cache|PGRST|42703/i.test(error?.message || '')) {
         return migrationRequired(res, requestId)
       }

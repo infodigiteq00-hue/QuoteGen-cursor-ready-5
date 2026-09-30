@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import logoUrl from './assets/landing/quotegen-logo.png'
-import { META_ADS_LEAD_KEY as LEAD_KEY, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, recordMetaLeadProgress } from './metaTrialLead.js'
+import { META_ADS_LEAD_KEY as LEAD_KEY, readMetaAdsLead, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaWelcome, recordMetaLeadProgress, readMetaWelcome, writeMetaWelcome } from './metaTrialLead.js'
 import { trackPixel } from './metaPixel.js'
 import { whatsappChatsLink } from './whatsappEnquiry.js'
 import './metaAdsLanding.css'
@@ -86,7 +86,98 @@ function digitsOnly(v) {
   return String(v || '').replace(/\D/g, '')
 }
 
-function TrialForm({ formRef, autoFocusName, onNextStep, onReadyChange, initialLead = null }) {
+function NextChoices({ lead, onNextStep }) {
+  const whatsapp = whatsappChatsLink()
+  return (
+    <div className="meta-form-card meta-form-card-next">
+      <p className="meta-next-kicker">You’re in</p>
+      <h2>How would you like to go further?</h2>
+      <div className="meta-next-actions">
+        <button
+          type="button"
+          className="meta-next-tile is-primary"
+          style={CTA_STYLE}
+          onClick={() => onNextStep?.('demo', lead)}
+        >
+          <span className="meta-next-tile-copy">
+            <strong>Create a demo quotation</strong>
+            <em>Ready in about 2 minutes</em>
+          </span>
+          <span className="meta-next-tile-go" aria-hidden="true">→</span>
+        </button>
+        <a
+          className="meta-next-tile"
+          href={whatsapp.href}
+          target={whatsapp.external ? '_blank' : undefined}
+          rel={whatsapp.external ? 'noopener noreferrer' : undefined}
+        >
+          <span className="meta-next-tile-copy">
+            <strong>Open WhatsApp</strong>
+            <em>Copy a client enquiry from a chat</em>
+          </span>
+          <span className="meta-next-tile-go is-wa" aria-hidden="true"><IconWhatsApp size={22} /></span>
+        </a>
+      </div>
+      <p className="meta-form-fine">No card needed</p>
+    </div>
+  )
+}
+
+function VerifiedArrival({ lead, saving, saveError, onRetrySave, onNextStep }) {
+  const [step, setStep] = useState(() => (readMetaWelcome() === 'choice' ? 'choice' : 'congrats'))
+
+  let body = null
+  if (saving) {
+    body = (
+      <div className="meta-form-card meta-form-card-next">
+        <p className="meta-next-kicker">You’re all set</p>
+        <h2>Confirming your email…</h2>
+      </div>
+    )
+  } else if (saveError) {
+    body = (
+      <div className="meta-form-card meta-form-card-next">
+        <p className="meta-next-kicker">You’re all set</p>
+        <h2>We couldn’t save your details.</h2>
+        <p className="meta-form-lead">{saveError}</p>
+        <button type="button" className="meta-btn meta-btn-primary meta-btn-lg" style={CTA_STYLE} onClick={onRetrySave}>
+          Try again
+        </button>
+      </div>
+    )
+  } else if (step === 'congrats') {
+    body = (
+      <div className="meta-form-card meta-form-card-next">
+        <p className="meta-next-kicker">You’re all set</p>
+        <h2>Congratulations.</h2>
+        <p className="meta-form-lead">Your email is verified.</p>
+        <button
+          type="button"
+          className="meta-btn meta-btn-primary meta-btn-lg"
+          style={CTA_STYLE}
+          onClick={() => {
+            writeMetaWelcome('choice')
+            setStep('choice')
+          }}
+        >
+          Continue
+        </button>
+      </div>
+    )
+  } else {
+    body = <NextChoices lead={lead} onNextStep={onNextStep} />
+  }
+
+  return (
+    <div className="meta-ads meta-verified">
+      <div className="meta-form-wrap is-ready">
+        <div className="meta-shell">{body}</div>
+      </div>
+    </div>
+  )
+}
+
+function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyChange, initialLead = null }) {
   const [name, setName] = useState(initialLead?.name || '')
   const [phone, setPhone] = useState(initialLead?.phone || '')
   const [email, setEmail] = useState(initialLead?.email || '')
@@ -135,59 +226,19 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onReadyChange, initialL
     }
     setSubmitting(true)
     try {
-      const response = await fetch('/api/meta-ads-leads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) {
-        throw new Error(data.error || data.message || 'Could not save your details. Please try again.')
-      }
-      writeMetaAdsLead({ ...payload, id: data.id || null })
-      trackPixel('Lead', { content_name: 'QuoteGen trial' }, { once: data.id || em })
-      setDone(true)
+      writeMetaAdsLead({ ...payload, verified: false })
+      onSubmitted?.(payload)
     } catch (err) {
-      setError(err.message || 'Could not save your details. Please try again.')
-    } finally {
+      setError(err.message || 'Could not continue. Please try again.')
       setSubmitting(false)
     }
   }
 
   if (done) {
     const lead = { name, phone, email, company }
-    const whatsapp = whatsappChatsLink()
     return (
-      <div className="meta-form-card meta-form-card-next" ref={formRef} id="trial-form">
-        <p className="meta-next-kicker">You’re in</p>
-        <h2>How would you like to go further?</h2>
-        <div className="meta-next-actions">
-          <button
-            type="button"
-            className="meta-next-tile is-primary"
-            style={CTA_STYLE}
-            onClick={() => onNextStep?.('demo', lead)}
-          >
-            <span className="meta-next-tile-copy">
-              <strong>Create a demo quotation</strong>
-              <em>Ready in about 2 minutes</em>
-            </span>
-            <span className="meta-next-tile-go" aria-hidden="true">→</span>
-          </button>
-          <a
-            className="meta-next-tile"
-            href={whatsapp.href}
-            target={whatsapp.external ? '_blank' : undefined}
-            rel={whatsapp.external ? 'noopener noreferrer' : undefined}
-          >
-            <span className="meta-next-tile-copy">
-              <strong>Open WhatsApp</strong>
-              <em>Copy a client enquiry from a chat</em>
-            </span>
-            <span className="meta-next-tile-go is-wa" aria-hidden="true"><IconWhatsApp size={22} /></span>
-          </a>
-        </div>
-        <p className="meta-form-fine">No card needed</p>
+      <div ref={formRef} id="trial-form">
+        <NextChoices lead={lead} onNextStep={onNextStep} />
       </div>
     )
   }
@@ -257,7 +308,7 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onReadyChange, initialL
         style={CTA_STYLE}
         disabled={submitting}
       >
-        {submitting ? 'Saving…' : <DemoCtaLabel />}
+        {submitting ? 'Continuing…' : <DemoCtaLabel />}
       </button>
       <p className="meta-form-fine">
         No credit card required · Free to try
@@ -268,7 +319,7 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onReadyChange, initialL
   )
 }
 
-export default function MetaAdsLanding({ onSignIn, onContinueTrial, initialLead = null }) {
+export default function MetaAdsLanding({ onSignIn, onContinueTrial, onStartVerify, initialLead = null, celebrate = false, saving = false, saveError = '', onRetrySave }) {
   const formRef = useRef(null)
   const [focusForm, setFocusForm] = useState(0)
   const [formReady, setFormReady] = useState(Boolean(initialLead))
@@ -307,16 +358,45 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial, initialLead 
   }
 
   const handleNextStep = (choice, lead) => {
-    writeMetaTrialIntent(choice, lead)
-    if (lead) writeMetaAdsLead({ ...lead, submitted: true, next: choice })
-    recordMetaLeadProgress(choice === 'company' ? 'company' : 'demo', lead)
+    const stored = readMetaAdsLead()
+    const merged = {
+      ...(stored || {}),
+      ...(lead || {}),
+      verified: Boolean(stored?.verified || lead?.verified),
+      id: lead?.id || stored?.id || null
+    }
+    writeMetaTrialIntent(choice, merged)
+    if (merged.email) writeMetaAdsLead(merged)
+    recordMetaLeadProgress(choice === 'company' ? 'company' : 'demo', merged)
     // Leave the long landing URL so refresh / back doesn't dump them into the ads page again.
     // Signed-in users (initialLead) skip verify and go straight back into the app.
     try {
       if (!initialLead) window.history.pushState({}, '', '/trial-verify')
       window.scrollTo(0, 0)
     } catch { /* ignore */ }
-    onContinueTrial?.(choice, lead)
+    onContinueTrial?.(choice, merged)
+  }
+
+  const startVerify = (lead) => {
+    clearMetaWelcome()
+    writeMetaAdsLead({ ...lead, verified: false })
+    try {
+      window.history.pushState({}, '', '/trial-verify')
+      window.scrollTo(0, 0)
+    } catch { /* ignore */ }
+    onStartVerify?.(lead)
+  }
+
+  if (celebrate) {
+    return (
+      <VerifiedArrival
+        lead={initialLead}
+        saving={saving}
+        saveError={saveError}
+        onRetrySave={onRetrySave}
+        onNextStep={handleNextStep}
+      />
+    )
   }
 
   return (
@@ -659,6 +739,7 @@ pls confirm`}</pre>
             formRef={formRef}
             autoFocusName={focusForm > 0}
             onNextStep={handleNextStep}
+            onSubmitted={startVerify}
             onReadyChange={setFormReady}
             initialLead={initialLead}
           />

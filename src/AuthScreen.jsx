@@ -6,7 +6,6 @@ import {
   saveUserPhone,
   signIn,
   signUp,
-  skipMetaTrialEmailOtp,
   updatePassword,
   verifyEmailCode,
   verifyEmailLoginOtp
@@ -15,7 +14,7 @@ import { emailLinkError, supabaseConfigured } from './supabaseClient.js'
 import BrandMark from './BrandMark.jsx'
 import { trackPixel } from './metaPixel.js'
 import { INDIA_COUNTRY_CODE, isValidIndiaMobile, normalizeIndiaMobileDigits, toIndiaE164 } from '../shared/phone.js'
-import { markMetaTrialUnpaid } from './metaTrialLead.js'
+import { markMetaTrialUnpaid, readMetaAdsLead, writeMetaAdsLead } from './metaTrialLead.js'
 
 function Field({ label, hint, ...props }) {
   return (
@@ -251,16 +250,12 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
   const [otpLength, setOtpLength] = useState(OTP_LENGTH)
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
-  const [skipping, setSkipping] = useState(false)
   const [error, setError] = useState('')
   const [cooldown, setCooldown] = useState(0)
   const [codeSent, setCodeSent] = useState(false)
   const [delivery, setDelivery] = useState('code')
   const inputsRef = useRef([])
   const sentForRef = useRef('')
-
-  // Pre-launch: OTP UI stays, but we don’t auto-blast email until go-live.
-  const allowSkipOtp = true
 
   const phoneDigits = normalizeIndiaMobileDigits(prefillPhone || '').slice(0, 10)
   const otp = digits.join('')
@@ -331,39 +326,6 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const skipForNow = async () => {
-    setError('')
-    const em = email.trim().toLowerCase()
-    if (!em || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
-      setError('Enter a valid email address.')
-      return
-    }
-    setSkipping(true)
-    try {
-      await skipMetaTrialEmailOtp({
-        email: em,
-        phoneDigits: isValidIndiaMobile(phoneDigits) ? phoneDigits : '',
-        name: leadName,
-        company: leadCompany
-      })
-      markMetaTrialUnpaid(em)
-      trackPixel('CompleteRegistration', { status: 'skipped_verify' }, { once: em })
-      if (isValidIndiaMobile(phoneDigits)) {
-        try {
-          await saveUserPhone(phoneDigits)
-          sessionStorage.removeItem('qg_pending_phone')
-        } catch (phoneErr) {
-          console.warn('Could not save mobile after skip-verify', phoneErr)
-        }
-      }
-      try { sessionStorage.removeItem('qg_meta_auth_pending') } catch { /* ignore */ }
-    } catch (err) {
-      setError(err.message || 'Could not continue. Please try again.')
-    } finally {
-      setSkipping(false)
-    }
-  }
-
   const onDigitChange = (index, raw) => {
     const value = String(raw || '').replace(/\D/g, '')
     if (!value) {
@@ -416,6 +378,10 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
     }
     setLoading(true)
     try {
+      const stored = readMetaAdsLead()
+      if (stored?.email) {
+        writeMetaAdsLead({ ...stored, email: em, verified: false, id: stored.email === em ? stored.id : null })
+      }
       await verifyEmailLoginOtp(em, otp)
       markMetaTrialUnpaid(em)
       trackPixel('CompleteRegistration', { status: 'verified' }, { once: em })
@@ -505,7 +471,7 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
           {error && <p className="meta-otp-error">{error}</p>}
 
           {!(delivery === 'link' && codeSent) && (
-            <button type="submit" className="meta-otp-submit" disabled={loading || sending || skipping}>
+            <button type="submit" className="meta-otp-submit" disabled={loading || sending}>
               {loading ? 'Verifying…' : (
                 <>
                   Verify &amp; Login
@@ -515,17 +481,6 @@ function MetaTrialAuthPage({ prefillEmail = '', prefillPhone = '', leadName = ''
             </button>
           )}
         </form>
-
-        {allowSkipOtp && (
-          <button
-            type="button"
-            className="meta-otp-skip"
-            disabled={skipping || loading || sending}
-            onClick={skipForNow}
-          >
-            {skipping ? 'Continuing…' : 'Do this later — continue'}
-          </button>
-        )}
 
         <p className="meta-otp-terms">
           By continuing you agree to our Terms. Password can be set later.

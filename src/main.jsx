@@ -83,7 +83,8 @@ import {
 import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, normalizeAccentHex, peekPreferredPaperStyle, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId, normalizePaperStyle } from './quotePaperThemes.js'
 import { peekPreferredColumns, readPreferredColumns, writePreferredColumns } from './quoteLayoutPrefs.js'
 import QuoteGenerateCeremony, { CEREMONY_MIN_MS } from './QuoteGenerateCeremony.jsx'
-import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaTrialLock, recordMetaLeadProgress, markMetaTrialUnpaid, markMetaTrialPaid, isMetaTrialUnpaid, isMetaGuideActive } from './metaTrialLead.js'
+import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaTrialLock, clearMetaWelcome, readMetaWelcome, writeMetaWelcome, saveVerifiedMetaLead, recordMetaLeadProgress, markMetaTrialUnpaid, markMetaTrialPaid, isMetaTrialUnpaid, isMetaGuideActive } from './metaTrialLead.js'
+import { trackPixel } from './metaPixel.js'
 import { A4_WIDTH_PX, defaultA4Pages, measureA4Blocks, normalizeA4Pages, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
 import { applyProductToItem, clientsFromQuotations, matchProducts, productsFromHistory } from './suggestCatalog.js'
@@ -1213,6 +1214,8 @@ function App() {
   const [metaTrialDemo, setMetaTrialDemo] = useState(() => isMetaGuideActive())
   const [generateCeremony, setGenerateCeremony] = useState(null)
   const [metaLandingReturn, setMetaLandingReturn] = useState(false)
+  const [metaWelcome, setMetaWelcome] = useState(() => Boolean(readMetaWelcome()))
+  const [metaLeadError, setMetaLeadError] = useState('')
   const [metaTrialCompany, setMetaTrialCompany] = useState(false)
   const metaNextConsumedRef = useRef(false)
   const isMobile = useIsMobile()
@@ -1455,6 +1458,8 @@ function App() {
     markMetaTrialUnpaid(lead?.email)
     recordMetaLeadProgress(next === 'company' ? 'company' : 'demo')
     clearMetaTrialIntent()
+    clearMetaWelcome()
+    setMetaWelcome(false)
     setMetaLandingReturn(false)
 
     const path = String(window.location.pathname || '/').replace(/\/+$/, '') || '/'
@@ -1489,22 +1494,57 @@ function App() {
     setWorkspaceView('home')
   }
 
-  // After Meta ads trial signup/login, honour the path they chose on the landing page.
-  // Unpaid trial sessions stay in the guide even after refresh — OTP is not a paid login.
+  // After the email code, save the lead, then show congratulations.
+  // The demo guide starts only once they choose how to go further.
   useEffect(() => {
-    if (!authUser) return
-    const unpaid = isMetaTrialUnpaid(authUser.email)
-    if (metaNextConsumedRef.current) {
-      if (!unpaid) setMetaTrialDemo(false)
-      return
+    if (!authUser) return undefined
+    let cancelled = false
+
+    const openChosenPath = () => {
+      if (cancelled) return
+      if (readMetaWelcome()) {
+        setMetaWelcome(true)
+        setMetaTrialDemo(false)
+        return
+      }
+      const unpaid = isMetaTrialUnpaid(authUser.email)
+      if (metaNextConsumedRef.current) {
+        if (!unpaid) setMetaTrialDemo(false)
+        return
+      }
+      const { next, pending } = readMetaTrialIntent()
+      if (pending && (next === 'demo' || next === 'company') && unpaid) {
+        metaNextConsumedRef.current = true
+        startMetaTrialPath(next)
+        return
+      }
+      setMetaTrialDemo(unpaid)
     }
-    const { next, pending } = readMetaTrialIntent()
-    if (pending && (next === 'demo' || next === 'company') && unpaid) {
-      metaNextConsumedRef.current = true
-      startMetaTrialPath(next)
-      return
+
+    const lead = readMetaAdsLead()
+    if (lead?.email && !lead.verified) {
+      setMetaWelcome(true)
+      setMetaTrialDemo(false)
+      saveVerifiedMetaLead(lead)
+        .then((saved) => {
+          if (cancelled) return
+          trackPixel('Lead', { content_name: 'QuoteGen trial' }, { once: saved?.id || saved?.email || lead.email })
+          writeMetaWelcome('congrats')
+          setMetaLeadError('')
+          setMetaWelcome(true)
+          setMetaTrialDemo(false)
+        })
+        .catch((err) => {
+          if (cancelled) return
+          setMetaLeadError(err.message || 'Could not save your details. Please try again.')
+          setMetaWelcome(true)
+          setMetaTrialDemo(false)
+        })
+      return () => { cancelled = true }
     }
-    setMetaTrialDemo(unpaid)
+
+    openChosenPath()
+    return () => { cancelled = true }
   }, [authUser])
 
   useEffect(() => {
@@ -1836,6 +1876,17 @@ function App() {
       return (
         <MetaAdsLanding
           onSignIn={() => setGuestAuthMode('login')}
+          onStartVerify={(lead) => {
+            clearMetaWelcome()
+            if (lead) writeMetaAdsLead({ ...lead, verified: false })
+            setGuestEmail(lead?.email || '')
+            setGuestPhone(lead?.phone || '')
+            setGuestLeadName(lead?.name || '')
+            setGuestLeadCompany(lead?.company || '')
+            setGuestAuthMode('meta-trial')
+            setPublicPath('/trial-verify')
+            try { window.scrollTo(0, 0) } catch { /* ignore */ }
+          }}
           onContinueTrial={(choice, lead) => {
             writeMetaTrialIntent(choice, lead)
             if (lead) writeMetaAdsLead(lead)
@@ -1864,6 +1915,38 @@ function App() {
 
   if (passwordRecovery) {
     return <AuthScreen recovery onPasswordUpdated={() => setPasswordRecovery(false)} />
+  }
+
+  const freshLead = readMetaAdsLead()
+  const awaitingLeadSave = Boolean(freshLead?.email && !freshLead.verified)
+  const retryMetaLeadSave = async () => {
+    setMetaLeadError('')
+    try {
+      const saved = await saveVerifiedMetaLead(readMetaAdsLead())
+      trackPixel('Lead', { content_name: 'QuoteGen trial' }, { once: saved?.id || saved?.email })
+      writeMetaWelcome('congrats')
+      setMetaWelcome(true)
+      setMetaTrialDemo(false)
+    } catch (err) {
+      setMetaLeadError(err.message || 'Could not save your details. Please try again.')
+      setMetaWelcome(true)
+    }
+  }
+  if (metaWelcome || readMetaWelcome() || awaitingLeadSave) {
+    return (
+      <MetaAdsLanding
+        celebrate
+        initialLead={freshLead || {}}
+        saving={awaitingLeadSave && !metaLeadError}
+        saveError={metaLeadError}
+        onRetrySave={retryMetaLeadSave}
+        onContinueTrial={() => {
+          clearMetaWelcome()
+          setMetaWelcome(false)
+          startMetaTrialPath('demo')
+        }}
+      />
+    )
   }
 
   if (view === 'upload') {
@@ -2519,7 +2602,7 @@ function App() {
 
         {workspaceView === 'meta-ads-leads' && (
           canManageMetaAdsLeads(authUser.email)
-            ? <WsMetaAdsLeadsAdmin />
+            ? <WsMetaAdsLeadsAdmin canDelete={String(authUser.email || '').trim().toLowerCase() === 'info@digiteqsolution.com'} />
             : <p style={{ color: '#B03A3A', fontSize: 15 }}>Meta ads leads access only.</p>
         )}
 
@@ -10266,6 +10349,7 @@ function playFollowUpChime() {
 }
 
 function dueFollowUp(lead, now = Date.now()) {
+  if (lead?.deactivated) return null
   if (!lead?.followUpAt) return null
   const due = new Date(lead.followUpAt).getTime()
   if (!Number.isFinite(due)) return null
@@ -10354,16 +10438,20 @@ function AuthedFollowUps() {
   return <LeadFollowUpAlerts />
 }
 
-function WsMetaAdsLeadsAdmin() {
+function WsMetaAdsLeadsAdmin({ canDelete = false }) {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState('')
   const [total, setTotal] = React.useState(0)
-  const [counts, setCounts] = React.useState({ lead: 0, demo: 0, purchased: 0 })
+  const [counts, setCounts] = React.useState({ lead: 0, demo: 0, purchased: 0, inactive: 0 })
   const [leads, setLeads] = React.useState([])
   const [editing, setEditing] = React.useState(null)
   const [draft, setDraft] = React.useState(null)
   const [saving, setSaving] = React.useState(false)
   const [saveError, setSaveError] = React.useState('')
+  const [rowBusy, setRowBusy] = React.useState('')
+  const [removing, setRemoving] = React.useState(null)
+  const [removeBusy, setRemoveBusy] = React.useState(false)
+  const [removeError, setRemoveError] = React.useState('')
 
   const load = React.useCallback(() => {
     setLoading(true)
@@ -10376,7 +10464,8 @@ function WsMetaAdsLeadsAdmin() {
         setCounts({
           lead: Number(data.counts?.lead) || 0,
           demo: Number(data.counts?.demo) || 0,
-          purchased: Number(data.counts?.purchased) || 0
+          purchased: Number(data.counts?.purchased) || 0,
+          inactive: Number(data.counts?.inactive) || 0
         })
         setLeads(Array.isArray(data.leads) ? data.leads : [])
       })
@@ -10394,6 +10483,78 @@ function WsMetaAdsLeadsAdmin() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [editing, saving])
+
+  React.useEffect(() => {
+    if (!removing || removeBusy) return undefined
+    const onKey = (event) => {
+      if (event.key === 'Escape') { setRemoving(null); setRemoveError('') }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [removing, removeBusy])
+
+  const setLeadActive = async (lead, active) => {
+    setRowBusy(lead.id)
+    setError('')
+    try {
+      const response = await fetch(`/api/meta-ads-leads/${lead.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deactivated: !active })
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || data.message || 'Could not update this lead')
+      setLeads((rows) => rows.map((row) => (row.id === data.lead.id ? data.lead : row)))
+      setCounts((prev) => {
+        const next = { ...prev }
+        const wasInactive = Boolean(lead.deactivated)
+        const nowInactive = Boolean(data.lead.deactivated)
+        if (wasInactive === nowInactive) return prev
+        if (nowInactive) {
+          next.inactive += 1
+          if (lead.status === 'purchased') next.purchased = Math.max(0, next.purchased - 1)
+          else if (lead.status === 'demo') next.demo = Math.max(0, next.demo - 1)
+          else next.lead = Math.max(0, next.lead - 1)
+        } else {
+          next.inactive = Math.max(0, next.inactive - 1)
+          if (data.lead.status === 'purchased') next.purchased += 1
+          else if (data.lead.status === 'demo') next.demo += 1
+          else next.lead += 1
+        }
+        return next
+      })
+    } catch (err) {
+      setError(err.message || 'Could not update this lead')
+    } finally {
+      setRowBusy('')
+    }
+  }
+
+  const confirmDeleteLead = async () => {
+    if (!removing) return
+    setRemoveBusy(true)
+    setRemoveError('')
+    try {
+      const response = await fetch(`/api/meta-ads-leads/${removing.id}`, { method: 'DELETE' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || data.message || 'Could not delete this lead')
+      setLeads((rows) => rows.filter((row) => row.id !== removing.id))
+      setTotal((n) => Math.max(0, n - 1))
+      setCounts((prev) => {
+        const next = { ...prev }
+        if (removing.deactivated) next.inactive = Math.max(0, next.inactive - 1)
+        else if (removing.status === 'purchased') next.purchased = Math.max(0, next.purchased - 1)
+        else if (removing.status === 'demo') next.demo = Math.max(0, next.demo - 1)
+        else next.lead = Math.max(0, next.lead - 1)
+        return next
+      })
+      setRemoving(null)
+    } catch (err) {
+      setRemoveError(err.message || 'Could not delete this lead')
+    } finally {
+      setRemoveBusy(false)
+    }
+  }
 
   const openEditor = (lead) => {
     setSaveError('')
@@ -10455,6 +10616,7 @@ function WsMetaAdsLeadsAdmin() {
             {statChip('Purchased', counts.purchased, '#15803D')}
             {statChip('Started trial', counts.demo, '#1A73E8')}
             {statChip('Lead only', counts.lead, '#64748B')}
+            {statChip('Inactive', counts.inactive, '#94A3B8')}
             {statChip('Total', total, '#1A73E8')}
           </div>
         </div>
@@ -10492,10 +10654,13 @@ function WsMetaAdsLeadsAdmin() {
             </thead>
             <tbody>
               {leads.map((lead) => {
-                const status = metaLeadStatusView(lead)
+                const status = lead.deactivated
+                  ? { label: 'Inactive', hint: 'Deactivated', bg: '#F8FAFC', color: '#94A3B8', border: '#E2E8F0' }
+                  : metaLeadStatusView(lead)
+                const muted = lead.deactivated ? '#94A3B8' : null
                 return (
-                  <tr key={lead.id}>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', fontWeight: 650, color: '#1a202c' }}>{lead.name}</td>
+                  <tr key={lead.id} style={lead.deactivated ? { background: '#F8FAFC' } : undefined}>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', fontWeight: 650, color: muted || '#1a202c' }}>{lead.name}</td>
                     <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', verticalAlign: 'top' }}>
                       <span style={{
                         display: 'inline-block',
@@ -10513,21 +10678,27 @@ function WsMetaAdsLeadsAdmin() {
                       <div style={{ marginTop: 4, fontSize: 12, color: '#8A94A6', maxWidth: 220 }}>{status.hint}</div>
                     </td>
                     <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', whiteSpace: 'nowrap' }}>
-                      <a href={`tel:+91${lead.phone}`} style={{ color: '#1A73E8', textDecoration: 'none', fontWeight: 600 }}>+91 {lead.phone}</a>
+                      <a href={`tel:+91${lead.phone}`} style={{ color: muted || '#1A73E8', textDecoration: 'none', fontWeight: 600 }}>+91 {lead.phone}</a>
                     </td>
                     <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', wordBreak: 'break-all' }}>
-                      <a href={`mailto:${lead.email}`} style={{ color: '#1A73E8', textDecoration: 'none' }}>{lead.email}</a>
+                      <a href={`mailto:${lead.email}`} style={{ color: muted || '#1A73E8', textDecoration: 'none' }}>{lead.email}</a>
                     </td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#3D4859' }}>{lead.company || '—'}</td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#3D4859', fontSize: 13, maxWidth: 180 }}>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859' }}>{lead.company || '—'}</td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859', fontSize: 13, maxWidth: 180 }}>
                       {lead.followUpAt ? new Date(lead.followUpAt).toLocaleString() : '—'}
                       {lead.remarks ? <div style={{ marginTop: 4, color: '#8A94A6' }}>{lead.remarks}</div> : null}
                     </td>
                     <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#8A94A6', whiteSpace: 'nowrap', fontSize: 13 }}>
                       {lead.createdAt ? new Date(lead.createdAt).toLocaleString() : ''}
                     </td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9' }}>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', whiteSpace: 'nowrap' }}>
                       <button type="button" onClick={() => openEditor(lead)} style={{ minHeight: 36, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: '#1A73E8', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
+                      <button type="button" disabled={rowBusy === lead.id} onClick={() => setLeadActive(lead, lead.deactivated)} style={{ minHeight: 36, marginLeft: 8, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: '#3D4859', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                        {rowBusy === lead.id ? 'Saving…' : lead.deactivated ? 'Activate' : 'Deactivate'}
+                      </button>
+                      {canDelete ? (
+                        <button type="button" onClick={() => { setRemoveError(''); setRemoving(lead) }} style={{ minHeight: 36, marginLeft: 8, padding: '0 12px', border: '1.5px solid #E7CFCF', borderRadius: 10, background: '#fff', color: '#B03A3A', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Delete</button>
+                      ) : null}
                     </td>
                   </tr>
                 )
@@ -10573,6 +10744,29 @@ function WsMetaAdsLeadsAdmin() {
             <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
               <button type="button" disabled={saving} onClick={() => { setEditing(null); setDraft(null) }} style={{ flex: 1, minHeight: 46, border: '1.5px solid #D5DDE9', borderRadius: 12, background: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer', color: '#3D4859' }}>Cancel</button>
               <button type="button" disabled={saving} onClick={saveEditor} style={{ flex: 1, minHeight: 46, border: 0, borderRadius: 12, background: '#1A73E8', color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer' }}>{saving ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+      {removing && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="qg-lead-delete-title"
+          onMouseDown={(e) => { if (e.target === e.currentTarget && !removeBusy) { setRemoving(null); setRemoveError('') } }}
+          style={{ position: 'fixed', inset: 0, zIndex: 240, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(15,23,42,.42)' }}
+        >
+          <div style={{ width: 'min(460px, 100%)', background: '#fff', borderRadius: 20, boxShadow: '0 28px 60px -24px rgba(20,35,80,.45)', border: '1px solid #E8EBF2', padding: '22px 24px 20px' }}>
+            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#B03A3A' }}>Delete lead</div>
+            <h2 id="qg-lead-delete-title" style={{ margin: '8px 0 0', fontSize: 20, fontWeight: 800, letterSpacing: '-.02em', color: '#0D1117' }}>Delete this lead?</h2>
+            <p style={{ margin: '10px 0 0', fontSize: 14.5, lineHeight: 1.55, color: '#6B7688' }}>
+              <strong style={{ color: '#1a202c' }}>{removing.name || removing.email}</strong> will be removed from Meta ads leads. This cannot be undone.
+            </p>
+            {removeError ? <p style={{ margin: '12px 0 0', fontSize: 14, color: '#B03A3A' }}>{removeError}</p> : null}
+            <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+              <button type="button" disabled={removeBusy} onClick={() => { setRemoving(null); setRemoveError('') }} style={{ flex: 1, minHeight: 46, border: '1.5px solid #D5DDE9', borderRadius: 12, background: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer', color: '#3D4859' }}>Cancel</button>
+              <button type="button" disabled={removeBusy} onClick={confirmDeleteLead} style={{ flex: 1, minHeight: 46, border: 0, borderRadius: 12, background: '#B03A3A', color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer' }}>{removeBusy ? 'Deleting…' : 'Delete'}</button>
             </div>
           </div>
         </div>,

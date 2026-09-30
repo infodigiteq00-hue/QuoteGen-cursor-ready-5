@@ -6,6 +6,7 @@ export const META_GUIDE_KEY = 'qg_meta_guide'
 export const META_UNPAID_KEY = 'qg_meta_trial_unpaid'
 export const META_PAID_KEY = 'qg_meta_trial_paid'
 export const META_GUIDE_PROGRESS_KEY = 'qg_meta_guide_progress'
+export const META_WELCOME_KEY = 'qg_meta_welcome'
 
 function writeStore(store, key, value) {
   try { store.setItem(key, value) } catch { /* private mode */ }
@@ -65,10 +66,28 @@ export function isMetaTrialPaid() {
 
 export function clearMetaTrialLock() {
   clearMetaTrialIntent()
+  clearMetaWelcome()
   removeStore(localStorage, META_UNPAID_KEY)
   removeStore(sessionStorage, META_UNPAID_KEY)
   removeStore(sessionStorage, META_GUIDE_KEY)
   removeStore(sessionStorage, META_GUIDE_PROGRESS_KEY)
+}
+
+export function writeMetaWelcome(step = 'congrats') {
+  const value = step === 'choice' ? 'choice' : 'congrats'
+  writeStore(sessionStorage, META_WELCOME_KEY, value)
+  writeStore(localStorage, META_WELCOME_KEY, value)
+}
+
+export function readMetaWelcome() {
+  const value = readStore(sessionStorage, META_WELCOME_KEY) || readStore(localStorage, META_WELCOME_KEY)
+  if (value === 'choice' || value === 'congrats') return value
+  return ''
+}
+
+export function clearMetaWelcome() {
+  removeStore(sessionStorage, META_WELCOME_KEY)
+  removeStore(localStorage, META_WELCOME_KEY)
 }
 
 export function isMetaTrialUnpaid(userEmail) {
@@ -155,11 +174,52 @@ export function writeMetaAdsLead(lead) {
     phone: String(lead.phone || '').replace(/\D/g, ''),
     email: String(lead.email || '').trim().toLowerCase(),
     company: String(lead.company || '').trim(),
+    source: String(lead.source || 'meta_ads_landing').trim() || 'meta_ads_landing',
+    path: String(lead.path || '').trim(),
+    query: String(lead.query || '').trim(),
     submitted: true,
-    submittedAt: lead.submittedAt || new Date().toISOString()
+    submittedAt: lead.submittedAt || new Date().toISOString(),
+    verified: Boolean(lead.verified),
+    id: lead.id || null
   }
-  try { sessionStorage.setItem(META_ADS_LEAD_KEY, JSON.stringify({ ...lead, ...payload })) } catch { /* ignore */ }
+  try { sessionStorage.setItem(META_ADS_LEAD_KEY, JSON.stringify(payload)) } catch { /* ignore */ }
   try { localStorage.setItem(META_TRIAL_SEED_KEY, JSON.stringify(payload)) } catch { /* ignore */ }
+}
+
+let verifiedLeadSave = null
+
+/** Persist a Meta ads lead only after the email code is verified. */
+export function saveVerifiedMetaLead(leadOverride) {
+  const lead = usefulLead(leadOverride) || readMetaAdsLead()
+  if (!lead?.email) return Promise.reject(new Error('Enter your details again.'))
+  if (lead.verified && lead.id) return Promise.resolve(lead)
+  if (verifiedLeadSave) return verifiedLeadSave
+  verifiedLeadSave = fetch('/api/meta-ads-leads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: lead.name || '',
+      phone: String(lead.phone || '').replace(/\D/g, ''),
+      email: lead.email,
+      company: lead.company || '',
+      source: lead.source || 'meta_ads_landing',
+      path: lead.path || '',
+      query: lead.query || '',
+      submittedAt: lead.submittedAt || new Date().toISOString(),
+      submitted: true
+    })
+  }).then(async (response) => {
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      throw new Error(data.error || data.message || 'Could not save your details. Please try again.')
+    }
+    const saved = { ...lead, id: data.id || null, verified: true, submitted: true }
+    writeMetaAdsLead(saved)
+    return saved
+  }).finally(() => {
+    verifiedLeadSave = null
+  })
+  return verifiedLeadSave
 }
 
 export function formatLeadPhone(phone) {
