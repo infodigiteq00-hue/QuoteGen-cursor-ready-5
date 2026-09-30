@@ -25,6 +25,7 @@ import { suggestFormulaFromAsk, validateFormulaDraft } from '../shared/formulaAs
 import { catalogItemCountHint, catalogItemsToQuoteRows, extractCatalogLineItems } from './enquiryItems.js'
 import { ensureSuggestedColumn } from '../shared/productKeywords.js'
 import { extractEnquiryReference, normalizeReferenceNo } from '../shared/enquiryReference.js'
+import { sanitizeWhatsAppEnquiry } from '../shared/enquiryText.js'
 import { extractKnowledgeText } from './knowledgeExtract.js'
 import multer from 'multer'
 
@@ -120,7 +121,7 @@ Leave "ourSuggested" empty when that column exists — the system fills the stan
   return `You are an experienced industrial quotation engineer.
 Your job is to convert any raw customer enquiry into a professional quotation draft. Understand the enquiry naturally like a human engineer would. Use your judgement to identify what the customer is asking for, commercially important details, available technical information, and missing information. Recognize industry terminology, brands, materials, dimensions, specifications, quantities, standards, scope and commercial details whenever relevant.
 
-Do not invent technical information, rates, tax rates, delivery commitments, or commercial details. If important information is missing, list it under clarifications. Never treat greetings or pleasantries as line items. Accuracy of the number of requested line items is critical: capture every core product/service requested and do not add unrelated items. If output space is tight, omit notes/clarifications/terms before omitting any line item. Never close the items array early.
+Do not invent technical information, rates, tax rates, delivery commitments, or commercial details. If important information is missing, list it under clarifications. Never treat greetings or pleasantries as line items. If the text was copied from WhatsApp, ignore chat names, timestamps, "ok/thanks", and encryption notices — quote only the products, quantities, and commercial details the customer asked for. Accuracy of the number of requested line items is critical: capture every core product/service requested and do not add unrelated items. If output space is tight, omit notes/clarifications/terms before omitting any line item. Never close the items array early.
 
 The quotation table uses these columns (in order): ${columnGuide}
 Each line item MUST be a JSON object with exactly these keys and no others: ${fillable.map(c => c.id).join(', ')}
@@ -475,7 +476,8 @@ async function knowledgePromptAddon(enquiry, requestId, userId) {
 }
 
 app.post('/api/generate-quotation', async (req, res) => {
-  const { enquiry, customer = {}, columns: rawColumns, layoutRoles: rawLayoutRoles } = req.body || {}
+  const { customer = {}, columns: rawColumns, layoutRoles: rawLayoutRoles } = req.body || {}
+  const enquiry = sanitizeWhatsAppEnquiry(req.body?.enquiry)
   const layoutRoles = Array.isArray(rawLayoutRoles) ? rawLayoutRoles.filter(Boolean) : []
   const requestId = `quote-${Date.now()}`
   if (!enquiry?.trim()) return res.status(400).json({ error: 'Please paste the customer enquiry.' })
@@ -641,6 +643,13 @@ const DIST_DIR = path.join(PROJECT_ROOT, 'dist')
 
 function serveBuiltClient() {
   if (!fs.existsSync(path.join(DIST_DIR, 'index.html'))) return false
+  app.use((req, res, next) => {
+    if (req.path === '/sw.js') {
+      res.setHeader('Cache-Control', 'no-cache')
+      res.setHeader('Service-Worker-Allowed', '/')
+    }
+    next()
+  })
   app.use(express.static(DIST_DIR))
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next()

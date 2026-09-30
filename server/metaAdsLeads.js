@@ -1,6 +1,6 @@
 import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { sendAdminEmail, sendUserEmail } from './mail.js'
-import { isSuperAdmin } from './superAdmin.js'
+import { canManageMetaAdsLeads } from './superAdmin.js'
 
 function requireDb(res, requestId) {
   if (!isSupabaseConfigured()) {
@@ -44,6 +44,12 @@ function validateLead(lead) {
 }
 
 const STAGE_RANK = { lead: 0, demo: 1, purchased: 2 }
+const REMINDER_MINUTES = [5, 10, 15, 30, 60, 1440]
+
+function reminderMinutesOf(value) {
+  const n = Number(value)
+  return REMINDER_MINUTES.includes(n) ? n : 10
+}
 
 function serializeLead(row) {
   return {
@@ -61,6 +67,9 @@ function serializeLead(row) {
     purchasedAt: row.purchased_at || null,
     purchaseAmount: row.purchase_amount || null,
     purchaseOrderId: row.purchase_order_id || '',
+    remarks: row.remarks || '',
+    followUpAt: row.follow_up_at || null,
+    reminderMinutes: reminderMinutesOf(row.reminder_minutes),
     createdAt: row.created_at
   }
 }
@@ -464,8 +473,8 @@ export function registerPublicMetaAdsLeadRoutes(app) {
 export function registerMetaAdsLeadRoutes(app) {
   app.get('/api/meta-ads-leads', async (req, res) => {
     const requestId = `mal-list-${Date.now()}`
-    if (!isSuperAdmin(req.userEmail)) {
-      return res.status(403).json({ error: 'Super admin only.', code: 'FORBIDDEN', requestId })
+    if (!canManageMetaAdsLeads(req.userEmail)) {
+      return res.status(403).json({ error: 'Meta ads leads access only.', code: 'FORBIDDEN', requestId })
     }
     const supabase = requireDb(res, requestId)
     if (!supabase) return
@@ -473,7 +482,7 @@ export function registerMetaAdsLeadRoutes(app) {
     try {
       const { data, error, count } = await supabase
         .from('meta_ads_leads')
-        .select('id, name, phone, email, company, source, path, query, status, intent, demo_at, purchased_at, purchase_amount, purchase_order_id, created_at', { count: 'exact' })
+        .select('id, name, phone, email, company, source, path, query, status, intent, demo_at, purchased_at, purchase_amount, purchase_order_id, remarks, follow_up_at, reminder_minutes, created_at', { count: 'exact' })
         .order('created_at', { ascending: false })
         .limit(500)
       if (error) throw error
@@ -489,6 +498,78 @@ export function registerMetaAdsLeadRoutes(app) {
       res.json({ total: count ?? leads.length, counts, leads, requestId })
     } catch (error) {
       console.error(`[${requestId}] meta ads leads list failed`, error?.code, error?.message)
+      if (/meta_ads_leads|schema cache|PGRST|42703/i.test(error?.message || '')) {
+        return migrationRequired(res, requestId)
+      }
+      supabaseError(error, res, requestId)
+    }
+  })
+
+  app.patch('/api/meta-ads-leads/:id', async (req, res) => {
+    const requestId = `mal-patch-${Date.now()}`
+    if (!canManageMetaAdsLeads(req.userEmail)) {
+      return res.status(403).json({ error: 'Meta ads leads access only.', code: 'FORBIDDEN', requestId })
+    }
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+
+    const id = String(req.params.id || '').trim()
+    if (!id) return res.status(400).json({ error: 'Lead id is required.', code: 'VALIDATION', requestId })
+
+    const body = req.body || {}
+    const patch = {}
+    if (body.status != null) {
+      const status = String(body.status)
+      if (!['lead', 'demo', 'purchased'].includes(status)) {
+        return res.status(400).json({ error: 'Status must be lead, demo, or purchased.', code: 'VALIDATION', requestId })
+      }
+      patch.status = status
+    }
+    if (body.remarks != null) patch.remarks = String(body.remarks).slice(0, 2000)
+    if (body.followUpAt !== undefined) {
+      if (!body.followUpAt) patch.follow_up_at = null
+      else {
+        const when = new Date(body.followUpAt)
+        if (Number.isNaN(when.getTime())) {
+          return res.status(400).json({ error: 'Follow-up date is not valid.', code: 'VALIDATION', requestId })
+        }
+        patch.follow_up_at = when.toISOString()
+      }
+    }
+    if (body.reminderMinutes != null) {
+      const minutes = Number(body.reminderMinutes)
+      if (!REMINDER_MINUTES.includes(minutes)) {
+        return res.status(400).json({ error: 'Pick a reminder of 5, 10, 15, 30, or 60 minutes, or 1 day.', code: 'VALIDATION', requestId })
+      }
+      patch.reminder_minutes = minutes
+    }
+    if (!Object.keys(patch).length) {
+      return res.status(400).json({ error: 'Nothing to update.', code: 'VALIDATION', requestId })
+    }
+
+    try {
+      const { data: existing, error: readError } = await supabase
+        .from('meta_ads_leads')
+        .select('id, demo_at, purchased_at')
+        .eq('id', id)
+        .maybeSingle()
+      if (readError) throw readError
+      if (!existing) return res.status(404).json({ error: 'Lead not found.', code: 'NOT_FOUND', requestId })
+
+      const now = new Date().toISOString()
+      if (patch.status === 'demo' && !existing.demo_at) patch.demo_at = now
+      if (patch.status === 'purchased' && !existing.purchased_at) patch.purchased_at = now
+
+      const { data, error } = await supabase
+        .from('meta_ads_leads')
+        .update(patch)
+        .eq('id', id)
+        .select('id, name, phone, email, company, source, path, query, status, intent, demo_at, purchased_at, purchase_amount, purchase_order_id, remarks, follow_up_at, reminder_minutes, created_at')
+        .single()
+      if (error) throw error
+      res.json({ lead: serializeLead(data), requestId })
+    } catch (error) {
+      console.error(`[${requestId}] meta ads lead update failed`, error?.code, error?.message)
       if (/meta_ads_leads|schema cache|PGRST|42703/i.test(error?.message || '')) {
         return migrationRequired(res, requestId)
       }

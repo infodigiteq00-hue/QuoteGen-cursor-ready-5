@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import logoUrl from './assets/landing/quotegen-logo.png'
 import { META_ADS_LEAD_KEY as LEAD_KEY, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, recordMetaLeadProgress } from './metaTrialLead.js'
 import { trackPixel } from './metaPixel.js'
+import { whatsappChatsLink } from './whatsappEnquiry.js'
 import './metaAdsLanding.css'
 
 const CTA_STYLE = { fontFamily: 'Archivo, Inter, system-ui, sans-serif', fontWeight: 400 }
@@ -73,10 +74,10 @@ function IconX() {
   )
 }
 
-function IconWhatsApp() {
+function IconWhatsApp({ size = 18 }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M20.5 11.6c0 4.7-3.8 8.5-8.5 8.5-1.5 0-2.9-.4-4.1-1.1L3.5 20l.9-4.3A8.4 8.4 0 0 1 3.5 11.6C3.5 6.9 7.3 3.1 12 3.1s8.5 3.8 8.5 8.5Zm-3.3-3.1c-.2-.3-.7-.5-1.4-.5-.4 0-.7.1-1 .4l-.3.3c-.2.2-.5.3-.7.2-.8-.3-1.6.1-2.2.7s-1 1.5-1.3 2.3c-.1.3 0 .5.2.7l.3.3c.1.2.2.4.1.6-.3.8-.8 1.6-1.4 2.2-.2.2-.2.5 0 .7l.4.4c.2.2.4.3.6.2 1.4-.3 2.7-1 3.8-1.9 1.1-.9 1.9-2 2.3-3.2.1-.3 0-.5-.2-.7l-.3-.3c-.2-.2-.3-.5-.2-.7l.3-.3c.2-.3.3-.6.2-1 0-.3-.1-.6-.3-.8Z" />
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="#25D366" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.435 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
     </svg>
   )
 }
@@ -85,7 +86,7 @@ function digitsOnly(v) {
   return String(v || '').replace(/\D/g, '')
 }
 
-function TrialForm({ formRef, autoFocusName, onNextStep, initialLead = null }) {
+function TrialForm({ formRef, autoFocusName, onNextStep, onReadyChange, initialLead = null }) {
   const [name, setName] = useState(initialLead?.name || '')
   const [phone, setPhone] = useState(initialLead?.phone || '')
   const [email, setEmail] = useState(initialLead?.email || '')
@@ -98,6 +99,10 @@ function TrialForm({ formRef, autoFocusName, onNextStep, initialLead = null }) {
   useEffect(() => {
     if (autoFocusName) nameRef.current?.focus()
   }, [autoFocusName])
+
+  useEffect(() => {
+    onReadyChange?.(done)
+  }, [done, onReadyChange])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -150,34 +155,39 @@ function TrialForm({ formRef, autoFocusName, onNextStep, initialLead = null }) {
   }
 
   if (done) {
+    const lead = { name, phone, email, company }
+    const whatsapp = whatsappChatsLink()
     return (
-      <div className="meta-form-card" ref={formRef} id="trial-form">
-        <h2>You’re in — thank you</h2>
-        <p className="meta-form-lead">
-          We’ve saved your details. Pick how you’d like to start — you can do both.
-        </p>
-        <p className="meta-form-ok">
-          Start with your letterhead, or jump straight into a demo quotation — you can do both.
-        </p>
-        <p className="meta-next-prompt">How would you like to continue?</p>
+      <div className="meta-form-card meta-form-card-next" ref={formRef} id="trial-form">
+        <p className="meta-next-kicker">You’re in</p>
+        <h2>How would you like to go further?</h2>
         <div className="meta-next-actions">
           <button
             type="button"
-            className="meta-btn meta-btn-ghost meta-btn-lg meta-next-secondary"
-            onClick={() => onNextStep?.('company', { name, phone, email, company })}
-          >
-            Set up company details
-          </button>
-          <button
-            type="button"
-            className="meta-btn meta-btn-primary meta-btn-lg meta-next-primary"
+            className="meta-next-tile is-primary"
             style={CTA_STYLE}
-            onClick={() => onNextStep?.('demo', { name, phone, email, company })}
+            onClick={() => onNextStep?.('demo', lead)}
           >
-            Create a <span className="meta-cta-em">demo quotation</span>
+            <span className="meta-next-tile-copy">
+              <strong>Create a demo quotation</strong>
+              <em>Ready in about 2 minutes</em>
+            </span>
+            <span className="meta-next-tile-go" aria-hidden="true">→</span>
           </button>
+          <a
+            className="meta-next-tile"
+            href={whatsapp.href}
+            target={whatsapp.external ? '_blank' : undefined}
+            rel={whatsapp.external ? 'noopener noreferrer' : undefined}
+          >
+            <span className="meta-next-tile-copy">
+              <strong>Open WhatsApp</strong>
+              <em>Copy a client enquiry from a chat</em>
+            </span>
+            <span className="meta-next-tile-go is-wa" aria-hidden="true"><IconWhatsApp size={22} /></span>
+          </a>
         </div>
-        <p className="meta-form-fine">Takes a few minutes · No credit card required</p>
+        <p className="meta-form-fine">No card needed</p>
       </div>
     )
   }
@@ -261,6 +271,7 @@ function TrialForm({ formRef, autoFocusName, onNextStep, initialLead = null }) {
 export default function MetaAdsLanding({ onSignIn, onContinueTrial, initialLead = null }) {
   const formRef = useRef(null)
   const [focusForm, setFocusForm] = useState(0)
+  const [formReady, setFormReady] = useState(Boolean(initialLead))
 
   // Fresh visit / refresh of the ads landing should start on the empty form —
   // not restore the post-submit “You’re in” screen from a prior attempt.
@@ -631,18 +642,26 @@ pls confirm`}</pre>
         </div>
       </section>
 
-      <section className="meta-impact">
-        <div className="meta-shell">
-          <p>
-            Start your free trial below.
-            <span>Turn your next enquiry into a professional quotation today.</span>
-          </p>
-        </div>
-      </section>
+      {!formReady && (
+        <section className="meta-impact">
+          <div className="meta-shell">
+            <p>
+              Start your free trial below.
+              <span>Turn your next enquiry into a professional quotation today.</span>
+            </p>
+          </div>
+        </section>
+      )}
 
-      <div className="meta-form-wrap">
+      <div className={`meta-form-wrap${formReady ? ' is-ready' : ''}`}>
         <div className="meta-shell">
-          <TrialForm formRef={formRef} autoFocusName={focusForm > 0} onNextStep={handleNextStep} initialLead={initialLead} />
+          <TrialForm
+            formRef={formRef}
+            autoFocusName={focusForm > 0}
+            onNextStep={handleNextStep}
+            onReadyChange={setFormReady}
+            initialLead={initialLead}
+          />
         </div>
       </div>
 

@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 import UploadDoc from './UploadDoc.jsx'
@@ -13,6 +14,8 @@ import MetaTrialGuide from './MetaTrialGuide.jsx'
 import PaymentStatus from './PaymentStatus.jsx'
 import LegalPages, { matchLegalPage } from './LegalPages.jsx'
 import { initMetaPixel } from './metaPixel.js'
+import { registerPwa } from './pwaInstall.js'
+import PwaInstallHost, { PwaAccountCard, PwaHomeCard, PwaInstallButton } from './PwaInstall.jsx'
 import WsConvertModal from './WsConvertModal.jsx'
 import BrandMark from './BrandMark.jsx'
 import { emailLinkError } from './supabaseClient.js'
@@ -80,7 +83,7 @@ import {
 import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, normalizeAccentHex, peekPreferredPaperStyle, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId, normalizePaperStyle } from './quotePaperThemes.js'
 import { peekPreferredColumns, readPreferredColumns, writePreferredColumns } from './quoteLayoutPrefs.js'
 import QuoteGenerateCeremony, { CEREMONY_MIN_MS } from './QuoteGenerateCeremony.jsx'
-import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, recordMetaLeadProgress, markMetaTrialUnpaid, markMetaTrialPaid, isMetaTrialUnpaid, isMetaGuideActive } from './metaTrialLead.js'
+import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaTrialLock, recordMetaLeadProgress, markMetaTrialUnpaid, markMetaTrialPaid, isMetaTrialUnpaid, isMetaGuideActive } from './metaTrialLead.js'
 import { A4_WIDTH_PX, defaultA4Pages, measureA4Blocks, normalizeA4Pages, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
 import { applyProductToItem, clientsFromQuotations, matchProducts, productsFromHistory } from './suggestCatalog.js'
@@ -89,6 +92,8 @@ import RichTextField, { RichTextView } from './RichTextField.jsx'
 import FloatingPop from './FloatingPop.jsx'
 import { footerFitCssVars, normalizeFooterFit, patchFooterFit } from '../shared/footerFit.js'
 import { normalizeHeaderMeta } from '../shared/headerMeta.js'
+import { whatsAppPasteReplacement } from '../shared/enquiryText.js'
+import { canManageMetaAdsLeads } from '../shared/metaAdsAccess.js'
 import {
   amountCellState,
   amountEditPatch,
@@ -1489,19 +1494,17 @@ function App() {
   useEffect(() => {
     if (!authUser) return
     const unpaid = isMetaTrialUnpaid(authUser.email)
-    if (unpaid) setMetaTrialDemo(true)
-    if (metaNextConsumedRef.current) return
-    const { next, pending } = readMetaTrialIntent()
-    let resumeGuide = false
-    try {
-      resumeGuide = sessionStorage.getItem('qg_meta_guide') === '1'
-    } catch { /* private mode */ }
-    if (!pending && next !== 'demo' && next !== 'company') {
-      if (resumeGuide || unpaid) setMetaTrialDemo(true)
+    if (metaNextConsumedRef.current) {
+      if (!unpaid) setMetaTrialDemo(false)
       return
     }
-    metaNextConsumedRef.current = true
-    startMetaTrialPath(next)
+    const { next, pending } = readMetaTrialIntent()
+    if (pending && (next === 'demo' || next === 'company') && unpaid) {
+      metaNextConsumedRef.current = true
+      startMetaTrialPath(next)
+      return
+    }
+    setMetaTrialDemo(unpaid)
   }, [authUser])
 
   useEffect(() => {
@@ -2169,6 +2172,17 @@ function App() {
           setMetaTrialDemo(false)
           try { sessionStorage.removeItem('qg_meta_guide') } catch { /* ignore */ }
         }}
+        onSignIn={async () => {
+          clearMetaTrialLock()
+          setMetaTrialDemo(false)
+          setMetaLandingReturn(false)
+          setGuestAuthMode('login')
+          try {
+            window.history.replaceState({}, '', '/')
+            setPublicPath('/')
+          } catch { /* ignore */ }
+          await signOut()
+        }}
         onBack={() => {
           setMetaLandingReturn(true)
           setMetaTrialDemo(false)
@@ -2504,9 +2518,9 @@ function App() {
         )}
 
         {workspaceView === 'meta-ads-leads' && (
-          String(authUser.email || '').trim().toLowerCase() === 'info@digiteqsolution.com'
+          canManageMetaAdsLeads(authUser.email)
             ? <WsMetaAdsLeadsAdmin />
-            : <p style={{ color: '#B03A3A', fontSize: 15 }}>Super admin only.</p>
+            : <p style={{ color: '#B03A3A', fontSize: 15 }}>Meta ads leads access only.</p>
         )}
 
         {workspaceView === 'users-admin' && (
@@ -7772,6 +7786,7 @@ const wsSecondaryBtn = { display: 'flex', alignItems: 'center', justifyContent: 
 
 function WsSidebar({ view, onNav, onNewQuote, onOpenEditor, recentCount, authUserEmail, isMobile, mobileOpen, hidden, onClose, onHide }) {
   const isSuperAdmin = String(authUserEmail || '').trim().toLowerCase() === 'info@digiteqsolution.com'
+  const canMetaAds = canManageMetaAdsLeads(authUserEmail)
   const mainNav = [
     { id: 'home', label: 'Home', icon: WS_ICONS.home },
     { id: 'list', label: 'Recent quotations', icon: WS_ICONS.list, badge: recentCount || null },
@@ -7783,9 +7798,11 @@ function WsSidebar({ view, onNav, onNewQuote, onOpenEditor, recentCount, authUse
     { id: 'team', label: 'Team', icon: WS_ICONS.users },
     { id: 'account', label: 'Account', icon: WS_ICONS.user },
     { id: 'billing', label: 'Billing', icon: WS_ICONS.card },
+    ...(canMetaAds ? [
+      { id: 'meta-ads-leads', label: 'Meta ads leads', icon: WS_ICONS.list }
+    ] : []),
     ...(isSuperAdmin ? [
       { id: 'users-admin', label: 'Users', icon: WS_ICONS.users },
-      { id: 'meta-ads-leads', label: 'Meta ads leads', icon: WS_ICONS.list },
       { id: 'feature-interest', label: 'Feature interest', icon: WS_ICONS.spark }
     ] : [])
   ]
@@ -7875,6 +7892,25 @@ function WsSidebar({ view, onNav, onNewQuote, onOpenEditor, recentCount, authUse
       </nav>
 
       <div style={{ marginTop: 'auto', padding: '14px 16px 18px', borderTop: '1px solid #EDF1F7' }}>
+        <PwaInstallButton
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '100%',
+            minHeight: 44,
+            marginBottom: 10,
+            border: '1.5px solid #D5DDE9',
+            borderRadius: 12,
+            background: '#fff',
+            color: '#1A73E8',
+            fontSize: 14.5,
+            fontWeight: 700,
+            cursor: 'pointer'
+          }}
+        >
+          Add to Home Screen
+        </PwaInstallButton>
         <button onClick={() => onNav('account')} style={{ display: 'flex', alignItems: 'center', gap: 11, width: '100%', padding: '6px 4px', border: 0, background: 'none', cursor: 'pointer', textAlign: 'left', borderRadius: 12 }}>
           <div style={{ width: 38, height: 38, flex: '0 0 38px', borderRadius: '50%', background: '#E7EEFB', color: '#1A73E8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 14 }}>{initialsFromEmail(authUserEmail)}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -8142,6 +8178,8 @@ function WsHome({ greetingWord, greetingName, stats, recent, topClients, onOpen,
           <button type="button" onClick={() => onNav('list')} className="ws-flow-btn" style={wsSecondaryBtn}>Open Recent quotations</button>
         </div>
       </section>
+
+      <PwaHomeCard />
 
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 16 }}>
         {stats.map(s => (
@@ -8848,6 +8886,13 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
             id="ws-enq"
             value={enquiry}
             onChange={e => setEnquiry(e.target.value)}
+            onPaste={(e) => {
+              const pasted = e.clipboardData?.getData('text/plain') || ''
+              const next = whatsAppPasteReplacement(enquiry, e.currentTarget.selectionStart, e.currentTarget.selectionEnd, pasted)
+              if (next == null) return
+              e.preventDefault()
+              setEnquiry(next)
+            }}
             placeholder="Example: Need 20 nos MS angle 50×50×6, 12 nos ball bearing 6205, delivery to Rajkot before 20th."
             style={{ width: '100%', minHeight: 220, padding: 18, border: `1.5px solid ${dragOver ? '#1A73E8' : '#D5DDE9'}`, borderRadius: 14, fontSize: 17, lineHeight: 1.6, resize: 'vertical', background: dragOver ? '#F5F9FF' : '#FBFCFE', boxSizing: 'border-box' }}
             autoFocus
@@ -10170,12 +10215,155 @@ function metaLeadStatusView(lead) {
   }
 }
 
+const LEAD_REMINDER_OPTIONS = [
+  { value: 5, label: '5 minutes before' },
+  { value: 10, label: '10 minutes before' },
+  { value: 15, label: '15 minutes before' },
+  { value: 30, label: '30 minutes before' },
+  { value: 60, label: '1 hour before' },
+  { value: 1440, label: '1 day before' }
+]
+const LEAD_ALERT_DISMISS_KEY = 'qg_lead_alert_dismissed'
+const LEAD_ALERT_SNOOZE_KEY = 'qg_lead_alert_snooze'
+
+function leadLocalInput(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function readLeadAlertMap(key) {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(key) || '{}')
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function playFollowUpChime() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext
+  if (!AudioCtx) return
+  const ctx = new AudioCtx()
+  const beep = (freq, at, dur) => {
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.value = freq
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime + at)
+    gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + at + 0.02)
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + dur)
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start(ctx.currentTime + at)
+    osc.stop(ctx.currentTime + at + dur + 0.05)
+  }
+  beep(880, 0, 0.16)
+  beep(1175, 0.2, 0.28)
+  window.setTimeout(() => { ctx.close().catch(() => {}) }, 1200)
+}
+
+function dueFollowUp(lead, now = Date.now()) {
+  if (!lead?.followUpAt) return null
+  const due = new Date(lead.followUpAt).getTime()
+  if (!Number.isFinite(due)) return null
+  const reminder = LEAD_REMINDER_OPTIONS.some((o) => o.value === Number(lead.reminderMinutes))
+    ? Number(lead.reminderMinutes)
+    : 10
+  const start = due - reminder * 60000
+  const end = due + 20 * 60000
+  if (now < start || now > end) return null
+  const key = `${lead.id}:${lead.followUpAt}`
+  const dismissed = readLeadAlertMap(LEAD_ALERT_DISMISS_KEY)
+  if (dismissed[key]) return null
+  const snooze = readLeadAlertMap(LEAD_ALERT_SNOOZE_KEY)
+  if (Number(snooze[key]) > now) return null
+  const minutes = Math.max(0, Math.round((due - now) / 60000))
+  return { lead, key, minutes, due }
+}
+
+function LeadFollowUpAlerts() {
+  const [alert, setAlert] = React.useState(null)
+  const sounded = React.useRef('')
+
+  const scan = React.useCallback(() => {
+    fetch('/api/meta-ads-leads')
+      .then(async (r) => {
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok) return
+        const leads = Array.isArray(data.leads) ? data.leads : []
+        const next = leads.map((lead) => dueFollowUp(lead)).filter(Boolean).sort((a, b) => a.due - b.due)[0] || null
+        setAlert(next)
+        if (next && sounded.current !== next.key) {
+          sounded.current = next.key
+          playFollowUpChime()
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  React.useEffect(() => {
+    scan()
+    const timer = window.setInterval(scan, 20000)
+    return () => window.clearInterval(timer)
+  }, [scan])
+
+  if (!alert) return null
+  const { lead, minutes } = alert
+  const title = minutes <= 0
+    ? 'Demo meeting is due now'
+    : `Demo meeting in ${minutes} minute${minutes === 1 ? '' : 's'}`
+
+  const remember = (storeKey, value) => {
+    const map = readLeadAlertMap(storeKey)
+    map[alert.key] = value
+    try { sessionStorage.setItem(storeKey, JSON.stringify(map)) } catch { /* ignore */ }
+    setAlert(null)
+  }
+
+  return createPortal(
+    <div role="dialog" aria-modal="true" aria-labelledby="qg-followup-title" style={{ position: 'fixed', inset: 0, zIndex: 240, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(15,23,42,.42)' }}>
+      <div style={{ width: 'min(460px, 100%)', background: '#fff', borderRadius: 20, boxShadow: '0 28px 60px -24px rgba(20,35,80,.45)', border: '1px solid #E8EBF2', padding: '22px 24px 20px' }}>
+        <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8' }}>Follow-up</div>
+        <h2 id="qg-followup-title" style={{ margin: '8px 0 0', fontSize: 22, fontWeight: 800, letterSpacing: '-.02em', color: '#0D1117' }}>{title}</h2>
+        <p style={{ margin: '10px 0 0', fontSize: 15, lineHeight: 1.5, color: '#3D4859' }}>
+          <strong>{lead.name || 'Lead'}</strong>
+          {lead.company ? ` · ${lead.company}` : ''}
+          {lead.phone ? ` · +91 ${lead.phone}` : ''}
+        </p>
+        {lead.remarks ? <p style={{ margin: '10px 0 0', fontSize: 14.5, lineHeight: 1.5, color: '#6B7688' }}>{lead.remarks}</p> : null}
+        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <button type="button" onClick={() => remember(LEAD_ALERT_SNOOZE_KEY, Date.now() + 10 * 60000)} style={{ flex: 1, minHeight: 46, border: '1.5px solid #D5DDE9', borderRadius: 12, background: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer', color: '#3D4859' }}>Snooze 10 min</button>
+          <button type="button" onClick={() => remember(LEAD_ALERT_DISMISS_KEY, 1)} style={{ flex: 1, minHeight: 46, border: 0, borderRadius: 12, background: '#1A73E8', color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer' }}>Dismiss</button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function AuthedFollowUps() {
+  const [email, setEmail] = React.useState('')
+  React.useEffect(() => {
+    getCurrentSession().then((session) => setEmail(session?.user?.email || ''))
+    return onAuthChange((session) => setEmail(session?.user?.email || ''))
+  }, [])
+  if (!canManageMetaAdsLeads(email)) return null
+  return <LeadFollowUpAlerts />
+}
+
 function WsMetaAdsLeadsAdmin() {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState('')
   const [total, setTotal] = React.useState(0)
   const [counts, setCounts] = React.useState({ lead: 0, demo: 0, purchased: 0 })
   const [leads, setLeads] = React.useState([])
+  const [editing, setEditing] = React.useState(null)
+  const [draft, setDraft] = React.useState(null)
+  const [saving, setSaving] = React.useState(false)
+  const [saveError, setSaveError] = React.useState('')
 
   const load = React.useCallback(() => {
     setLoading(true)
@@ -10197,6 +10385,53 @@ function WsMetaAdsLeadsAdmin() {
   }, [])
 
   React.useEffect(() => { load() }, [load])
+
+  React.useEffect(() => {
+    if (!editing || saving) return undefined
+    const onKey = (event) => {
+      if (event.key === 'Escape') { setEditing(null); setDraft(null) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [editing, saving])
+
+  const openEditor = (lead) => {
+    setSaveError('')
+    setEditing(lead)
+    setDraft({
+      status: lead.status === 'purchased' || lead.status === 'demo' ? lead.status : 'lead',
+      remarks: lead.remarks || '',
+      followUpAt: leadLocalInput(lead.followUpAt),
+      reminderMinutes: LEAD_REMINDER_OPTIONS.some((o) => o.value === Number(lead.reminderMinutes)) ? Number(lead.reminderMinutes) : 10
+    })
+  }
+
+  const saveEditor = async () => {
+    if (!editing || !draft) return
+    setSaving(true)
+    setSaveError('')
+    try {
+      const response = await fetch(`/api/meta-ads-leads/${editing.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: draft.status,
+          remarks: draft.remarks,
+          followUpAt: draft.followUpAt ? new Date(draft.followUpAt).toISOString() : null,
+          reminderMinutes: Number(draft.reminderMinutes)
+        })
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || data.message || 'Could not save')
+      setLeads((rows) => rows.map((row) => (row.id === data.lead.id ? data.lead : row)))
+      setEditing(null)
+      setDraft(null)
+    } catch (err) {
+      setSaveError(err.message || 'Could not save')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const statChip = (label, value, color) => (
     <div style={{ minWidth: 88 }}>
@@ -10250,7 +10485,9 @@ function WsMetaAdsLeadsAdmin() {
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Phone</th>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Email</th>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Company</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Follow-up</th>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>When</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }} />
               </tr>
             </thead>
             <tbody>
@@ -10282,8 +10519,15 @@ function WsMetaAdsLeadsAdmin() {
                       <a href={`mailto:${lead.email}`} style={{ color: '#1A73E8', textDecoration: 'none' }}>{lead.email}</a>
                     </td>
                     <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#3D4859' }}>{lead.company || '—'}</td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#3D4859', fontSize: 13, maxWidth: 180 }}>
+                      {lead.followUpAt ? new Date(lead.followUpAt).toLocaleString() : '—'}
+                      {lead.remarks ? <div style={{ marginTop: 4, color: '#8A94A6' }}>{lead.remarks}</div> : null}
+                    </td>
                     <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#8A94A6', whiteSpace: 'nowrap', fontSize: 13 }}>
                       {lead.createdAt ? new Date(lead.createdAt).toLocaleString() : ''}
+                    </td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9' }}>
+                      <button type="button" onClick={() => openEditor(lead)} style={{ minHeight: 36, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: '#1A73E8', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
                     </td>
                   </tr>
                 )
@@ -10292,6 +10536,48 @@ function WsMetaAdsLeadsAdmin() {
           </table>
         )}
       </section>
+      {editing && draft && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="qg-lead-edit-title"
+          onMouseDown={(e) => { if (e.target === e.currentTarget && !saving) { setEditing(null); setDraft(null) } }}
+          style={{ position: 'fixed', inset: 0, zIndex: 230, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(15,23,42,.42)' }}
+        >
+          <div style={{ width: 'min(520px, 100%)', background: '#fff', borderRadius: 20, boxShadow: '0 28px 60px -24px rgba(20,35,80,.45)', border: '1px solid #E8EBF2', padding: '22px 24px 20px' }}>
+            <h2 id="qg-lead-edit-title" style={{ margin: 0, fontSize: 20, fontWeight: 800, letterSpacing: '-.02em', color: '#0D1117' }}>{editing.name || 'Lead'}</h2>
+            <p style={{ margin: '6px 0 0', fontSize: 14, color: '#6B7688' }}>{editing.company || editing.email}</p>
+            <label style={{ display: 'block', marginTop: 16, fontSize: 13, fontWeight: 700, color: '#3D4859' }}>
+              Status
+              <select value={draft.status} onChange={(e) => setDraft((d) => ({ ...d, status: e.target.value }))} style={{ display: 'block', width: '100%', marginTop: 6, minHeight: 44, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, background: '#fff' }}>
+                <option value="lead">Lead only</option>
+                <option value="demo">Tried demo</option>
+                <option value="purchased">Purchased</option>
+              </select>
+            </label>
+            <label style={{ display: 'block', marginTop: 14, fontSize: 13, fontWeight: 700, color: '#3D4859' }}>
+              Next follow-up call
+              <input type="datetime-local" value={draft.followUpAt} onChange={(e) => setDraft((d) => ({ ...d, followUpAt: e.target.value }))} style={{ display: 'block', width: '100%', marginTop: 6, minHeight: 44, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15 }} />
+            </label>
+            <label style={{ display: 'block', marginTop: 14, fontSize: 13, fontWeight: 700, color: '#3D4859' }}>
+              Reminder
+              <select value={draft.reminderMinutes} onChange={(e) => setDraft((d) => ({ ...d, reminderMinutes: Number(e.target.value) }))} style={{ display: 'block', width: '100%', marginTop: 6, minHeight: 44, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, background: '#fff' }}>
+                {LEAD_REMINDER_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </label>
+            <label style={{ display: 'block', marginTop: 14, fontSize: 13, fontWeight: 700, color: '#3D4859' }}>
+              Notes / remarks
+              <textarea value={draft.remarks} onChange={(e) => setDraft((d) => ({ ...d, remarks: e.target.value }))} rows={4} placeholder="What was said, what to cover on the call…" style={{ display: 'block', width: '100%', marginTop: 6, padding: 12, border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, resize: 'vertical', fontFamily: 'inherit' }} />
+            </label>
+            {saveError ? <p style={{ margin: '12px 0 0', fontSize: 14, color: '#B03A3A' }}>{saveError}</p> : null}
+            <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+              <button type="button" disabled={saving} onClick={() => { setEditing(null); setDraft(null) }} style={{ flex: 1, minHeight: 46, border: '1.5px solid #D5DDE9', borderRadius: 12, background: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer', color: '#3D4859' }}>Cancel</button>
+              <button type="button" disabled={saving} onClick={saveEditor} style={{ flex: 1, minHeight: 46, border: 0, borderRadius: 12, background: '#1A73E8', color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer' }}>{saving ? 'Saving…' : 'Save'}</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   )
 }
@@ -10351,6 +10637,8 @@ function WsAccountSettings({ email, onSignOut }) {
         </div>
         <button onClick={onSignOut} style={{ minHeight: 54, padding: '0 24px', border: '1.5px solid #E7CFCF', borderRadius: 13, background: '#fff', color: '#B03A3A', fontSize: 16.5, fontWeight: 700, cursor: 'pointer' }}>Sign out</button>
       </section>
+
+      <PwaAccountCard />
 
       <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 26 }}>
         <div style={{ fontSize: 17, fontWeight: 750, marginBottom: 6 }}>Mobile number</div>
@@ -10645,10 +10933,13 @@ class AppErrorBoundary extends React.Component {
 
 // Dev hot-reload re-runs this module; reuse the root or the app mounts twice.
 initMetaPixel()
+registerPwa()
 const rootEl = document.getElementById('root')
 rootEl.__qgRoot = rootEl.__qgRoot || createRoot(rootEl)
 rootEl.__qgRoot.render(
   <AppErrorBoundary>
+    <PwaInstallHost />
+    <AuthedFollowUps />
     <App />
   </AppErrorBoundary>
 )

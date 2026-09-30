@@ -22,6 +22,7 @@ import {
 } from '../shared/quoteColumns.js'
 import { formatIndianAmount } from '../shared/templateMap.js'
 import { companySeedFromLead, readMetaAdsLead, usefulLead, readMetaGuideProgress, writeMetaGuideProgress } from './metaTrialLead.js'
+import { whatsAppPasteReplacement } from '../shared/enquiryText.js'
 import { trackPixel } from './metaPixel.js'
 import './metaTrialGuide.css'
 
@@ -1300,6 +1301,7 @@ export default function MetaTrialGuide({
   error = '',
   onEnterEditor,
   onBack,
+  onSignIn,
   companyProfile = null,
   trialLead = null,
   onSaveCompany,
@@ -2425,7 +2427,12 @@ export default function MetaTrialGuide({
     <main className="meta-guide meta-guide-flow">
       <div className="meta-guide-shell">
         <div className="meta-guide-flow-body">
-          <p className="meta-guide-step">Step {step} of 2</p>
+          <div className="meta-guide-top">
+            <p className="meta-guide-step">Step {step} of 2</p>
+            {onSignIn ? (
+              <button type="button" className="meta-guide-signin" onClick={onSignIn}>Sign in</button>
+            ) : null}
+          </div>
           {step === 1 ? (
             <>
               <h1 className="meta-guide-title">
@@ -2455,6 +2462,13 @@ export default function MetaTrialGuide({
                   className="meta-guide-textarea"
                   value={enquiry}
                   onChange={(e) => setEnquiry(e.target.value)}
+                  onPaste={(e) => {
+                    const pasted = e.clipboardData?.getData('text/plain') || ''
+                    const next = whatsAppPasteReplacement(enquiry, e.currentTarget.selectionStart, e.currentTarget.selectionEnd, pasted)
+                    if (next == null) return
+                    e.preventDefault()
+                    setEnquiry(next)
+                  }}
                   placeholder="Copy-paste the inquiry email or WhatsApp message here…"
                   rows={10}
                 />

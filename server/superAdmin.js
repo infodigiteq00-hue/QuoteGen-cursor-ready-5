@@ -1,3 +1,5 @@
+import { canManageMetaAdsLeads as listedMetaAdsLead } from '../shared/metaAdsAccess.js'
+
 export function superAdminEmails() {
   const raw = process.env.SUPER_ADMIN_EMAILS || 'info@digiteqsolution.com'
   return raw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
@@ -5,4 +7,8 @@ export function superAdminEmails() {
 
 export function isSuperAdmin(email) {
   return superAdminEmails().includes(String(email || '').trim().toLowerCase())
+}
+
+export function canManageMetaAdsLeads(email) {
+  return isSuperAdmin(email) || listedMetaAdsLead(email)
 }

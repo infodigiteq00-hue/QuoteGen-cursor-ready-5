@@ -73,6 +73,32 @@
   max-width: 100%;
 }
 
+.meta-guide-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 10px;
+}
+
+.meta-guide-signin {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: #9CC4F5;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.meta-guide-signin:hover {
+  color: #fff;
+}
+
+.meta-guide-top .meta-guide-step {
+  margin: 0;
+}
+
 .meta-guide-step {
   margin: 0 0 10px;
   font-size: 12px;

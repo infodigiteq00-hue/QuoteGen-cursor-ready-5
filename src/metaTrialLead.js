@@ -63,14 +63,21 @@ export function isMetaTrialPaid() {
   return readStore(localStorage, META_PAID_KEY) === '1' || readStore(sessionStorage, META_PAID_KEY) === '1'
 }
 
+export function clearMetaTrialLock() {
+  clearMetaTrialIntent()
+  removeStore(localStorage, META_UNPAID_KEY)
+  removeStore(sessionStorage, META_UNPAID_KEY)
+  removeStore(sessionStorage, META_GUIDE_KEY)
+  removeStore(sessionStorage, META_GUIDE_PROGRESS_KEY)
+}
+
 export function isMetaTrialUnpaid(userEmail) {
   if (isMetaTrialPaid()) return false
-  if (readStore(sessionStorage, META_GUIDE_KEY) === '1') return true
+  const em = String(userEmail || '').trim().toLowerCase()
+  if (!em) return false
   const flag = readStore(localStorage, META_UNPAID_KEY) || readStore(sessionStorage, META_UNPAID_KEY)
   if (!flag) return false
-  const em = String(userEmail || '').trim().toLowerCase()
-  if (!em || flag === '1') return true
-  return flag === em
+  return flag === '1' || flag === em
 }
 
 export function isMetaGuideActive(userEmail) {

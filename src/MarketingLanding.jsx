@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import logoUrl from './assets/landing/quotegen-logo.png'
 import googleIconUrl from './assets/landing/google-g.jpeg'
+import { openPwaInstall } from './pwaInstall.js'
 import './marketingLanding.css'
 
 const SAMPLES = [
@@ -504,6 +505,7 @@ export default function MarketingLanding({ onSignIn, onSignUp }) {
             <a href="#faq" style={{ color: '#3B4657' }}>FAQ</a>
           </nav>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '14px', whiteSpace: 'nowrap' }}>
+            <button type="button" onClick={openPwaInstall} className="qg-pwa-entry" style={{ background: 'none', border: 0, fontSize: '14.5px', fontWeight: 600, color: '#3B4657', cursor: 'pointer', padding: 0 }}>Get the app</button>
             <button type="button" onClick={onSignIn} style={{ background: 'none', border: 0, fontSize: '14.5px', fontWeight: 600, color: '#3B4657', cursor: 'pointer', padding: 0 }}>Sign in</button>
             <a href="#hero" className="qg-btn-primary" style={{ fontSize: '14.5px', fontWeight: 700, padding: '10px 18px', borderRadius: '9px' }}>Start free trial</a>
           </div>
