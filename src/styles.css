@@ -4914,6 +4914,95 @@ body, #root {
   line-height: 1.55;
   color: #4C5768;
 }
+
+.qg-pwa-shots {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.qg-pwa-shot-item p {
+  margin: 8px 0 0;
+  font-size: 14.5px;
+  line-height: 1.4;
+  color: #3D4859;
+}
+
+.qg-pwa-shot-item strong {
+  font-weight: 750;
+  color: #0D1117;
+}
+
+.qg-pwa-shot {
+  border: 1px solid #E2E8F0;
+  border-radius: 12px;
+  background: #F8FAFC;
+  overflow: hidden;
+}
+
+.qg-pwa-shot-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.qg-pwa-shot-url {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #F1F5F9;
+  color: #64748B;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+}
+
+.qg-pwa-shot-chip {
+  flex: 0 0 auto;
+  min-width: 36px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1.5px solid #1A73E8;
+  background: #E8F1FD;
+  color: #1A73E8;
+  font-size: 12px;
+  font-weight: 750;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qg-pwa-shot-chip.is-icon {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+}
+
+.qg-pwa-shot-row {
+  margin: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  background: #fff;
+  color: #334155;
+  font-size: 13.5px;
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+}
+
+.qg-pwa-shot-row.is-on {
+  background: #1A73E8;
+  color: #fff;
+}
 .qg-pwa-steps {
   list-style: none;
   margin: 16px 0 0;

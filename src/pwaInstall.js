@@ -32,7 +32,11 @@ export function pwaMode() {
   return 'desktop'
 }
 
-export function openPwaInstall() {
+export async function openPwaInstall() {
+  if (deferredPrompt) {
+    await promptPwaInstall()
+    return
+  }
   window.dispatchEvent(new CustomEvent(OPEN_EVENT))
 }
 

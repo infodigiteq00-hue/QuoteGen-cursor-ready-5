@@ -10,13 +10,21 @@ import {
   pwaMode
 } from './pwaInstall.js'
 
-function IosShareIcon() {
+function InstallIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d="M12 16V4" stroke="#1A73E8" strokeWidth="2.2" strokeLinecap="round" />
-      <path d="M8 7.5 12 3.5 16 7.5" stroke="#1A73E8" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M5 14v5.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V14" stroke="#1A73E8" strokeWidth="2.2" strokeLinecap="round" />
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="14" rx="2" stroke="#1A73E8" strokeWidth="2" />
+      <path d="M12 8v6M9.5 12.5 12 15l2.5-2.5" stroke="#1A73E8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
+  )
+}
+
+function Shot({ children, caption }) {
+  return (
+    <li className="qg-pwa-shot-item">
+      <div className="qg-pwa-shot" aria-hidden="true">{children}</div>
+      <p>{caption}</p>
+    </li>
   )
 }
 
@@ -138,7 +146,7 @@ export default function PwaInstallHost() {
           <img src={logoUrl} alt="" width="52" height="52" />
           <div>
             <h2 id="qg-pwa-title">Add QuoteGen to your home screen</h2>
-            <p>It still runs on the web. Your phone just keeps a shortcut with our logo, so it opens like an app.</p>
+            <p>Two taps. Then it opens from your home screen, like an app.</p>
           </div>
           <button type="button" className="qg-pwa-close" aria-label="Close" disabled={busy} onClick={close}>×</button>
         </div>
@@ -150,21 +158,43 @@ export default function PwaInstallHost() {
             {busy ? 'Waiting…' : 'Add to Home Screen'}
           </button>
         ) : iosSafari ? (
-          <ol className="qg-pwa-steps">
-            <li><span>1</span><p>Tap the <strong>Share</strong> button <IosShareIcon /> at the bottom of Safari.</p></li>
-            <li><span>2</span><p>Scroll and tap <strong>Add to Home Screen</strong>.</p></li>
-            <li><span>3</span><p>Tap <strong>Add</strong>. QuoteGen appears with our logo, like any other app.</p></li>
+          <ol className="qg-pwa-shots">
+            <Shot caption={<><strong>1.</strong> Tap Share at the bottom of Safari.</>}>
+              <div className="qg-pwa-shot-bar">
+                <span className="qg-pwa-shot-url">quotegen.ai</span>
+                <span className="qg-pwa-shot-chip">Share</span>
+              </div>
+            </Shot>
+            <Shot caption={<><strong>2.</strong> Tap Add to Home Screen, then Add.</>}>
+              <div className="qg-pwa-shot-row is-on">Add to Home Screen</div>
+            </Shot>
           </ol>
         ) : iosOther ? (
-          <p className="qg-pwa-note">iPhone can only pin websites from <strong>Safari</strong>. Open this page in Safari, then tap Share → Add to Home Screen.</p>
+          <p className="qg-pwa-note">Open this page in <strong>Safari</strong>, then tap Share → Add to Home Screen.</p>
         ) : android ? (
-          <ol className="qg-pwa-steps">
-            <li><span>1</span><p>Tap the <strong>menu</strong> (three dots) in Chrome.</p></li>
-            <li><span>2</span><p>Tap <strong>Add to Home screen</strong> or <strong>Install app</strong>.</p></li>
-            <li><span>3</span><p>Confirm. QuoteGen sits on your home screen with our logo.</p></li>
+          <ol className="qg-pwa-shots">
+            <Shot caption={<><strong>1.</strong> Tap the three dots in Chrome.</>}>
+              <div className="qg-pwa-shot-bar">
+                <span className="qg-pwa-shot-url">quotegen.ai</span>
+                <span className="qg-pwa-shot-chip">⋮</span>
+              </div>
+            </Shot>
+            <Shot caption={<><strong>2.</strong> Tap Install app.</>}>
+              <div className="qg-pwa-shot-row is-on">Install app</div>
+            </Shot>
           </ol>
         ) : desktop ? (
-          <p className="qg-pwa-note">In Chrome or Edge, open the browser menu and choose <strong>Install QuoteGen</strong> / <strong>Cast, save, and share → Install page as app</strong>. On the phone it is even simpler: Add to Home Screen.</p>
+          <ol className="qg-pwa-shots">
+            <Shot caption={<><strong>1.</strong> Click this icon in the address bar.</>}>
+              <div className="qg-pwa-shot-bar">
+                <span className="qg-pwa-shot-url">quotegen.ai</span>
+                <span className="qg-pwa-shot-chip is-icon"><InstallIcon /></span>
+              </div>
+            </Shot>
+            <Shot caption={<><strong>2.</strong> Click Install.</>}>
+              <div className="qg-pwa-shot-row is-on">Install</div>
+            </Shot>
+          </ol>
         ) : null}
 
         {!canNative && !installed ? (
