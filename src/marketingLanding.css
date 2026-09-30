@@ -176,6 +176,19 @@
 
   .qg-marketing header .qg-shell {
     gap: 16px !important;
+    min-width: 0;
+    flex-wrap: nowrap;
+  }
+
+  .qg-marketing header .qg-brand {
+    flex: 0 0 auto;
+    min-width: 0;
+    white-space: nowrap;
+  }
+
+  .qg-marketing header .qg-header-actions {
+    min-width: 0;
+    gap: 10px !important;
   }
 
   .qg-marketing header nav {
@@ -271,6 +284,19 @@
 @media (max-width: 560px) {
   .qg-marketing header {
     height: 60px !important;
+  }
+
+  .qg-marketing header .qg-brand-name {
+    display: none;
+  }
+
+  .qg-marketing header .qg-header-actions {
+    gap: 8px !important;
+  }
+
+  .qg-marketing header .qg-header-actions .qg-btn-primary {
+    padding: 8px 12px !important;
+    font-size: 13.5px !important;
   }
 
   .qg-marketing #hero textarea {

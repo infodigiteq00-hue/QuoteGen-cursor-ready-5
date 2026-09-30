@@ -166,7 +166,9 @@ export default function PwaInstallHost() {
               </div>
             </Shot>
             <Shot caption={<><strong>2.</strong> Tap Add to Home Screen, then Add.</>}>
-              <div className="qg-pwa-shot-row is-on">Add to Home Screen</div>
+              <div className="qg-pwa-shot-bar">
+                <span className="qg-pwa-shot-label">Add to Home Screen</span>
+              </div>
             </Shot>
           </ol>
         ) : iosOther ? (
@@ -180,7 +182,9 @@ export default function PwaInstallHost() {
               </div>
             </Shot>
             <Shot caption={<><strong>2.</strong> Tap Install app.</>}>
-              <div className="qg-pwa-shot-row is-on">Install app</div>
+              <div className="qg-pwa-shot-bar">
+                <span className="qg-pwa-shot-label">Install app</span>
+              </div>
             </Shot>
           </ol>
         ) : desktop ? (
@@ -192,7 +196,9 @@ export default function PwaInstallHost() {
               </div>
             </Shot>
             <Shot caption={<><strong>2.</strong> Click Install.</>}>
-              <div className="qg-pwa-shot-row is-on">Install</div>
+              <div className="qg-pwa-shot-bar">
+                <span className="qg-pwa-shot-label">Install</span>
+              </div>
             </Shot>
           </ol>
         ) : null}

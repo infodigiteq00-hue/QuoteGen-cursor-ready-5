@@ -495,16 +495,16 @@ export default function MarketingLanding({ onSignIn, onSignUp }) {
     <div ref={rootRef} className="qg-marketing">
       <header style={{ position: 'sticky', top: 0, zIndex: 40, height: '68px', display: 'flex', alignItems: 'center', padding: '0 28px', background: 'rgba(255,255,255,.82)', backdropFilter: 'blur(14px) saturate(180%)', borderBottom: '1px solid #E8EBF2' }}>
         <div className="qg-shell" style={{ display: 'flex', alignItems: 'center', gap: '32px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontFamily: 'Archivo', fontWeight: 800, fontSize: '19px', letterSpacing: '-.02em' }}>
+          <div className="qg-brand" style={{ display: 'flex', alignItems: 'center', gap: '10px', fontFamily: 'Archivo', fontWeight: 800, fontSize: '19px', letterSpacing: '-.02em' }}>
             <img src={logoUrl} alt="QuoteGen" style={{ width: '30px', height: '30px', objectFit: 'contain' }} />
-            <span>Quote<span style={{ color: '#0B2A6B' }}>Gen</span></span>
+            <span className="qg-brand-name">Quote<span style={{ color: '#0B2A6B' }}>Gen</span></span>
           </div>
           <nav style={{ display: 'flex', gap: '26px', fontSize: '14.5px', fontWeight: 600, color: '#3B4657', whiteSpace: 'nowrap' }}>
             <a href="#how" style={{ color: '#3B4657' }}>How it works</a>
             <a href="#features" style={{ color: '#3B4657' }}>Features</a>
             <a href="#faq" style={{ color: '#3B4657' }}>FAQ</a>
           </nav>
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '14px', whiteSpace: 'nowrap' }}>
+          <div className="qg-header-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '14px', whiteSpace: 'nowrap' }}>
             <button type="button" onClick={openPwaInstall} className="qg-pwa-entry" style={{ background: 'none', border: 0, fontSize: '14.5px', fontWeight: 600, color: '#3B4657', cursor: 'pointer', padding: 0 }}>Get the app</button>
             <button type="button" onClick={onSignIn} style={{ background: 'none', border: 0, fontSize: '14.5px', fontWeight: 600, color: '#3B4657', cursor: 'pointer', padding: 0 }}>Sign in</button>
             <a href="#hero" className="qg-btn-primary" style={{ fontSize: '14.5px', fontWeight: 700, padding: '10px 18px', borderRadius: '9px' }}>Start free trial</a>
