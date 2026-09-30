@@ -4791,8 +4791,13 @@ body, #root {
 .qg-pwa-home-card img {
   width: 48px;
   height: 48px;
+  padding: 4px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid #e8edf3;
   border-radius: 12px;
   flex: 0 0 auto;
+  box-sizing: border-box;
 }
 .qg-pwa-home-card h2 {
   margin: 0;
@@ -4849,8 +4854,13 @@ body, #root {
 .qg-pwa-card-head img {
   width: 52px;
   height: 52px;
+  padding: 4px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid #E8EBF2;
   border-radius: 14px;
   flex: 0 0 auto;
+  box-sizing: border-box;
 }
 .qg-pwa-card-head h2 {
   margin: 0;

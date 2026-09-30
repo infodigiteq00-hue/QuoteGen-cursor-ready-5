@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import logoUrl from './assets/landing/quotegen-logo.png'
 import {
   isPwaInstalled,
   onPwaInstallOpen,
@@ -71,7 +72,7 @@ export function PwaHomeCard() {
   if (!available) return null
   return (
     <section className="qg-pwa-home-card qg-pwa-entry">
-      <img src="/icons/pwa-192.png" alt="" width="48" height="48" />
+      <img src={logoUrl} alt="" width="48" height="48" />
       <div>
         <h2>Keep QuoteGen on your phone</h2>
         <p>Add it to your home screen. Same website — opens like an app, with our logo, no address to remember.</p>
@@ -134,7 +135,7 @@ export default function PwaInstallHost() {
     >
       <div className="qg-pwa-card">
         <div className="qg-pwa-card-head">
-          <img src="/icons/pwa-192.png" alt="" width="52" height="52" />
+          <img src={logoUrl} alt="" width="52" height="52" />
           <div>
             <h2 id="qg-pwa-title">Add QuoteGen to your home screen</h2>
             <p>It still runs on the web. Your phone just keeps a shortcut with our logo, so it opens like an app.</p>
