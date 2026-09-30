@@ -10,6 +10,10 @@ export const A4_CONTENT_TOP_MARGIN = 10
 export const A4_CONTENT_BOTTOM_MARGIN = 52
 /** If closing almost fits, absorb this much overflow instead of a near-empty page. */
 export const A4_CLOSING_SQUEEZE_PX = 72
+/** Same slack for the subtotal block, so a few spare pixels do not open a new page. */
+const A4_TOTALS_SQUEEZE_PX = 72
+/** Under this many products, never drag 2–3 rows onto the subtotal page. */
+const A4_SHORT_QUOTE_ROWS = 8
 /** Gap above the pinned sheet footer after totals/closing. */
 const A4_FOOTER_GAP = 22
 /** Inflated totals (flex-grown empty page) must not force a totals-only sheet. */
@@ -254,37 +258,40 @@ export function packA4Pages({
   const closing = Math.max(0, num(closingHeight))
 
   const lastItems = () => pages[pages.length - 1]
-  const TOTALS_WITH_ROWS = 3
 
-  const peelTail = (n) => {
-    const tail = []
-    for (let i = pages.length - 1; i >= 0 && tail.length < n; i -= 1) {
-      const page = pages[i]
-      while (page.rows.length && tail.length < n) {
-        tail.unshift(page.rows.pop())
-      }
-    }
-    while (pages.length > 1) {
-      const page = pages[pages.length - 1]
-      if (page.rows.length || page.showHeader || page.showMeta) break
-      pages.pop()
-    }
-    return tail
+  const continuedFits = (rowIds) => {
+    const rowsH = rowIds.reduce((sum, i) => sum + heightOf(i), 0)
+    const chrome = (rowIds.length ? theadHeight : 0) + pad + A4_FOOTER_GAP
+    return chrome + rowsH + totals <= continuedBudget + A4_TOTALS_SQUEEZE_PX
   }
 
   if (totals > 0 && count > 0) {
     const last = lastItems()
-    const fitsHere = last.rows.length > 0 && leftoverOf(last) >= totals
-    if (fitsHere) {
+    const room = leftoverOf(last)
+    if (last.rows.length > 0 && room + A4_TOTALS_SQUEEZE_PX >= totals) {
       last.showTotals = true
     } else {
-      const want = Math.min(TOTALS_WITH_ROWS, count)
-      const tail = peelTail(want)
-      const host = lastItems()
-      if (!host.rows.length) {
-        host.rows = tail
-        host.showTotals = true
+      // Keep the earlier page full. Move the fewest trailing rows that let the
+      // subtotal fit on the next sheet. A short quote moves one, then two only
+      // if one row still leaves the subtotal cut off.
+      const maxMove = Math.min(count < A4_SHORT_QUOTE_ROWS ? 2 : 4, last.rows.length)
+      let move = 0
+      for (let n = 1; n <= maxMove; n += 1) {
+        if (continuedFits(last.rows.slice(-n))) {
+          move = n
+          break
+        }
+      }
+      if (!move) {
+        pages.push({
+          showHeader: false,
+          showMeta: false,
+          rows: [],
+          showTotals: true,
+          showClosing: false
+        })
       } else {
+        const tail = last.rows.splice(last.rows.length - move, move)
         pages.push({
           showHeader: false,
           showMeta: false,
@@ -292,26 +299,6 @@ export function packA4Pages({
           showTotals: true,
           showClosing: false
         })
-      }
-    }
-  }
-
-  const totalsPage = pages.find(page => page.showTotals)
-  if (totalsPage && totalsPage.rows.length < Math.min(TOTALS_WITH_ROWS, count) && count > 0) {
-    const need = Math.min(TOTALS_WITH_ROWS, count) - totalsPage.rows.length
-    const totalsIndex = pages.indexOf(totalsPage)
-    const stolen = []
-    for (let i = totalsIndex - 1; i >= 0 && stolen.length < need; i -= 1) {
-      const page = pages[i]
-      while (page.rows.length && stolen.length < need) {
-        stolen.unshift(page.rows.pop())
-      }
-    }
-    totalsPage.rows = stolen.concat(totalsPage.rows)
-    for (let i = totalsIndex - 1; i >= 0; i -= 1) {
-      const page = pages[i]
-      if (!page.rows.length && !page.showHeader && !page.showMeta) {
-        pages.splice(i, 1)
       }
     }
   }

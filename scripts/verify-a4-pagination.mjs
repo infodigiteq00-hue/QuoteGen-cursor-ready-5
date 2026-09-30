@@ -98,8 +98,8 @@ test('30 compact rows fill sheets instead of one-row pages', () => {
   const itemPages = pages.filter(p => p.rows.length)
   assert.ok(itemPages.length <= 5, `expected ≤5 item pages, got ${itemPages.length}`)
   for (const page of itemPages) {
-    if (page.showTotals) {
-      assert.ok(page.rows.length >= 2, `totals page only has ${page.rows.length} rows`)
+    if (page.showTotals && page !== itemPages[0]) {
+      assert.ok(page.rows.length >= 1, `totals page has no line items`)
       continue
     }
     if (!page.showHeader) {
@@ -167,7 +167,7 @@ test('tiny leftover closing prefers sharing previous page when shortfall ≤ squ
   assert.ok(pages.some(p => p.showClosing), 'closing missing')
 })
 
-test('totals never sit alone on a sheet when line items exist', () => {
+test('totals stay with the last full page instead of a totals-only sheet', () => {
   const pages = packA4Pages({
     rowCount: 30,
     rowHeights: Array(30).fill(48),
@@ -182,10 +182,11 @@ test('totals never sit alone on a sheet when line items exist', () => {
   })
   const totalsPage = pages.find(p => p.showTotals)
   assert.ok(totalsPage, 'totals missing')
-  assert.ok(totalsPage.rows.length >= 3, `totals must keep 2–3 line items, got ${totalsPage.rows.length}`)
+  assert.ok(totalsPage.rows.length >= 1, `totals page has no line items`)
+  assert.ok(pages[0].rows.length > 8, `page 1 was emptied (${pages[0].rows.length} rows)`)
 })
 
-test('when the last items page is full, totals still travel with 3 rows', () => {
+test('a full last page moves only as many rows as the subtotal needs', () => {
   const pages = packA4Pages({
     rowCount: 20,
     rowHeights: Array(20).fill(70),
@@ -200,8 +201,45 @@ test('when the last items page is full, totals still travel with 3 rows', () => 
   })
   const totalsPage = pages.find(p => p.showTotals)
   assert.ok(totalsPage, 'totals missing')
-  assert.ok(totalsPage.rows.length >= 3, `expected ≥3 rows with totals, got ${totalsPage.rows.length}`)
+  assert.equal(totalsPage.rows.length, 1)
   assert.equal(pages.filter(p => p.showTotals).length, 1)
+  assert.ok(pages[0].rows.length >= 4, `page 1 lost too many rows (${pages[0].rows.length})`)
+})
+
+test('four products and the subtotal stay on page 1 when they fit', () => {
+  const pages = packA4Pages({
+    rowCount: 4,
+    rowHeights: [42, 42, 42, 42],
+    headerHeight: 160,
+    metaHeight: 80,
+    theadHeight: 36,
+    totalsHeight: 120,
+    closingHeight: 0,
+    bodyPadY: 40,
+    firstUsable: A4_HEIGHT_PX - 88,
+    continuedUsable: A4_HEIGHT_PX - 124
+  })
+  assert.equal(pages.length, 1)
+  assert.deepEqual(pages[0].rows, [0, 1, 2, 3])
+  assert.equal(pages[0].showTotals, true)
+})
+
+test('a short quote moves one product with the subtotal, not three', () => {
+  const pages = packA4Pages({
+    rowCount: 4,
+    rowHeights: [50, 50, 50, 50],
+    headerHeight: 200,
+    metaHeight: 80,
+    theadHeight: 40,
+    totalsHeight: 220,
+    closingHeight: 0,
+    bodyPadY: 44,
+    firstUsable: 720,
+    continuedUsable: 680
+  })
+  assert.deepEqual(pages[0].rows, [0, 1, 2])
+  const totalsPage = pages.find(p => p.showTotals)
+  assert.deepEqual(totalsPage.rows, [3])
 })
 
 console.log(`${pass} passed, ${fail} failed`)
