@@ -2572,7 +2572,7 @@ select:focus {
   padding: 8px 28px 2px;
 }
 .qg-theme-concise .qg-formal-subject {
-  margin: 0 0 4px;
+  margin: 6px 0 -2px;
 }
 .qg-theme-concise .qg-formal-subject .qg-inline-field {
   padding: 0;
