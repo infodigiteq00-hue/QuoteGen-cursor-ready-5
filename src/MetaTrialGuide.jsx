@@ -807,7 +807,7 @@ function visibleCarouselThemeId(fallback) {
   return DEMO_PAPER_IDS[best] || fallback
 }
 
-function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', captureReady = false, onUploadLogo = null, logoBusy = false, onLogoSizeChange = null }) {
+function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', captureReady = false, onUploadLogo = null, logoBusy = false, onLogoSizeChange = null, onRateChange = null, onCustomerChange = null }) {
   const columns = Array.isArray(quote?.columns) && quote.columns.length ? quote.columns : CORE_COLUMNS.map(({ locked, ...c }) => c)
   const items = Array.isArray(quote?.items) ? quote.items : []
   const totals = computeQuoteTotals(items, columns, quote?.extraLines)
@@ -822,6 +822,8 @@ function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', c
   const clientGst = String(quote?.customer?.gst || '').trim()
   const clientLocation = String(quote?.customer?.location || '').trim()
   const hasClient = Boolean(clientName || clientCompany || clientGst || clientLocation)
+  const draftable = !captureReady && Boolean(onRateChange || onCustomerChange)
+  const rateCol = findFieldColumn(columns, 'rate')
   const resolvedId = normalizePaperStyle(themeId)
   const chosenAccent = accentForTableColor(quote?.tableColorId, quote?.logoPalette, quote?.customAccent || quote?.tableAccent)
   const theme = resolvePaperTheme(resolvedId, chosenAccent)
@@ -858,7 +860,25 @@ function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', c
       <div className="qg-to-subject-section qg-formal-parties">
         <div className="qg-to-col">
           <p className="qg-section-chip" style={{ color: theme.accent }}>Quoted to</p>
-          {hasClient ? (
+          {draftable ? (
+            <div className="meta-guide-draft-client">
+              {[
+                ['name', 'Contact name'],
+                ['company', 'Company'],
+                ['gst', 'GSTIN'],
+                ['location', 'Location']
+              ].map(([key, placeholder]) => (
+                <input
+                  key={key}
+                  className="meta-guide-draft-input"
+                  value={quote?.customer?.[key] || ''}
+                  placeholder={placeholder}
+                  aria-label={placeholder}
+                  onChange={(e) => onCustomerChange?.({ [key]: e.target.value })}
+                />
+              ))}
+            </div>
+          ) : hasClient ? (
             <>
               {clientName ? <p className="font-semibold">{clientName}</p> : null}
               {clientCompany ? <p style={{ color: theme.muted }}>{clientCompany}</p> : null}
@@ -908,9 +928,19 @@ function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', c
                 }
                 const right = previewColAlignRight(col, columns)
                 const desc = isDescriptionColumn(col)
+                const isRate = Boolean(rateCol && col.id === rateCol.id)
                 return (
                   <td key={col.id} className={`${right ? 'is-right qg-cell-compact' : ''}${desc ? ' description-cell' : ''}`}>
-                    {isImageColumn(col) || isAttachmentColumn(col)
+                    {draftable && isRate ? (
+                      <input
+                        className="meta-guide-draft-input is-rate"
+                        inputMode="decimal"
+                        value={item?.[col.id] ?? ''}
+                        placeholder="Rate"
+                        aria-label={`Rate for row ${index + 1}`}
+                        onChange={(e) => onRateChange?.(index, e.target.value)}
+                      />
+                    ) : isImageColumn(col) || isAttachmentColumn(col)
                       ? ''
                       : formatPreviewCell(item, col, columns)}
                   </td>
@@ -1114,7 +1144,7 @@ function ScaledQuotePaper({ children }) {
   )
 }
 
-function TrialFormatCarousel({ quote, companyProfile, themeId, onThemeChange, ready, onAddLogo, logoBusy, onReadingChange, onLogoSizeChange }) {
+function TrialFormatCarousel({ quote, companyProfile, themeId, onThemeChange, ready, onAddLogo, logoBusy, onReadingChange, onLogoSizeChange, onRateChange = null, onCustomerChange = null }) {
   const scrollerRef = useRef(null)
   const hintingRef = useRef(false)
   const [hinting, setHinting] = useState(false)
@@ -1240,6 +1270,8 @@ function TrialFormatCarousel({ quote, companyProfile, themeId, onThemeChange, re
                       onUploadLogo={onAddLogo}
                       logoBusy={logoBusy}
                       onLogoSizeChange={onLogoSizeChange}
+                      onRateChange={id === active ? onRateChange : null}
+                      onCustomerChange={id === active ? onCustomerChange : null}
                     />
                   </ScaledQuotePaper>
                 ) : (
@@ -1569,6 +1601,13 @@ export default function MetaTrialGuide({
 
   const patchRevealCustomer = (customer) => {
     setRevealQuote((q) => (q ? { ...q, customer: { ...(q.customer || {}), ...customer } } : q))
+    setClientDraft((d) => ({
+      ...d,
+      ...(customer.name != null ? { name: customer.name } : {}),
+      ...(customer.company != null ? { company: customer.company } : {}),
+      ...(customer.gst != null ? { gst: customer.gst } : {}),
+      ...(customer.location != null ? { location: customer.location } : {})
+    }))
     onPatchQuote?.({ customer })
   }
 
@@ -1967,6 +2006,8 @@ export default function MetaTrialGuide({
               logoBusy={logoBusy}
               onReadingChange={setPreviewReading}
               onLogoSizeChange={applyLogoSize}
+              onRateChange={patchRevealRate}
+              onCustomerChange={patchRevealCustomer}
             />
           </div>
           <input
