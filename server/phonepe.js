@@ -3,8 +3,8 @@ import { getSupabase, isSupabaseConfigured } from './db.js'
 import { markMetaAdsLeadStage } from './metaAdsLeads.js'
 import { sendAdminEmail } from './mail.js'
 
-const OFFER_PRICE = 199
-const REGULAR_PRICE = 699
+const OFFER_PRICE = 499
+const REGULAR_PRICE = 799
 const OFFER_MS = 10 * 60 * 1000
 const OFFER_GRACE_MS = 2 * 60 * 1000
 

@@ -165,7 +165,7 @@ function TermsBody() {
 
       <h2>5. Paid plans</h2>
       <p>
-        Paid plans (for example a monthly allowance of quotations, currently advertised around ₹199–₹699 depending on the offer) are billed through PhonePe. Prices include applicable taxes unless we say otherwise. Unused quotations in a billing period do not roll over unless we say they do. Extra quotations may be charged as described in the product.
+        Paid plans (for example a monthly allowance of quotations, currently advertised around ₹499–₹799 depending on the offer) are billed through PhonePe. Prices include applicable taxes unless we say otherwise. Unused quotations in a billing period do not roll over unless we say they do. Extra quotations may be charged as described in the product.
       </p>
 
       <h2>6. Acceptable use</h2>
