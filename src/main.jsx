@@ -6655,7 +6655,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const [columnWidths, setColumnWidths] = useState({})
   const resizeStateRef = useRef(null)
   const imageFitRef = useRef({})
-  const isEditorialPaper = paperStyle === 'executive' || paperStyle === 'modern' || paperStyle === 'atelier' || paperStyle === 'brief'
+  const isEditorialPaper = paperStyle === 'executive' || paperStyle === 'modern' || paperStyle === 'atelier' || paperStyle === 'brief' || paperStyle === 'concise'
   const isFormalPaper = paperStyle === 'formal' || isEditorialPaper
   const defaultColWidthForKey = (key) => {
     const col = columns.find(c => c.id === key || `${c.id}__rate` === key)

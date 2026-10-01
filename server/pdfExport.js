@@ -49,7 +49,7 @@ const CHROME_CANDIDATES = [
 ].filter(Boolean)
 
 const MAX_HTML_CHARS = 28 * 1024 * 1024
-const RENDER_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS) || 45000
+const RENDER_TIMEOUT_MS = Number(process.env.PDF_TIMEOUT_MS) || 90000
 const A4_WIDTH_PX = 794
 const A4_HEIGHT_PX = 1123
 

@@ -20,20 +20,6 @@ function tableTintFromAccent(accent) {
 }
 
 export const PAPER_THEMES = {
-  corporate: {
-    id: 'corporate',
-    label: 'Corporate clean',
-    hint: 'Crisp white paper, quiet slate-blue — professional B2B',
-    themeClass: 'qg-theme-corporate',
-    pageBg: '#eef0f5',
-    paperBg: '#ffffff',
-    text: '#2d3748',
-    muted: '#718096',
-    metaBarBg: '#f7f9fc',
-    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
-    titleFont: 'Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif',
-    ...tableTintFromAccent(DEFAULT_ACCENT)
-  },
   formal: {
     id: 'formal',
     label: 'Formal quotation',
@@ -46,6 +32,20 @@ export const PAPER_THEMES = {
     metaBarBg: '#f7f9fc',
     fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
     titleFont: 'Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif',
+    ...tableTintFromAccent(DEFAULT_ACCENT)
+  },
+  concise: {
+    id: 'concise',
+    label: 'Compact list',
+    hint: 'Short header and tight rows — more line items on each page',
+    themeClass: 'qg-theme-concise',
+    pageBg: '#eef1f4',
+    paperBg: '#ffffff',
+    text: '#1c2430',
+    muted: '#5c6b7a',
+    metaBarBg: '#f6f8fa',
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    titleFont: 'Inter, ui-sans-serif, system-ui, sans-serif',
     ...tableTintFromAccent(DEFAULT_ACCENT)
   },
   executive: {
@@ -102,6 +102,20 @@ export const PAPER_THEMES = {
     metaBarBg: '#f4f6f8',
     fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
     titleFont: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    ...tableTintFromAccent(DEFAULT_ACCENT)
+  },
+  corporate: {
+    id: 'corporate',
+    label: 'Corporate clean',
+    hint: 'Crisp white paper, quiet slate-blue — professional B2B',
+    themeClass: 'qg-theme-corporate',
+    pageBg: '#eef0f5',
+    paperBg: '#ffffff',
+    text: '#2d3748',
+    muted: '#718096',
+    metaBarBg: '#f7f9fc',
+    fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+    titleFont: 'Outfit, "Avenir Next", "Segoe UI", Inter, sans-serif',
     ...tableTintFromAccent(DEFAULT_ACCENT)
   }
 }
@@ -184,6 +198,15 @@ export function resolvePaperTheme(id, tableAccent) {
     resolved.tableHeadText = readableTextOn(chosen)
     resolved.tableStripeBg = '#ffffff'
     resolved.tableBorder = '#e6eaef'
+  }
+  if (base.id === 'concise') {
+    resolved.accentInk = mixHex(chosen, '#1c2430', 0.22)
+    resolved.accentOn = readableTextOn(chosen)
+    resolved.accentSoft = mixHex(chosen, '#ffffff', 0.94)
+    resolved.tableHeadBg = chosen
+    resolved.tableHeadText = readableTextOn(chosen)
+    resolved.tableStripeBg = '#f7f9fb'
+    resolved.tableBorder = '#e4e9ee'
   }
   return resolved
 }

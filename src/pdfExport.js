@@ -402,7 +402,7 @@ function convertZoomToTransform(root) {
 }
 
 function revealTitles(root) {
-  const formal = Boolean(root.querySelector('.qg-theme-formal, [data-qg-theme="formal"], .qg-theme-executive, [data-qg-theme="executive"], .qg-theme-modern, [data-qg-theme="modern"], .qg-theme-atelier, [data-qg-theme="atelier"], .qg-theme-brief, [data-qg-theme="brief"]'))
+  const formal = Boolean(root.querySelector('.qg-theme-formal, [data-qg-theme="formal"], .qg-theme-executive, [data-qg-theme="executive"], .qg-theme-modern, [data-qg-theme="modern"], .qg-theme-atelier, [data-qg-theme="atelier"], .qg-theme-brief, [data-qg-theme="brief"], .qg-theme-concise, [data-qg-theme="concise"]'))
   const tokens = root.matches?.('[style*="--qg-table-head-bg"]') ? root : root.querySelector('[style*="--qg-table-head-bg"]')
   const headBg = tokens?.style.getPropertyValue('--qg-table-head-bg').trim() || ''
   const ink = tokens?.style.getPropertyValue('--qg-table-head-text').trim() || '#ffffff'
@@ -1278,8 +1278,8 @@ export async function downloadQuotationPdf(fileNameOrOpts) {
   if (!html?.trim()) throw new Error('nothing on screen to export')
 
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
-  // Live Railway proxy + Chrome usually finish under ~45s; fail loudly instead of spinning forever.
-  const timer = controller ? setTimeout(() => controller.abort(), 55000) : null
+  // Live Railway + Chrome can need longer on big quotations; fail loudly instead of spinning forever.
+  const timer = controller ? setTimeout(() => controller.abort(), 90000) : null
   let response
   try {
     response = await fetch('/api/quotation-pdf', {

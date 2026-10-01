@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     CHROME_PATH=/usr/bin/chromium \
     PDF_USE_SPAWN=0 \
-    PDF_TIMEOUT_MS=45000
+    PDF_TIMEOUT_MS=90000
 
 WORKDIR /app
 

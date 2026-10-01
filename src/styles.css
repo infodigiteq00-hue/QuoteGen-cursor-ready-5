@@ -2430,6 +2430,338 @@ select:focus {
   border-top: 1px solid #e6eaef;
 }
 
+/* ═══════════════════════════════════════════════════════
+   CONCISE ARRANGEMENT — short header, tight rows
+   ═══════════════════════════════════════════════════════ */
+.qg-theme-concise {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.qg-theme-concise .qg-paper-plate {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.qg-theme-concise .qg-paper-header.qg-concise-header {
+  padding: 0;
+  border-bottom: 0 !important;
+}
+.qg-concise-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 16px 28px 12px;
+  background: #fff;
+  box-shadow: inset 0 3px 0 var(--qg-accent);
+}
+.qg-theme-concise .qg-letterhead {
+  gap: 14px;
+  max-width: 72%;
+  align-items: flex-start;
+}
+.qg-theme-concise .qg-letterhead-text {
+  align-self: flex-start;
+  padding-top: 1px;
+}
+.qg-theme-concise .qg-letterhead-mark {
+  align-self: flex-start;
+  margin-top: 1px;
+}
+.qg-theme-concise .qg-letterhead-name,
+.qg-theme-concise .qg-letterhead-name .qg-inline-field {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  padding: 0;
+}
+.qg-theme-concise .qg-letterhead-address {
+  margin-top: 3px;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+.qg-theme-concise .qg-letterhead-address .qg-inline-field {
+  padding: 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+.qg-concise-id {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+.qg-concise-doc {
+  margin: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--qg-accent);
+}
+.qg-concise-no .qg-inline-field {
+  display: inline-block;
+  width: 132px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  color: var(--qg-text, #1c2430);
+  text-align: right;
+}
+.qg-concise-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 28px;
+  border-top: 1px solid #e4e9ee;
+  border-bottom: 1px solid #e4e9ee;
+  background: #f6f8fa;
+}
+.qg-concise-meta > .qg-concise-pair,
+.qg-concise-meta > .qg-header-meta-slot {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.qg-concise-meta > :last-child {
+  align-items: flex-end;
+  text-align: right;
+}
+.qg-concise-pair {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.qg-concise-pair em {
+  font-style: normal;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--qg-muted, #5c6b7a);
+  white-space: nowrap;
+}
+.qg-concise-pair .qg-inline-field {
+  display: inline-block;
+  width: auto;
+  min-width: 0;
+  max-width: 120px;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--qg-text, #1c2430);
+}
+.qg-concise-total {
+  margin-left: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--qg-accent);
+  white-space: nowrap;
+}
+.qg-theme-concise .qg-to-subject-wrap--formal {
+  border-bottom: 0;
+  padding: 8px 28px 2px;
+}
+.qg-theme-concise .qg-formal-subject {
+  margin: 0 0 4px;
+}
+.qg-theme-concise .qg-formal-subject .qg-inline-field {
+  padding: 0;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  color: var(--qg-text, #1c2430);
+}
+.qg-theme-concise .qg-formal-parties {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  border: 0 !important;
+  margin: 0;
+  padding: 0;
+}
+.qg-theme-concise .qg-formal-parties .qg-to-col,
+.qg-theme-concise .qg-formal-parties .qg-subject-col {
+  border: 0;
+  padding: 0 12px 0 0;
+}
+.qg-theme-concise .qg-formal-parties .qg-subject-col {
+  padding: 0 0 0 12px;
+  border-left: 1px solid #e4e9ee;
+}
+.qg-theme-concise .qg-section-chip {
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  border-bottom-width: 0;
+  padding-bottom: 0;
+  margin-bottom: 1px;
+}
+.qg-theme-concise .qg-address-sublabel {
+  font-size: 0.72em;
+  margin: 0;
+}
+.qg-theme-concise .qg-formal-parties .qg-inline-field,
+.qg-theme-concise .qg-formal-parties .qg-inline-field--large {
+  padding: 0;
+  font-size: 11px;
+  line-height: 1.25;
+}
+.qg-theme-concise .qg-formal-parties .qg-ship-same-check {
+  margin-top: 2px;
+  font-size: 10px;
+}
+.qg-theme-concise .qg-formal-subject-below {
+  margin-top: 4px;
+  padding: 4px 0 0;
+  border-top: 1px solid #e4e9ee;
+}
+.qg-theme-concise .qg-paper-body {
+  padding: 6px 28px 10px;
+}
+.qg-theme-concise .qg-studio-table {
+  width: 100% !important;
+  min-width: 100% !important;
+}
+.qg-theme-concise .qg-studio-table thead tr {
+  border: 0 !important;
+}
+.qg-theme-concise .qg-studio-table thead th {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.15;
+  padding: 3px 4px !important;
+  white-space: nowrap;
+}
+.qg-theme-concise .qg-studio-table thead th .text-slate-300 {
+  display: none;
+}
+.qg-theme-concise .qg-studio-table tbody td {
+  padding: 2px 4px !important;
+  color: #1c2430;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  border-bottom-color: #eef2f5 !important;
+}
+.qg-theme-concise .qg-studio-table tbody tr:nth-child(even) td {
+  background: #f7f9fb !important;
+}
+.qg-theme-concise .qg-studio-table td.qg-cell-compact,
+.qg-theme-concise .qg-studio-table th.qg-cell-compact {
+  text-align: left;
+  line-height: 1.15;
+}
+.qg-theme-concise .qg-studio-table td.qg-cell-compact {
+  padding: 2px 3px !important;
+  font-size: 10.5px;
+}
+.qg-theme-concise .qg-studio-table thead th.qg-cell-compact {
+  font-size: 10.5px;
+  padding: 3px 4px !important;
+}
+.qg-theme-concise .qg-studio-table th.qg-cell-compact:first-child,
+.qg-theme-concise .qg-studio-table tbody td:first-child {
+  text-align: left;
+  color: #8b96a5;
+  font-weight: 600;
+}
+.qg-theme-concise .description-cell {
+  padding: 0 !important;
+}
+.qg-theme-concise .description-cell p.font-semibold {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.qg-theme-concise .description-cell p.text-xs {
+  margin-top: 2px;
+  font-size: 9.5px;
+  line-height: 1.2;
+}
+.qg-theme-concise .qg-totals-card {
+  width: 240px;
+  margin-top: 8px;
+  padding: 4px 0 0;
+  border: 0;
+  border-top: 2px solid var(--qg-accent);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.qg-theme-concise .qg-totals-card > div:not(.qg-totals-grand) {
+  padding: 1px 0;
+  font-size: 11px;
+}
+.qg-theme-concise .qg-totals-grand {
+  align-items: baseline;
+  margin-top: 3px !important;
+  padding: 3px 0 0 !important;
+  border-top: 0 !important;
+  color: var(--qg-text, #1c2430);
+}
+.qg-theme-concise .qg-totals-grand > span:first-child {
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--qg-muted, #5c6b7a);
+}
+.qg-theme-concise .qg-totals-grand > span:last-child {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--qg-accent);
+}
+.qg-theme-concise .qg-rich-heading,
+.qg-theme-concise .qg-section-heading {
+  font-size: 0.6em !important;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--qg-accent) !important;
+  border-bottom: 0 !important;
+  margin-bottom: 3px;
+}
+.qg-theme-concise .qg-closing-optional,
+.qg-theme-concise .qg-signatory-block {
+  margin-top: 4px;
+}
+.qg-theme-concise .qg-section-rule {
+  margin: 8px 0 6px;
+  border-top-color: #e4e9ee;
+}
+.qg-theme-concise .qg-rich-field {
+  padding: 1px 2px;
+  line-height: 1.3;
+}
+.qg-theme-concise .qg-sheet-run-header {
+  background: #fff;
+  color: var(--qg-muted, #5c6b7a);
+  border-bottom: 1px solid #e4e9ee;
+  box-shadow: inset 0 2px 0 var(--qg-accent);
+  padding: 4px 28px;
+}
+.qg-theme-concise .qg-sheet-run-header strong,
+.qg-theme-concise .qg-sheet-run-header span {
+  color: var(--qg-accent);
+}
+.qg-theme-concise .qg-sheet-run-footer {
+  background: #fff;
+  border-top: 1px solid #e4e9ee;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
 /* ── Header — full-width image path ── */
 .qg-header-image-wrap {
   width: 100%;

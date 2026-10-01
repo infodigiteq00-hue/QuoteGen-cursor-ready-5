@@ -746,6 +746,61 @@ export function QuotePaperHeader({ theme, profile, quote, update, docLabel, isIn
     )
   }
 
+  /* Concise — short letterhead so a long item list keeps more rows on each page */
+  if (theme.themeClass === 'qg-theme-concise') {
+    return (
+      <header className="qg-paper-header qg-concise-header">
+        <div className="qg-concise-bar">
+          {letterheadBlock}
+          <div className="qg-concise-id">
+            <p className="qg-concise-doc">{docLabel}</p>
+            {showNumber ? (
+              <HeaderMetaSlot onHide={hideNumber} hideLabel="Remove quote no">
+                <div className="qg-concise-no">{numberField}</div>
+              </HeaderMetaSlot>
+            ) : null}
+          </div>
+        </div>
+        <div className="qg-concise-meta">
+          <span className="qg-concise-pair">
+            <em>Date</em>
+            <InlineField value={quote.date || ''} onChange={v => update(['date'], v)} placeholder="DD MMM YYYY" />
+          </span>
+          {showValid ? (
+            <span className="qg-concise-pair">
+              <em>Valid till</em>
+              <HeaderMetaSlot onHide={hideValid} hideLabel="Remove valid till">
+                <DateField
+                  value={validUntil}
+                  onChange={v => update(['fields'], { ...fields, validUntil: v })}
+                  placeholder="DD/MM/YYYY"
+                />
+              </HeaderMetaSlot>
+            </span>
+          ) : null}
+          {showRef ? (
+            <span className="qg-concise-pair">
+              <em>Ref.</em>
+              <HeaderMetaSlot onHide={hideRef} hideLabel="Remove reference">
+                <InlineField
+                  value={referenceNo}
+                  onChange={v => update(['fields'], { ...fields, referenceNo: v })}
+                  placeholder="—"
+                />
+              </HeaderMetaSlot>
+            </span>
+          ) : null}
+          {showTotal && grandTotal ? (
+            <HeaderMetaSlot onHide={hideTotal} hideLabel="Remove quote value">
+              <strong className="qg-concise-total">{grandTotal}</strong>
+            </HeaderMetaSlot>
+          ) : null}
+        </div>
+        {restoreBar}
+      </header>
+    )
+  }
+
   /* Formal — typeset letterhead: brand left, title + number + date right */
   if (theme.themeClass === 'qg-theme-formal') {
     return (
@@ -874,7 +929,7 @@ export function QuoteToSubjectBlock({ theme, quote, update, gstMissing, gstField
     }
   }
 
-  const isFormal = theme.themeClass === 'qg-theme-formal' || theme.themeClass === 'qg-theme-executive' || theme.themeClass === 'qg-theme-modern' || theme.themeClass === 'qg-theme-atelier' || theme.themeClass === 'qg-theme-brief'
+  const isFormal = theme.themeClass === 'qg-theme-formal' || theme.themeClass === 'qg-theme-executive' || theme.themeClass === 'qg-theme-modern' || theme.themeClass === 'qg-theme-atelier' || theme.themeClass === 'qg-theme-brief' || theme.themeClass === 'qg-theme-concise'
 
   if (isFormal) {
     return (
@@ -1679,6 +1734,22 @@ export function LayoutStyleCards({ value, onChange, uploadTemplates, selectedTem
                     ))}
                   </div>
                   <div style={{ position: 'absolute', bottom: 7, right: 8, height: 6, borderRadius: 2, background: t.accent, width: 36 }} />
+                </div>
+                ) : t.id === 'concise' ? (
+                <div style={{ background: t.paperBg, borderRadius: 6, overflow: 'hidden', height: 90, position: 'relative', boxShadow: '0 1px 6px rgba(0,0,0,0.10)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 7px', borderBottom: '1px solid #e4e9ee' }}>
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <div style={{ width: 8, height: 8, borderRadius: 2, background: t.accent }} />
+                      <div style={{ height: 3, width: 28, background: t.text, opacity: 0.75 }} />
+                    </div>
+                    <div style={{ height: 3, width: 22, background: t.accent }} />
+                  </div>
+                  <div style={{ height: 7, background: t.accent, margin: '4px 7px 0' }} />
+                  <div style={{ margin: '3px 7px 0', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {Array.from({ length: 9 }, (_, i) => (
+                      <div key={i} style={{ height: 3, background: i % 2 ? '#f4f7f9' : '#e6edf2' }} />
+                    ))}
+                  </div>
                 </div>
                 ) : (
                 <div style={{ background: t.paperBg, borderRadius: 6, overflow: 'hidden', height: 90, position: 'relative', boxShadow: '0 1px 6px rgba(0,0,0,0.10)' }}>

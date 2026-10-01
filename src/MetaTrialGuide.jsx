@@ -756,7 +756,7 @@ function trialExportColWidths(columns) {
   return { sr, widths }
 }
 
-const DEMO_PAPER_IDS = ['formal', 'executive', 'modern', 'atelier', 'brief', 'corporate']
+const DEMO_PAPER_IDS = ['formal', 'concise', 'executive', 'modern', 'atelier', 'brief', 'corporate']
 const FORMAT_HINT_KEY = 'qg_trial_format_hint_v2'
 
 function noopUpdate() {}

@@ -16,7 +16,7 @@ import {
 import { formatKeywords } from '../shared/productKeywords.js'
 
 const LOGO_BUCKET = 'company-assets'
-const PAPER_STYLE_IDS = new Set(['corporate', 'formal', 'executive', 'modern', 'atelier', 'brief'])
+const PAPER_STYLE_IDS = new Set(['corporate', 'formal', 'executive', 'modern', 'atelier', 'brief', 'concise'])
 const MAX_LOGO_BYTES = 1.5 * 1024 * 1024
 
 function normalizeStoredPaperStyle(id) {
