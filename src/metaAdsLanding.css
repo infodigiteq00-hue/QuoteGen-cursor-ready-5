@@ -1624,6 +1624,106 @@
   font-size: clamp(1.25rem, 3.4vw, 1.45rem);
 }
 
+.meta-success {
+  text-align: center;
+  padding-top: 36px;
+}
+
+.meta-success-mark {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  margin: 0 auto 18px;
+}
+
+.meta-success-tick {
+  width: 84px;
+  height: 84px;
+  display: block;
+  animation: meta-success-pop 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.meta-success-ring {
+  fill: rgba(52, 211, 153, 0.14);
+  stroke: #34D399;
+  stroke-width: 2.5;
+}
+
+.meta-success-check {
+  fill: none;
+  stroke: #34D399;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 48;
+  stroke-dashoffset: 0;
+  animation: meta-success-draw 0.45s 0.28s ease both;
+}
+
+.meta-success-dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: #34D399;
+  opacity: 0;
+  animation: meta-success-burst 0.7s 0.35s ease-out both;
+}
+
+.meta-success-dot:nth-child(1) { background: #34D399; --bx: -36px; --by: -28px; }
+.meta-success-dot:nth-child(2) { background: #6EE7B7; --bx: 34px; --by: -30px; animation-delay: 0.4s; }
+.meta-success-dot:nth-child(3) { background: #FDE68A; --bx: -40px; --by: 8px; animation-delay: 0.42s; }
+.meta-success-dot:nth-child(4) { background: #93C5FD; --bx: 40px; --by: 10px; animation-delay: 0.38s; }
+.meta-success-dot:nth-child(5) { background: #34D399; --bx: -8px; --by: -42px; animation-delay: 0.46s; }
+.meta-success-dot:nth-child(6) { background: #FDE68A; --bx: 10px; --by: 40px; animation-delay: 0.44s; }
+
+.meta-success h2 {
+  font-size: clamp(1.45rem, 4vw, 1.75rem);
+}
+
+.meta-success .meta-form-lead {
+  margin-top: 12px;
+  font-size: 16.5px;
+  line-height: 1.45;
+  color: #E7EDF7;
+}
+
+.meta-success-support {
+  margin: 18px 0 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #9AA6BD;
+}
+
+.meta-success-support a {
+  color: #9CC4F5;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.meta-success-support a:hover {
+  text-decoration: underline;
+}
+
+@keyframes meta-success-pop {
+  from { transform: scale(0.72); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes meta-success-draw {
+  from { stroke-dashoffset: 48; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes meta-success-burst {
+  0% { opacity: 0; transform: translate(0, 0) scale(0.4); }
+  35% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--bx), var(--by)) scale(1); }
+}
+
 .meta-next-actions {
   display: grid;
   grid-template-columns: 1fr;

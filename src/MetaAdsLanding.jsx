@@ -249,10 +249,25 @@ function VerifiedArrival({ saving, saveError, onRetrySave }) {
     )
   } else {
     body = (
-      <div className="meta-form-card meta-form-card-next">
+      <div className="meta-form-card meta-form-card-next meta-success">
+        <div className="meta-success-mark" aria-hidden="true">
+          <span className="meta-success-dot" />
+          <span className="meta-success-dot" />
+          <span className="meta-success-dot" />
+          <span className="meta-success-dot" />
+          <span className="meta-success-dot" />
+          <span className="meta-success-dot" />
+          <svg className="meta-success-tick" viewBox="0 0 52 52">
+            <circle className="meta-success-ring" cx="26" cy="26" r="23" />
+            <path className="meta-success-check" d="M15 27.5l7.2 7.2L37.5 18" />
+          </svg>
+        </div>
         <p className="meta-next-kicker">Great, your enquiry is submitted</p>
         <h2>Your enquiry has been received.</h2>
         <p className="meta-form-lead">Our team will reach out to you shortly.</p>
+        <p className="meta-success-support">
+          Need help sooner? Call us on <a href="tel:+919067610118">+91 90676 10118</a>
+        </p>
       </div>
     )
   }
