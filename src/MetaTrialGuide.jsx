@@ -1334,6 +1334,9 @@ export default function MetaTrialGuide({
   onEnterEditor,
   onBack,
   onSignIn,
+  onTryAnother,
+  demoQuotesUsed = 0,
+  demoQuoteCap = 10,
   companyProfile = null,
   trialLead = null,
   onSaveCompany,
@@ -1867,8 +1870,26 @@ export default function MetaTrialGuide({
     setCustomLabel('')
   }
 
+  const quotesUsed = Number(demoQuotesUsed) || 0
+  const atDemoCap = quotesUsed >= demoQuoteCap
+
+  const tryAnotherEnquiry = () => {
+    if (atDemoCap) return
+    setLocalError('')
+    setPreviewReading(false)
+    setRevealQuote(null)
+    setPhase('flow')
+    setStep(1)
+    setEnquiry?.('')
+    onTryAnother?.()
+  }
+
   const goGenerate = async () => {
     setLocalError('')
+    if (atDemoCap) {
+      setLocalError('You have used all 10 demo quotations. Join QuoteGen to continue.')
+      return
+    }
     if (!draftColumns.length) {
       setLocalError('Keep at least one column.')
       return
@@ -2166,6 +2187,14 @@ export default function MetaTrialGuide({
             >
               {payBusy ? 'Opening PhonePe…' : 'Join QuoteGen Now'}
             </button>
+            {atDemoCap ? (
+              <p className="meta-guide-convert-error">You’ve used all {demoQuoteCap} demo quotations. Join QuoteGen to continue.</p>
+            ) : (
+              <button type="button" className="meta-guide-convert-again" onClick={tryAnotherEnquiry}>
+                Try another enquiry
+                {quotesUsed > 0 ? ` · ${demoQuoteCap - quotesUsed} left` : ''}
+              </button>
+            )}
             {payError ? <p className="meta-guide-convert-error" role="alert">{payError}</p> : null}
             <p className="meta-guide-convert-support">
               Got doubts?{' '}
@@ -2665,14 +2694,14 @@ export default function MetaTrialGuide({
                 <span aria-hidden="true">→</span>
               </button>
             ) : (
-              <button type="button" className="meta-guide-primary" disabled={loading} onClick={goGenerate}>
-                {loading ? 'Creating quotation…' : 'Create quotation'}
-                {!loading && <span aria-hidden="true">→</span>}
+              <button type="button" className="meta-guide-primary" disabled={loading || atDemoCap} onClick={atDemoCap ? openPay : goGenerate}>
+                {loading ? 'Creating quotation…' : atDemoCap ? 'Join QuoteGen Now' : 'Create quotation'}
+                {!loading && !atDemoCap && <span aria-hidden="true">→</span>}
               </button>
             )}
           </div>
           <p className={`meta-guide-fine${step === 1 ? ' is-slot' : ''}`}>
-            {step === 1 ? '\u00a0' : 'Next we’ll map your enquiry into this layout — then open the full quotation.'}
+            {step === 1 ? '\u00a0' : atDemoCap ? 'You’ve used all 10 demo quotations. Join QuoteGen to continue.' : 'Next we’ll map your enquiry into this layout — then open the full quotation.'}
           </p>
         </div>
       </div>

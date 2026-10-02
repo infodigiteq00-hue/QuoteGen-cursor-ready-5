@@ -209,7 +209,13 @@ export function registerPublicPhonePeRoutes(app) {
         }
       }
 
-      return res.json({ state, amount })
+      const meta = data?.metaInfo || {}
+      return res.json({
+        state,
+        amount,
+        name: meta.udf1 || '',
+        email: meta.udf4 || ''
+      })
     } catch (error) {
       console.error('[phonepe] status error', error?.message)
       return res.status(502).json({ error: 'Could not reach PhonePe. Please try again.' })

@@ -30,6 +30,13 @@ export default function PaymentStatus({ onContinue, onPaid }) {
           setAmount(data.amount || 0)
           setState(data.state)
           if (data.state === 'COMPLETED') {
+            try {
+              sessionStorage.setItem('qg_needs_password', '1')
+              sessionStorage.setItem('qg_paid_profile', JSON.stringify({
+                name: data.name || '',
+                email: data.email || ''
+              }))
+            } catch { /* ignore */ }
             onPaid?.()
             trackPixel('Purchase', { value: data.amount || 0, currency: 'INR', content_name: 'QuoteGen monthly' }, { once: orderId })
           }
@@ -71,7 +78,7 @@ export default function PaymentStatus({ onContinue, onPaid }) {
         {error && !done && !failed ? <p className="qg-pay-status-error">{error}</p> : null}
         {orderId ? <p className="qg-pay-status-ref">Reference: {orderId}</p> : null}
         {done || failed ? (
-          <button type="button" onClick={onContinue}>
+          <button type="button" onClick={() => onContinue?.(state)}>
             {done ? 'Go to QuoteGen' : 'Back to QuoteGen'}
           </button>
         ) : null}

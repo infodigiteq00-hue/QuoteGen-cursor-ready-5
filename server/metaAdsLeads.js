@@ -384,6 +384,46 @@ export function registerPublicMetaAdsLeadRoutes(app) {
     }
   })
 
+  app.post('/api/meta-ads-leads/demo-quote', async (req, res) => {
+    const requestId = `mal-demo-${Date.now()}`
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+    const email = String(req.body?.email || '').trim().toLowerCase()
+    const phone = digitsOnly(req.body?.phone)
+    const action = String(req.body?.action || 'read').trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || phone.length !== 10) {
+      return res.status(400).json({ error: 'Enter the same email and mobile used on the form.', code: 'VALIDATION', requestId })
+    }
+    const cap = 10
+    try {
+      const row = await findLatestLead(supabase, { email, phone })
+      if (!row?.id) return res.json({ ok: true, used: 0, cap, allowed: true, requestId })
+      const { data, error } = await supabase
+        .from('meta_ads_leads')
+        .select('id, demo_quotes_used')
+        .eq('id', row.id)
+        .maybeSingle()
+      if (error) throw error
+      const used = Number(data?.demo_quotes_used) || 0
+      if (action !== 'use' || used >= cap) {
+        return res.json({ ok: true, used, cap, allowed: used < cap, requestId })
+      }
+      const next = used + 1
+      const { error: updateError } = await supabase
+        .from('meta_ads_leads')
+        .update({ demo_quotes_used: next })
+        .eq('id', row.id)
+      if (updateError) throw updateError
+      return res.json({ ok: true, used: next, cap, allowed: next < cap, requestId })
+    } catch (error) {
+      console.error(`[${requestId}] demo quote count failed`, error?.message)
+      if (/demo_quotes_used|schema cache|PGRST|42703/i.test(error?.message || '')) {
+        return res.json({ ok: true, used: 0, cap, allowed: true, requestId })
+      }
+      supabaseError(error, res, requestId)
+    }
+  })
+
   /**
    * Temporary pre-launch bypass: establish a session without email OTP.
    * OTP UI stays in the app; turn off with META_TRIAL_ALLOW_SKIP_OTP=0 before go-live.

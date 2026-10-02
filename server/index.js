@@ -650,6 +650,10 @@ function serveBuiltClient() {
     }
     next()
   })
+  app.use('/assets', express.static(path.join(DIST_DIR, 'assets'), {
+    maxAge: '30d',
+    immutable: true
+  }))
   app.use(express.static(DIST_DIR))
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next()

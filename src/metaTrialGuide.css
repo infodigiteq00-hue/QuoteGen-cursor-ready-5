@@ -3312,6 +3312,18 @@ button.meta-guide-chip.is-on {
   margin-top: 14px;
 }
 
+.meta-guide-convert-again {
+  margin-top: 12px;
+  border: 0;
+  background: transparent;
+  color: #d6e4ff;
+  font-size: 14.5px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .meta-guide-convert-cta {
   position: relative;
   overflow: hidden;

@@ -84,6 +84,7 @@ import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, ext
 import { peekPreferredColumns, readPreferredColumns, writePreferredColumns } from './quoteLayoutPrefs.js'
 import QuoteGenerateCeremony, { CEREMONY_MIN_MS } from './QuoteGenerateCeremony.jsx'
 import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaTrialLock, clearMetaWelcome, readMetaWelcome, writeMetaWelcome, saveVerifiedMetaLead, recordMetaLeadProgress, markMetaTrialUnpaid, markMetaTrialPaid, isMetaTrialUnpaid, isMetaGuideActive } from './metaTrialLead.js'
+import { DEMO_QUOTE_CAP, readDemoQuoteCount, recordDemoQuote } from './demoQuotes.js'
 import { trackPixel } from './metaPixel.js'
 import { A4_WIDTH_PX, defaultA4Pages, measureA4Blocks, normalizeA4Pages, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
@@ -1221,6 +1222,7 @@ function App() {
   const [metaLandingReturn, setMetaLandingReturn] = useState(false)
   const [metaWelcome, setMetaWelcome] = useState(() => Boolean(readMetaWelcome()))
   const [metaLeadError, setMetaLeadError] = useState('')
+  const [demoQuotesUsed, setDemoQuotesUsed] = useState(() => readDemoQuoteCount(readMetaAdsLead()?.email))
   const [metaTrialCompany, setMetaTrialCompany] = useState(false)
   const metaNextConsumedRef = useRef(false)
   const signInHandoffRef = useRef(false)
@@ -1876,7 +1878,13 @@ function App() {
   if (String(window.location.pathname || '').replace(/\/+$/, '') === '/payment-status') {
     return (
       <PaymentStatus
-        onContinue={() => window.location.assign('/')}
+        onContinue={(state) => {
+          if (state === 'COMPLETED') {
+            window.location.assign('/set-password')
+            return
+          }
+          window.location.assign('/demo')
+        }}
         onPaid={markMetaTrialPaid}
       />
     )
@@ -2296,6 +2304,8 @@ function App() {
         trialLead={readMetaAdsLead() || (guestEmail || guestPhone || guestLeadName || guestLeadCompany
           ? { name: guestLeadName, company: guestLeadCompany, phone: guestPhone, email: guestEmail }
           : null)}
+        demoQuotesUsed={demoQuotesUsed}
+        demoQuoteCap={DEMO_QUOTE_CAP}
         onSaveCompany={async (partial) => {
           const result = await saveCompanyProfile(partial)
           if (result?.unavailable) {
@@ -2328,11 +2338,21 @@ function App() {
           setPersistenceConfigured(true)
         }}
         onGenerate={async (nextColumns) => {
+          if (demoQuotesUsed >= DEMO_QUOTE_CAP) return null
           writePreferredColumns(nextColumns)
           try {
             await saveCompanyProfile({ columnLayout: nextColumns })
           } catch { /* profile save is best-effort during trial */ }
-          return makeQuote({ columns: nextColumns, enquiry, ceremony: false })
+          const built = await makeQuote({ columns: nextColumns, enquiry, ceremony: false })
+          if (built) {
+            const row = await recordDemoQuote(readMetaAdsLead())
+            setDemoQuotesUsed(row.used)
+          }
+          return built
+        }}
+        onTryAnother={() => {
+          setEnquiry('')
+          setError('')
         }}
         onEnterEditor={() => {
           if (isMetaTrialUnpaid(authUser?.email)) return
@@ -11290,15 +11310,18 @@ class AppErrorBoundary extends React.Component {
   }
 }
 
-// Dev hot-reload re-runs this module; reuse the root or the app mounts twice.
-initMetaPixel()
-registerPwa()
-const rootEl = document.getElementById('root')
-rootEl.__qgRoot = rootEl.__qgRoot || createRoot(rootEl)
-rootEl.__qgRoot.render(
-  <AppErrorBoundary>
-    <PwaInstallHost />
-    <AuthedFollowUps />
-    <App />
-  </AppErrorBoundary>
-)
+export function mountQuoteGenApp() {
+  initMetaPixel()
+  registerPwa()
+  const rootEl = document.getElementById('root')
+  rootEl.__qgRoot = rootEl.__qgRoot || createRoot(rootEl)
+  rootEl.__qgRoot.render(
+    <AppErrorBoundary>
+      <PwaInstallHost />
+      <AuthedFollowUps />
+      <App />
+    </AppErrorBoundary>
+  )
+}
+
+if (window.__QG_BOOT_OWNER !== 'boot') mountQuoteGenApp()
