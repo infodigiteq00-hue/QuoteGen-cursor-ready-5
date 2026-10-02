@@ -690,7 +690,8 @@ export default function AuthScreen({
   prefillEmail = '',
   prefillPhone = '',
   leadName = '',
-  leadCompany = ''
+  leadCompany = '',
+  onPreferLogin
 }) {
   const [mode, setMode] = useState(recovery ? 'reset' : (initialMode || 'login'))
   const [pendingEmail, setPendingEmail] = useState('')
@@ -717,7 +718,11 @@ export default function AuthScreen({
         prefillPhone={prefillPhone}
         leadName={leadName}
         leadCompany={leadCompany}
-        onSwitchLogin={() => { setLoginNotice(''); setMode('login') }}
+        onSwitchLogin={() => {
+          setLoginNotice('')
+          onPreferLogin?.()
+          setMode('login')
+        }}
       />
     )
   }

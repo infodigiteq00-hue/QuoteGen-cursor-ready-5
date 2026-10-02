@@ -1491,7 +1491,8 @@
   margin-bottom: 6px;
 }
 
-.meta-field input {
+.meta-field input,
+.meta-field select {
   width: 100%;
   min-height: 48px;
   padding: 0 14px;
@@ -1502,9 +1503,55 @@
   outline: none;
 }
 
-.meta-field input:focus {
+.meta-field select {
+  appearance: none;
+  color-scheme: dark;
+  background-image: linear-gradient(45deg, transparent 50%, #A9B4C9 50%), linear-gradient(135deg, #A9B4C9 50%, transparent 50%);
+  background-position: calc(100% - 18px) 22px, calc(100% - 12px) 22px;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+}
+
+.meta-field input:focus,
+.meta-field select:focus {
   border-color: rgba(26, 115, 232, 0.7);
   box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.18);
+}
+
+.meta-suggest {
+  position: relative;
+}
+
+.meta-suggest-list {
+  position: absolute;
+  z-index: 6;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  border-radius: 12px;
+  border: 1.5px solid rgba(255, 255, 255, 0.12);
+  background: #121a2b;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.35);
+}
+
+.meta-suggest-list button {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.meta-suggest-list button.is-active,
+.meta-suggest-list button:hover {
+  background: rgba(26, 115, 232, 0.22);
 }
 
 .meta-phone-field {

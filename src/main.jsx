@@ -1494,11 +1494,24 @@ function App() {
     setWorkspaceView('home')
   }
 
-  // After the email code, save the lead, then show congratulations.
-  // The demo guide starts only once they choose how to go further.
+  // After the email code, save the lead, then show that the enquiry was received.
+  // The demo opens later from the WhatsApp link (?try=1), not from this screen.
   useEffect(() => {
     if (!authUser) return undefined
     let cancelled = false
+
+    const wantsTry = () => {
+      try { return new URLSearchParams(window.location.search).get('try') === '1' } catch { return false }
+    }
+    const stripTry = () => {
+      try {
+        const url = new URL(window.location.href)
+        if (url.searchParams.get('try') !== '1') return
+        url.searchParams.delete('try')
+        const next = url.pathname + (url.search ? url.search : '') + url.hash
+        window.history.replaceState({}, '', next)
+      } catch { /* ignore */ }
+    }
 
     const openChosenPath = () => {
       if (cancelled) return
@@ -1522,6 +1535,21 @@ function App() {
     }
 
     const lead = readMetaAdsLead()
+    const passwordEntry = guestAuthMode === 'login' || guestAuthMode === 'signup'
+    if (passwordEntry) {
+      clearMetaWelcome()
+      setMetaWelcome(false)
+      setMetaTrialDemo(false)
+      if (lead?.email && !lead.verified) {
+        saveVerifiedMetaLead(lead).catch(() => {})
+      }
+      return () => { cancelled = true }
+    }
+    if (wantsTry() && !(lead?.email && !lead.verified)) {
+      stripTry()
+      startMetaTrialPath('demo')
+      return () => { cancelled = true }
+    }
     if (lead?.email && !lead.verified) {
       setMetaWelcome(true)
       setMetaTrialDemo(false)
@@ -1545,7 +1573,7 @@ function App() {
 
     openChosenPath()
     return () => { cancelled = true }
-  }, [authUser])
+  }, [authUser, guestAuthMode])
 
   useEffect(() => {
     if (authUser) refreshLandingData()
@@ -1868,6 +1896,11 @@ function App() {
           prefillPhone={guestPhone}
           leadName={guestLeadName}
           leadCompany={guestLeadCompany}
+          onPreferLogin={() => {
+            clearMetaWelcome()
+            setMetaWelcome(false)
+            setGuestAuthMode('login')
+          }}
         />
       )
     }
@@ -1875,7 +1908,11 @@ function App() {
     if (isMetaAdsLanding) {
       return (
         <MetaAdsLanding
-          onSignIn={() => setGuestAuthMode('login')}
+          onSignIn={() => {
+            clearMetaWelcome()
+            setMetaWelcome(false)
+            setGuestAuthMode('login')
+          }}
           onStartVerify={(lead) => {
             clearMetaWelcome()
             if (lead) writeMetaAdsLead({ ...lead, verified: false })
@@ -1904,8 +1941,14 @@ function App() {
     }
     return (
       <MarketingLanding
-        onSignIn={() => setGuestAuthMode('login')}
+        onSignIn={() => {
+          clearMetaWelcome()
+          setMetaWelcome(false)
+          setGuestAuthMode('login')
+        }}
         onSignUp={(email) => {
+          clearMetaWelcome()
+          setMetaWelcome(false)
           setGuestEmail(email || '')
           setGuestAuthMode('signup')
         }}
@@ -1919,6 +1962,8 @@ function App() {
 
   const freshLead = readMetaAdsLead()
   const awaitingLeadSave = Boolean(freshLead?.email && !freshLead.verified)
+  const wantsTryLink = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('try') === '1'
+  const passwordEntry = guestAuthMode === 'login' || guestAuthMode === 'signup'
   const retryMetaLeadSave = async () => {
     setMetaLeadError('')
     try {
@@ -1932,7 +1977,7 @@ function App() {
       setMetaWelcome(true)
     }
   }
-  if (metaWelcome || readMetaWelcome() || awaitingLeadSave) {
+  if (!passwordEntry && !wantsTryLink && (metaWelcome || readMetaWelcome() || awaitingLeadSave)) {
     return (
       <MetaAdsLanding
         celebrate
@@ -2614,7 +2659,7 @@ function App() {
 
         {workspaceView === 'team' && <WsTeamComingSoon />}
 
-        {workspaceView === 'billing' && <WsBilling />}
+        {workspaceView === 'billing' && <WsBilling email={authUser.email} />}
       </div>
     </main>
   </div>
@@ -10258,6 +10303,33 @@ function WsFeatureInterestAdmin() {
   )
 }
 
+function LeadAccountBadge({ status }) {
+  const s = String(status || '').toLowerCase()
+  const colors = !s
+    ? { bg: '#F8FAFC', border: '#E2E8F0', color: '#94A3B8', label: 'Not signed up' }
+    : s === 'paused'
+      ? { bg: '#FFF7ED', border: '#FDBA74', color: '#C2410C', label: 'Paused' }
+      : s === 'removed'
+        ? { bg: '#FDF2F2', border: '#E7CFCF', color: '#B03A3A', label: 'Removed' }
+        : { bg: '#ECFDF5', border: '#A7F3D0', color: '#047857', label: 'Active' }
+  return (
+    <span style={{
+      display: 'inline-block',
+      padding: '2px 8px',
+      borderRadius: 999,
+      fontSize: 11,
+      fontWeight: 750,
+      background: colors.bg,
+      border: `1px solid ${colors.border}`,
+      color: colors.color,
+      whiteSpace: 'nowrap'
+    }}
+    >
+      {colors.label}
+    </span>
+  )
+}
+
 function metaLeadStatusView(lead) {
   if (lead?.status === 'purchased') {
     const amount = lead.purchaseAmount ? `₹${lead.purchaseAmount}` : ''
@@ -10647,6 +10719,11 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Phone</th>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Email</th>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Company</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Quotes / month</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Industry</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Made</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Account</th>
+                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Joined</th>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Follow-up</th>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>When</th>
                 <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }} />
@@ -10684,6 +10761,17 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
                       <a href={`mailto:${lead.email}`} style={{ color: muted || '#1A73E8', textDecoration: 'none' }}>{lead.email}</a>
                     </td>
                     <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859' }}>{lead.company || '—'}</td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859', whiteSpace: 'nowrap' }}>{lead.monthlyQuotes || '—'}</td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859' }}>{lead.industry || '—'}</td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859', whiteSpace: 'nowrap', fontWeight: 700 }}>
+                      {lead.quotationCount == null ? '—' : lead.quotationCount}
+                    </td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9' }}>
+                      <LeadAccountBadge status={lead.accountStatus} />
+                    </td>
+                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#8A94A6', whiteSpace: 'nowrap', fontSize: 13 }}>
+                      {lead.joinedAt ? new Date(lead.joinedAt).toLocaleString() : '—'}
+                    </td>
                     <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859', fontSize: 13, maxWidth: 180 }}>
                       {lead.followUpAt ? new Date(lead.followUpAt).toLocaleString() : '—'}
                       {lead.remarks ? <div style={{ marginTop: 4, color: '#8A94A6' }}>{lead.remarks}</div> : null}
@@ -10963,11 +11051,38 @@ const BILLING_TOPUPS = [
   { label: '+250 Quotations', quotations: 250, price: 999 }
 ]
 
-function WsBilling() {
+function WsBilling({ email = '' }) {
   const [period, setPeriod] = useState('monthly')
   const [notice, setNotice] = useState('')
+  const [busyKey, setBusyKey] = useState('')
 
-  const notConnected = (what) => setNotice(`${what} isn't connected yet — PhonePe checkout needs to be wired up on the backend first. Contact us to upgrade manually in the meantime.`)
+  const startCheckout = async (item) => {
+    if (busyKey) return
+    setNotice('')
+    setBusyKey(item.key)
+    try {
+      const response = await fetch('/api/pay/phonepe/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          product: item.product,
+          plan: item.plan || '',
+          period: item.period || '',
+          topup: item.topup || '',
+          email
+        })
+      })
+      const data = await response.json().catch(() => ({}))
+      if (response.ok && data?.redirectUrl) {
+        window.location.assign(data.redirectUrl)
+        return
+      }
+      setNotice(data?.error || 'Could not open PhonePe. Please try again.')
+    } catch {
+      setNotice('Could not open PhonePe. Check your connection and try again.')
+    }
+    setBusyKey('')
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 26 }}>
@@ -11029,10 +11144,12 @@ function WsBilling() {
                 {p.features.map(f => <PlanCheck key={f}>{f}</PlanCheck>)}
               </div>
               <button
-                onClick={() => notConnected(`Subscribing to ${p.name}`)}
-                style={{ marginTop: 20, minHeight: 46, borderRadius: 12, border: p.popular ? 0 : '1.5px solid #D5DDE9', background: p.popular ? '#1A73E8' : '#fff', color: p.popular ? '#fff' : '#2d3748', fontSize: 15, fontWeight: 700, cursor: 'pointer' }}
+                type="button"
+                disabled={Boolean(busyKey)}
+                onClick={() => startCheckout({ key: `plan:${p.key}:${period}`, product: 'plan', plan: p.key, period })}
+                style={{ marginTop: 20, minHeight: 46, borderRadius: 12, border: p.popular ? 0 : '1.5px solid #D5DDE9', background: p.popular ? '#1A73E8' : '#fff', color: p.popular ? '#fff' : '#2d3748', fontSize: 15, fontWeight: 700, cursor: busyKey ? 'default' : 'pointer', opacity: busyKey && busyKey !== `plan:${p.key}:${period}` ? 0.55 : 1 }}
               >
-                Subscribe {period === 'monthly' ? 'monthly' : 'yearly'}
+                {busyKey === `plan:${p.key}:${period}` ? 'Opening PhonePe…' : `Subscribe ${period === 'monthly' ? 'monthly' : 'yearly'}`}
               </button>
             </div>
           )
@@ -11054,10 +11171,12 @@ function WsBilling() {
               <div style={{ fontSize: 13.5, color: '#8A94A6', marginTop: 2 }}>+{t.quotations} quotations</div>
               <div style={{ fontSize: 22, fontWeight: 800, marginTop: 10 }}>{money(t.price).replace('.00', '')}</div>
               <button
-                onClick={() => notConnected(`Buying ${t.label}`)}
-                style={{ marginTop: 12, width: '100%', minHeight: 42, borderRadius: 10, border: '1.5px solid #D5DDE9', background: '#fff', color: '#2d3748', fontSize: 14.5, fontWeight: 700, cursor: 'pointer' }}
+                type="button"
+                disabled={Boolean(busyKey)}
+                onClick={() => startCheckout({ key: `topup:${t.quotations}`, product: 'topup', topup: String(t.quotations) })}
+                style={{ marginTop: 12, width: '100%', minHeight: 42, borderRadius: 10, border: '1.5px solid #D5DDE9', background: '#fff', color: '#2d3748', fontSize: 14.5, fontWeight: 700, cursor: busyKey ? 'default' : 'pointer', opacity: busyKey && busyKey !== `topup:${t.quotations}` ? 0.55 : 1 }}
               >
-                Buy now
+                {busyKey === `topup:${t.quotations}` ? 'Opening PhonePe…' : 'Buy now'}
               </button>
             </div>
           ))}

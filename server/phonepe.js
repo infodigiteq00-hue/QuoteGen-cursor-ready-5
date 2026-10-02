@@ -8,6 +8,47 @@ const REGULAR_PRICE = 799
 const OFFER_MS = 10 * 60 * 1000
 const OFFER_GRACE_MS = 2 * 60 * 1000
 
+// Server-side prices. The billing screen must not be able to name its own amount.
+const PLAN_PRICES = {
+  starter: { name: 'Starter', monthly: 399, yearly: 3990 },
+  growth: { name: 'Growth', monthly: 799, yearly: 7990 },
+  business: { name: 'Business', monthly: 1599, yearly: 15990 },
+  pro: { name: 'Pro', monthly: 2999, yearly: 29990 },
+  enterprise: { name: 'Enterprise', monthly: 4999, yearly: 49990 },
+  scale: { name: 'Scale', monthly: 8999, yearly: 89990 }
+}
+const TOPUP_PRICES = {
+  25: { label: '+25 Quotations', price: 199 },
+  100: { label: '+100 Quotations', price: 499 },
+  250: { label: '+250 Quotations', price: 999 }
+}
+
+function resolveCharge(body) {
+  const product = String(body?.product || '').trim().toLowerCase()
+  if (!product || product === 'trial') {
+    const offerStartedAt = Number(body?.offerStartedAt)
+    const offerLive = Number.isFinite(offerStartedAt)
+      && offerStartedAt <= Date.now()
+      && Date.now() - offerStartedAt < OFFER_MS + OFFER_GRACE_MS
+    const price = offerLive ? OFFER_PRICE : REGULAR_PRICE
+    return { price, label: `QuoteGen monthly ₹${price}`, message: `QuoteGen monthly plan ₹${price}` }
+  }
+  if (product === 'plan') {
+    const plan = PLAN_PRICES[String(body?.plan || '').trim().toLowerCase()]
+    const period = body?.period === 'yearly' ? 'yearly' : body?.period === 'monthly' ? 'monthly' : ''
+    if (!plan || !period) return { error: 'Choose a plan to continue.' }
+    const price = plan[period]
+    const when = period === 'yearly' ? 'yearly' : 'monthly'
+    return { price, label: `${plan.name} ${when} ₹${price}`, message: `QuoteGen ${plan.name} ${when} ₹${price}` }
+  }
+  if (product === 'topup') {
+    const pack = TOPUP_PRICES[String(body?.topup || '').trim()]
+    if (!pack) return { error: 'Choose a top-up to continue.' }
+    return { price: pack.price, label: `${pack.label} ₹${pack.price}`, message: `QuoteGen ${pack.label} ₹${pack.price}` }
+  }
+  return { error: 'Choose a plan to continue.' }
+}
+
 const HOSTS = {
   sandbox: {
     token: 'https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token',
@@ -77,11 +118,9 @@ export function registerPublicPhonePeRoutes(app) {
     if (!cfg) return res.status(503).json({ error: 'Online payment is not set up yet.', code: 'PHONEPE_NOT_CONFIGURED' })
 
     const body = req.body || {}
-    const offerStartedAt = Number(body.offerStartedAt)
-    const offerLive = Number.isFinite(offerStartedAt)
-      && offerStartedAt <= Date.now()
-      && Date.now() - offerStartedAt < OFFER_MS + OFFER_GRACE_MS
-    const price = offerLive ? OFFER_PRICE : REGULAR_PRICE
+    const charge = resolveCharge(body)
+    if (charge.error) return res.status(400).json({ error: charge.error, code: 'VALIDATION' })
+    const price = charge.price
     const merchantOrderId = `QG-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`
 
     try {
@@ -98,11 +137,11 @@ export function registerPublicPhonePeRoutes(app) {
             udf2: clip(body.company, 256),
             udf3: clip(body.phone, 256),
             udf4: clip(body.email, 256),
-            udf5: `QuoteGen monthly ₹${price}`
+            udf5: clip(charge.label, 256)
           },
           paymentFlow: {
             type: 'PG_CHECKOUT',
-            message: `QuoteGen monthly plan ₹${price}`,
+            message: clip(charge.message, 120),
             merchantUrls: {
               redirectUrl: `${publicOrigin(req)}/payment-status?order=${encodeURIComponent(merchantOrderId)}`
             }
@@ -151,7 +190,8 @@ export function registerPublicPhonePeRoutes(app) {
             `Name: ${m.udf1 || '-'}`,
             `Company: ${m.udf2 || '-'}`,
             `Phone: ${m.udf3 || '-'}`,
-            `Email: ${m.udf4 || '-'}`
+            `Email: ${m.udf4 || '-'}`,
+            `Item: ${m.udf5 || '-'}`
           ].join('\n')
         }).catch(() => {})
         if (isSupabaseConfigured()) {

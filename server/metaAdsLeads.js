@@ -1,6 +1,7 @@
 import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { sendAdminEmail, sendUserEmail } from './mail.js'
 import { canManageMetaAdsLeads, isSuperAdmin } from './superAdmin.js'
+import { accountSnapshotsByEmail } from './adminUsers.js'
 
 function requireDb(res, requestId) {
   if (!isSupabaseConfigured()) {
@@ -11,6 +12,39 @@ function requireDb(res, requestId) {
     return null
   }
   return getSupabase()
+}
+
+async function notifyN8nLead(lead, saved) {
+  const url = String(process.env.N8N_LEAD_WEBHOOK_URL || '').trim()
+  if (!url) return
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8000)
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        id: saved?.id || null,
+        name: lead.name,
+        phone: lead.phone,
+        phoneE164: lead.phone ? `+91${lead.phone}` : '',
+        email: lead.email,
+        company: lead.company || '',
+        monthlyQuotes: lead.monthlyQuotes,
+        industry: lead.industry,
+        source: lead.source,
+        createdAt: saved?.created_at || new Date().toISOString()
+      })
+    })
+    if (!response.ok) {
+      console.error('[n8n] lead webhook returned', response.status)
+    }
+  } catch (err) {
+    console.error('[n8n] lead webhook failed', err?.message || err)
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 function migrationRequired(res, requestId) {
@@ -30,16 +64,20 @@ function normalizeLeadBody(body) {
   const phone = digitsOnly(body?.phone)
   const email = String(body?.email || '').trim().toLowerCase()
   const company = String(body?.company || '').trim()
+  const monthlyQuotes = String(body?.monthlyQuotes || '').trim().slice(0, 40)
+  const industry = String(body?.industry || '').trim().slice(0, 80)
   const source = String(body?.source || 'meta_ads_landing').trim() || 'meta_ads_landing'
   const path = String(body?.path || '').trim().slice(0, 200)
   const query = String(body?.query || '').trim().slice(0, 500)
-  return { name, phone, email, company, source, path, query }
+  return { name, phone, email, company, monthlyQuotes, industry, source, path, query }
 }
 
 function validateLead(lead) {
   if (!lead.name) return 'Please enter your name.'
   if (lead.phone.length !== 10) return 'Enter a valid 10-digit mobile number.'
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lead.email)) return 'Enter a valid email address.'
+  if (!lead.monthlyQuotes) return 'Enter how many quotations you make in a month.'
+  if (!lead.industry) return 'Enter your industry.'
   return ''
 }
 
@@ -58,6 +96,8 @@ function serializeLead(row) {
     phone: row.phone || '',
     email: row.email || '',
     company: row.company || '',
+    monthlyQuotes: row.monthly_quotes || '',
+    industry: row.industry || '',
     source: row.source || '',
     path: row.path || '',
     query: row.query || '',
@@ -76,7 +116,7 @@ function serializeLead(row) {
   }
 }
 
-const LEAD_COLUMNS = 'id, name, phone, email, company, source, path, query, status, intent, demo_at, purchased_at, purchase_amount, purchase_order_id, remarks, follow_up_at, reminder_minutes, deactivated_at, created_at'
+const LEAD_COLUMNS = 'id, name, phone, email, company, monthly_quotes, industry, source, path, query, status, intent, demo_at, purchased_at, purchase_amount, purchase_order_id, remarks, follow_up_at, reminder_minutes, deactivated_at, created_at'
 
 async function findLatestLead(supabase, { email, phone }) {
   const em = String(email || '').trim().toLowerCase()
@@ -248,6 +288,8 @@ export function registerPublicMetaAdsLeadRoutes(app) {
           phone: lead.phone,
           email: lead.email,
           company: lead.company,
+          monthly_quotes: lead.monthlyQuotes,
+          industry: lead.industry,
           source: lead.source,
           path: lead.path,
           query: lead.query,
@@ -269,6 +311,8 @@ export function registerPublicMetaAdsLeadRoutes(app) {
             `Phone: +91 ${lead.phone}`,
             `Email: ${lead.email}`,
             `Company: ${lead.company || '(not provided)'}`,
+            `Quotations / month: ${lead.monthlyQuotes}`,
+            `Industry: ${lead.industry}`,
             `Source: ${lead.source}`,
             `Path: ${lead.path || '/'}`,
             `Time: ${data?.created_at || new Date().toISOString()}`,
@@ -278,6 +322,8 @@ export function registerPublicMetaAdsLeadRoutes(app) {
         })
         emailed = Boolean(mail.ok)
       }
+
+      await notifyN8nLead(lead, data)
 
       res.status(201).json({
         ok: true,
@@ -491,7 +537,22 @@ export function registerMetaAdsLeadRoutes(app) {
         .limit(500)
       if (error) throw error
 
-      const leads = (data || []).map(serializeLead)
+      let accounts = new Map()
+      try {
+        accounts = await accountSnapshotsByEmail(supabase)
+      } catch (accountError) {
+        console.error(`[${requestId}] lead account lookup failed`, accountError?.message)
+      }
+      const leads = (data || []).map((row) => {
+        const lead = serializeLead(row)
+        const account = accounts.get(String(lead.email || '').trim().toLowerCase()) || null
+        return {
+          ...lead,
+          quotationCount: account ? account.quotationCount : null,
+          accountStatus: account?.accountStatus || '',
+          joinedAt: account?.joinedAt || null
+        }
+      })
       const counts = { lead: 0, demo: 0, purchased: 0, inactive: 0 }
       for (const lead of leads) {
         if (lead.deactivated) {

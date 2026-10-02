@@ -1,11 +1,115 @@
 import React, { useEffect, useRef, useState } from 'react'
 import logoUrl from './assets/landing/quotegen-logo.png'
-import { META_ADS_LEAD_KEY as LEAD_KEY, readMetaAdsLead, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaWelcome, recordMetaLeadProgress, readMetaWelcome, writeMetaWelcome } from './metaTrialLead.js'
+import { META_ADS_LEAD_KEY as LEAD_KEY, readMetaAdsLead, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaWelcome, recordMetaLeadProgress } from './metaTrialLead.js'
 import { trackPixel } from './metaPixel.js'
 import { whatsappChatsLink } from './whatsappEnquiry.js'
 import './metaAdsLanding.css'
 
 const CTA_STYLE = { fontFamily: 'Archivo, Inter, system-ui, sans-serif', fontWeight: 400 }
+
+const INDUSTRY_OPTIONS = ['Manufacturing', 'Trading', 'Construction', 'Electrical', 'Engineering', 'Services', 'Other']
+
+function editDistance(a, b) {
+  const rows = a.length + 1
+  const cols = b.length + 1
+  const dp = Array.from({ length: rows }, () => new Array(cols).fill(0))
+  for (let i = 0; i < rows; i += 1) dp[i][0] = i
+  for (let j = 0; j < cols; j += 1) dp[0][j] = j
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < cols; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
+    }
+  }
+  return dp[a.length][b.length]
+}
+
+function rankIndustries(query) {
+  const q = String(query || '').trim().toLowerCase()
+  const scored = INDUSTRY_OPTIONS.map((option) => {
+    const name = option.toLowerCase()
+    if (!q) return { option, score: 1 }
+    if (name === q) return { option, score: 100 }
+    if (name.startsWith(q) || q.startsWith(name)) return { option, score: 80 }
+    if (name.includes(q) || q.includes(name)) return { option, score: 60 }
+    const dist = editDistance(q, name)
+    const similarity = 1 - dist / Math.max(q.length, name.length)
+    return { option, score: similarity >= 0.45 ? Math.round(similarity * 40) : 0 }
+  })
+  return scored.filter((row) => row.score > 0).sort((a, b) => b.score - a.score).map((row) => row.option)
+}
+
+function IndustryField({ value, onChange }) {
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(0)
+  const matches = rankIndustries(value)
+  const shown = open && matches.length > 0
+
+  const choose = (option) => {
+    onChange(option)
+    setOpen(false)
+  }
+
+  return (
+    <div className="meta-suggest">
+      <input
+        id="meta-industry"
+        name="industry"
+        autoComplete="off"
+        role="combobox"
+        aria-expanded={shown}
+        aria-autocomplete="list"
+        aria-controls="meta-industry-list"
+        value={value}
+        placeholder="Start typing, e.g. Trading"
+        onChange={(e) => {
+          onChange(e.target.value)
+          setOpen(true)
+          setActive(0)
+        }}
+        onFocus={() => {
+          setOpen(true)
+          setActive(0)
+        }}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(e) => {
+          if (!matches.length) return
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            setOpen(true)
+            setActive((index) => Math.min(index + 1, matches.length - 1))
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            setOpen(true)
+            setActive((index) => Math.max(index - 1, 0))
+          } else if (e.key === 'Escape') {
+            setOpen(false)
+          } else if (e.key === 'Enter' && open && matches[active]) {
+            e.preventDefault()
+            choose(matches[active])
+          }
+        }}
+      />
+      {shown && (
+        <ul id="meta-industry-list" role="listbox" className="meta-suggest-list">
+          {matches.map((option, index) => (
+            <li key={option} role="option" aria-selected={index === active}>
+              <button
+                type="button"
+                className={index === active ? 'is-active' : ''}
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setActive(index)}
+                onClick={() => choose(option)}
+              >
+                {option}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
 
 function DemoCtaLabel() {
   return (
@@ -123,21 +227,19 @@ function NextChoices({ lead, onNextStep }) {
   )
 }
 
-function VerifiedArrival({ lead, saving, saveError, onRetrySave, onNextStep }) {
-  const [step, setStep] = useState(() => (readMetaWelcome() === 'choice' ? 'choice' : 'congrats'))
-
+function VerifiedArrival({ saving, saveError, onRetrySave }) {
   let body = null
   if (saving) {
     body = (
       <div className="meta-form-card meta-form-card-next">
-        <p className="meta-next-kicker">You’re all set</p>
+        <p className="meta-next-kicker">Great, your enquiry is submitted</p>
         <h2>Confirming your email…</h2>
       </div>
     )
   } else if (saveError) {
     body = (
       <div className="meta-form-card meta-form-card-next">
-        <p className="meta-next-kicker">You’re all set</p>
+        <p className="meta-next-kicker">Great, your enquiry is submitted</p>
         <h2>We couldn’t save your details.</h2>
         <p className="meta-form-lead">{saveError}</p>
         <button type="button" className="meta-btn meta-btn-primary meta-btn-lg" style={CTA_STYLE} onClick={onRetrySave}>
@@ -145,27 +247,14 @@ function VerifiedArrival({ lead, saving, saveError, onRetrySave, onNextStep }) {
         </button>
       </div>
     )
-  } else if (step === 'congrats') {
+  } else {
     body = (
       <div className="meta-form-card meta-form-card-next">
-        <p className="meta-next-kicker">You’re all set</p>
-        <h2>Congratulations.</h2>
-        <p className="meta-form-lead">Your email is verified.</p>
-        <button
-          type="button"
-          className="meta-btn meta-btn-primary meta-btn-lg"
-          style={CTA_STYLE}
-          onClick={() => {
-            writeMetaWelcome('choice')
-            setStep('choice')
-          }}
-        >
-          Continue
-        </button>
+        <p className="meta-next-kicker">Great, your enquiry is submitted</p>
+        <h2>Your enquiry has been received.</h2>
+        <p className="meta-form-lead">Our team will reach out to you shortly.</p>
       </div>
     )
-  } else {
-    body = <NextChoices lead={lead} onNextStep={onNextStep} />
   }
 
   return (
@@ -182,6 +271,8 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyCha
   const [phone, setPhone] = useState(initialLead?.phone || '')
   const [email, setEmail] = useState(initialLead?.email || '')
   const [company, setCompany] = useState(initialLead?.company || '')
+  const [monthlyQuotes, setMonthlyQuotes] = useState(initialLead?.monthlyQuotes || '')
+  const [industry, setIndustry] = useState(initialLead?.industry || '')
   const [error, setError] = useState('')
   const [done, setDone] = useState(Boolean(initialLead))
   const [submitting, setSubmitting] = useState(false)
@@ -213,11 +304,23 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyCha
       setError('Enter a valid email address.')
       return
     }
+    const quotes = monthlyQuotes.trim()
+    const trade = industry.trim()
+    if (!quotes) {
+      setError('Enter how many quotations you make in a month.')
+      return
+    }
+    if (!trade) {
+      setError('Enter your industry.')
+      return
+    }
     const payload = {
       name: n,
       phone: p,
       email: em,
       company: company.trim(),
+      monthlyQuotes: quotes,
+      industry: trade,
       source: 'meta_ads_landing',
       path: typeof window !== 'undefined' ? window.location.pathname : '',
       query: typeof window !== 'undefined' ? window.location.search : '',
@@ -299,6 +402,20 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyCha
             onChange={(e) => setCompany(e.target.value)}
             placeholder="Your business name"
           />
+        </div>
+        <div className="meta-field">
+          <label htmlFor="meta-monthly">How many quotations do you make in a month?</label>
+          <input
+            id="meta-monthly"
+            name="monthlyQuotes"
+            value={monthlyQuotes}
+            onChange={(e) => setMonthlyQuotes(e.target.value)}
+            placeholder="e.g. 40"
+          />
+        </div>
+        <div className="meta-field">
+          <label htmlFor="meta-industry">Which industry are you in?</label>
+          <IndustryField value={industry} onChange={setIndustry} />
         </div>
       </div>
       {error && <p className="meta-form-error">{error}</p>}
@@ -390,11 +507,9 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial, onStartVerif
   if (celebrate) {
     return (
       <VerifiedArrival
-        lead={initialLead}
         saving={saving}
         saveError={saveError}
         onRetrySave={onRetrySave}
-        onNextStep={handleNextStep}
       />
     )
   }

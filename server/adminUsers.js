@@ -126,6 +126,46 @@ function bucketQuotes(createdAts, { daysBack = 30, weeksBack = 12, monthsBack = 
   }
 }
 
+/** Email → account status, quotations made, and join time. Used by Meta ads leads. */
+export async function accountSnapshotsByEmail(supabase) {
+  const [authUsers, profilesRes, quoteCounts] = await Promise.all([
+    listAllAuthUsers(supabase),
+    supabase
+      .from('user_profiles')
+      .select('user_id, email, account_status'),
+    quotationCountsByUser(supabase)
+  ])
+  if (profilesRes.error && !/user_profiles|schema cache|PGRST|42703|account_status/i.test(profilesRes.error.message || '')) {
+    throw profilesRes.error
+  }
+  const profilesByUser = new Map()
+  for (const row of profilesRes.data || []) profilesByUser.set(row.user_id, row)
+
+  const byEmail = new Map()
+  for (const user of authUsers) {
+    const profile = profilesByUser.get(user.id)
+    const email = String(user.email || profile?.email || '').trim().toLowerCase()
+    if (!email) continue
+    const quotationCount = quoteCounts.get(user.id) || 0
+    const joinedAt = user.created_at || null
+    const accountStatus = normalizeAccountStatus(profile?.account_status)
+    const prev = byEmail.get(email)
+    if (!prev) {
+      byEmail.set(email, { accountStatus, quotationCount, joinedAt })
+      continue
+    }
+    const earlierJoin = prev.joinedAt && joinedAt
+      ? (String(prev.joinedAt) < String(joinedAt) ? prev.joinedAt : joinedAt)
+      : (prev.joinedAt || joinedAt)
+    byEmail.set(email, {
+      accountStatus: prev.accountStatus === 'removed' ? accountStatus : prev.accountStatus,
+      quotationCount: prev.quotationCount + quotationCount,
+      joinedAt: earlierJoin
+    })
+  }
+  return byEmail
+}
+
 export function registerAdminUserRoutes(app) {
   app.get('/api/admin/users', async (req, res) => {
     const requestId = `admin-users-${Date.now()}`
