@@ -2,6 +2,7 @@ import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { sendAdminEmail, sendUserEmail } from './mail.js'
 import { canManageMetaAdsLeads, isSuperAdmin } from './superAdmin.js'
 import { accountSnapshotsByEmail } from './adminUsers.js'
+import { appendLeadToSheet } from './googleSheetLead.js'
 
 function requireDb(res, requestId) {
   if (!isSupabaseConfigured()) {
@@ -324,6 +325,12 @@ export function registerPublicMetaAdsLeadRoutes(app) {
       }
 
       await notifyN8nLead(lead, data)
+      try {
+        const sheet = await appendLeadToSheet(lead)
+        if (!sheet.ok) console.error('[sheets] lead not added:', sheet.reason)
+      } catch (sheetError) {
+        console.error('[sheets] lead append failed', sheetError?.message || sheetError)
+      }
 
       res.status(201).json({
         ok: true,
