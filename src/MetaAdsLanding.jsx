@@ -227,7 +227,7 @@ function NextChoices({ lead, onNextStep }) {
   )
 }
 
-function VerifiedArrival({ saving, saveError, onRetrySave }) {
+function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn }) {
   let body = null
   if (saving) {
     body = (
@@ -268,6 +268,16 @@ function VerifiedArrival({ saving, saveError, onRetrySave }) {
         <p className="meta-success-support">
           Need help sooner? Call us on <a href="tel:+919067610118">+91 90676 10118</a>
         </p>
+        <a
+          className="meta-success-signin"
+          href="/signin"
+          onClick={(e) => {
+            e.preventDefault()
+            onSignIn?.()
+          }}
+        >
+          Sign in
+        </a>
       </div>
     )
   }
@@ -525,6 +535,7 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial, onStartVerif
         saving={saving}
         saveError={saveError}
         onRetrySave={onRetrySave}
+        onSignIn={onSignIn}
       />
     )
   }

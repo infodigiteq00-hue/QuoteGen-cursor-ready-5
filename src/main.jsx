@@ -1139,6 +1139,11 @@ function hasAuthRedirectHash() {
   return params.has('access_token') || params.has('error_code') || params.get('type') === 'recovery'
 }
 
+function isSignInPath(path) {
+  const value = String(path || '').replace(/\/+$/, '') || '/'
+  return value === '/signin' || value === '/login' || value === '/sign-in'
+}
+
 function App() {
   const [authChecked, setAuthChecked] = useState(false)
   const [authUser, setAuthUser] = useState(null)
@@ -1218,6 +1223,7 @@ function App() {
   const [metaLeadError, setMetaLeadError] = useState('')
   const [metaTrialCompany, setMetaTrialCompany] = useState(false)
   const metaNextConsumedRef = useRef(false)
+  const signInHandoffRef = useRef(false)
   const isMobile = useIsMobile()
 
   const quoteIdRef = useRef(null)
@@ -1417,6 +1423,26 @@ function App() {
     const unsubscribe = onAuthChange(apply)
     return () => { cancelled = true; clearTimeout(bootTimer); unsubscribe() }
   }, [])
+
+  // /signin always opens the login form. A saved enquiry-received screen must not cover it.
+  useEffect(() => {
+    if (!isSignInPath(publicPath)) return
+    clearMetaWelcome()
+    setMetaWelcome(false)
+    setGuestAuthMode('login')
+    if (!authUser) {
+      signInHandoffRef.current = true
+      return
+    }
+    if (signInHandoffRef.current) {
+      signInHandoffRef.current = false
+      setGuestAuthMode(null)
+      window.history.replaceState({}, '', '/')
+      setPublicPath('/')
+      return
+    }
+    signOut()
+  }, [authUser, publicPath])
 
   // Keep SPA path in React state (pushState alone does not re-render).
   useEffect(() => {
@@ -1861,6 +1887,19 @@ function App() {
     return <LegalPages pageId={legalPageId} />
   }
 
+  if (authChecked && isSignInPath(publicPath)) {
+    return (
+      <AuthScreen
+        initialMode="login"
+        onPreferLogin={() => {
+          clearMetaWelcome()
+          setMetaWelcome(false)
+          setGuestAuthMode('login')
+        }}
+      />
+    )
+  }
+
   if (!authChecked) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-3.5 bg-mist">
@@ -1985,6 +2024,13 @@ function App() {
         saving={awaitingLeadSave && !metaLeadError}
         saveError={metaLeadError}
         onRetrySave={retryMetaLeadSave}
+        onSignIn={() => {
+          clearMetaWelcome()
+          setMetaWelcome(false)
+          setGuestAuthMode('login')
+          window.history.pushState({}, '', '/signin')
+          setPublicPath('/signin')
+        }}
         onContinueTrial={() => {
           clearMetaWelcome()
           setMetaWelcome(false)

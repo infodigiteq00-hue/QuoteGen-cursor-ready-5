@@ -1708,6 +1708,26 @@
   text-decoration: underline;
 }
 
+.meta-success-signin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  margin-top: 18px;
+  padding: 0 22px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  color: #F3F6FC;
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.meta-success-signin:hover {
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.06);
+}
+
 @keyframes meta-success-pop {
   from { transform: scale(0.72); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
