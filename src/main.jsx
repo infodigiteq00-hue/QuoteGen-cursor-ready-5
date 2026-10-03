@@ -1879,11 +1879,7 @@ function App() {
     return (
       <PaymentStatus
         onContinue={(state) => {
-          if (state === 'COMPLETED') {
-            window.location.assign('/set-password')
-            return
-          }
-          window.location.assign('/demo')
+          window.location.assign(state === 'COMPLETED' ? '/' : '/demo')
         }}
         onPaid={markMetaTrialPaid}
       />

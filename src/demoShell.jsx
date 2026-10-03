@@ -3,9 +3,9 @@ import { createRoot } from 'react-dom/client'
 import './styles.css'
 import MetaTrialGuide from './MetaTrialGuide.jsx'
 import PaymentStatus from './PaymentStatus.jsx'
-import SetPasswordScreen from './SetPasswordScreen.jsx'
+import AuthScreen from './AuthScreen.jsx'
 import BrandMark from './BrandMark.jsx'
-import { getCurrentSession, installAuthFetch, onAuthChange } from './apiAuth.js'
+import { getCurrentSession, installAuthFetch, onAuthChange, signIn } from './apiAuth.js'
 import { initMetaPixel } from './metaPixel.js'
 import { clearMetaTrialLock, readMetaAdsLead, usefulLead } from './metaTrialLead.js'
 import { saveCompanyProfile } from './quotePersistence.js'
@@ -46,17 +46,49 @@ function DemoApp() {
   const [error, setError] = useState('')
   const [profile, setProfile] = useState(null)
   const [used, setUsed] = useState(() => readDemoQuoteCount(lead?.email))
+  const [account, setAccount] = useState(null)
+
+  const openAccount = (row, session) => {
+    setAccount(row)
+    if (!row?.verified) return 'gate'
+    if (row.needsPassword) return 'password'
+    if (!session) return 'login'
+    if (row.plan === 'demo') return 'demo'
+    window.location.assign('/')
+    return 'leave'
+  }
 
   useEffect(() => {
     let cancelled = false
     const bootTimer = setTimeout(() => { if (!cancelled) setReady(true) }, 4500)
-    getCurrentSession().finally(() => {
+    const email = lead?.email
+    Promise.all([
+      getCurrentSession(),
+      email
+        ? fetch('/api/meta-ads-trial/account', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email })
+        }).then((response) => response.json().catch(() => ({}))).catch(() => ({}))
+        : Promise.resolve(null)
+    ]).then(([session, row]) => {
       clearTimeout(bootTimer)
-      if (!cancelled) setReady(true)
+      if (cancelled) return
+      if (!email) {
+        setAccount({ verified: false })
+      } else if (row && row.verified != null) {
+        const next = openAccount(row, session)
+        setAccount({ ...row, step: next })
+      } else if (session) {
+        setAccount({ verified: true, plan: 'demo', step: 'demo' })
+      } else {
+        setAccount({ verified: true, needsPassword: true, step: 'password' })
+      }
+      setReady(true)
     })
     const unsubscribe = onAuthChange(() => {})
     return () => { cancelled = true; clearTimeout(bootTimer); unsubscribe() }
-  }, [])
+  }, [lead?.email])
 
   useEffect(() => {
     if (!lead?.email) return undefined
@@ -76,36 +108,67 @@ function DemoApp() {
     )
   }
 
-  if (path === '/set-password') {
+  if (path === '/payment-status') {
     return (
-      <SetPasswordScreen
-        onDone={() => {
-          clearMetaTrialLock()
+      <PaymentStatus
+        onPaid={() => { clearMetaTrialLock() }}
+        onContinue={(state) => {
+          window.location.assign(state === 'COMPLETED' ? '/' : '/demo')
+        }}
+      />
+    )
+  }
+
+  if (!lead?.email || account?.verified === false) return <DemoGate />
+
+  if (account?.step === 'password' || account?.needsPassword) {
+    return (
+      <AuthScreen
+        initialMode="create-password"
+        prefillEmail={lead.email}
+        onCreatePassword={async (password) => {
+          const response = await fetch('/api/meta-ads-trial/set-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: lead.email, password, name: lead.name || '' })
+          })
+          const data = await response.json().catch(() => ({}))
+          if (!response.ok) throw new Error(data.error || 'Could not save the password.')
+          if (data.plan === 'legacy' || data.needsLogin) {
+            window.location.assign('/signin')
+            return
+          }
+          await signIn(lead.email, password)
+          if (data.plan === 'demo') {
+            setAccount({ verified: true, plan: 'demo', step: 'demo', needsPassword: false })
+            return
+          }
           window.location.assign('/')
         }}
       />
     )
   }
 
-  if (path === '/payment-status') {
+  if (account?.step === 'leave') {
     return (
-      <PaymentStatus
-        onPaid={() => {
-          try { sessionStorage.setItem('qg_needs_password', '1') } catch { /* ignore */ }
-        }}
-        onContinue={(state) => {
-          if (state === 'COMPLETED') {
-            window.history.pushState({}, '', '/set-password')
-            setPath('/set-password')
-            return
-          }
-          window.location.assign('/demo')
+      <main className="flex min-h-screen items-center justify-center bg-mist">
+        <div className="text-lg font-bold text-ink">Opening QuoteGen…</div>
+      </main>
+    )
+  }
+
+  if (account?.step === 'login') {
+    return (
+      <AuthScreen
+        initialMode="login"
+        prefillEmail={lead.email}
+        onLoggedIn={() => {
+          if (account.plan === 'demo') setAccount({ ...account, step: 'demo' })
+          else window.location.assign('/')
         }}
       />
     )
   }
-
-  if (!lead?.email) return <DemoGate />
 
   return (
     <MetaTrialGuide
@@ -139,8 +202,9 @@ function DemoApp() {
           setUsed(row.used)
           return built
         } catch (err) {
-          setError(err.message || 'Could not create the quotation.')
-          return null
+          const message = err.message || 'Could not create the quotation.'
+          setError(message)
+          throw new Error(message)
         } finally {
           setLoading(false)
         }

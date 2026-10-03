@@ -56,7 +56,7 @@ function Submit({ loading, idle, busy }) {
   )
 }
 
-function LoginForm({ onSwitch, onNeedsConfirmation, onForgotPassword, prefillEmail, notice }) {
+function LoginForm({ onSwitch, onNeedsConfirmation, onForgotPassword, onLoggedIn, prefillEmail, notice, emailLocked = false }) {
   const [email, setEmail] = useState(prefillEmail || '')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -73,6 +73,7 @@ function LoginForm({ onSwitch, onNeedsConfirmation, onForgotPassword, prefillEma
       // A successful sign-in fires onAuthStateChange, which swaps this screen
       // out for the app — nothing else to do here.
       await signIn(email.trim(), password)
+      await onLoggedIn?.()
     } catch (err) {
       const next = err.message || 'Login failed'
       setError(next)
@@ -103,7 +104,7 @@ function LoginForm({ onSwitch, onNeedsConfirmation, onForgotPassword, prefillEma
   return (
     <form onSubmit={submit} className="space-y-4">
       <Alert tone="warn">{notice}</Alert>
-      <Field label="Email" type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" />
+      <Field label="Email" type="email" autoComplete="email" required readOnly={emailLocked} value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" />
       <Field label="Password" type="password" autoComplete="current-password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
       <Alert tone="error">{error}</Alert>
       <Alert tone="success">{message}</Alert>
@@ -120,6 +121,43 @@ function LoginForm({ onSwitch, onNeedsConfirmation, onForgotPassword, prefillEma
         New here?{' '}
         <button type="button" onClick={onSwitch} className="font-semibold text-moss hover:underline">Create an account</button>
       </p>
+    </form>
+  )
+}
+
+function CreatePasswordForm({ email, onCreatePassword }) {
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setError('')
+    if (password.length < 8) {
+      setError('Use at least 8 characters.')
+      return
+    }
+    if (password !== confirm) {
+      setError('Those passwords don’t match.')
+      return
+    }
+    setLoading(true)
+    try {
+      await onCreatePassword?.(password)
+    } catch (err) {
+      setError(err.message || 'Could not save the password.')
+      setLoading(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-4">
+      <Field label="Email" type="email" autoComplete="email" required readOnly value={email} placeholder="you@company.com" />
+      <Field label="Create password" type="password" autoComplete="new-password" required minLength={8} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 8 characters" />
+      <Field label="Confirm password" type="password" autoComplete="new-password" required value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Retype your password" />
+      <Alert tone="error">{error}</Alert>
+      <Submit loading={loading} idle="Log in" busy="Logging in…" />
     </form>
   )
 }
@@ -680,6 +718,10 @@ const COPY = {
   reset: {
     title: 'Choose a new password',
     blurb: 'This signs you in and replaces the old password on the account.'
+  },
+  'create-password': {
+    title: 'Log in',
+    blurb: 'Sign in to open your quotations, products, and knowledge base.'
   }
 }
 
@@ -691,7 +733,9 @@ export default function AuthScreen({
   prefillPhone = '',
   leadName = '',
   leadCompany = '',
-  onPreferLogin
+  onPreferLogin,
+  onCreatePassword,
+  onLoggedIn
 }) {
   const [mode, setMode] = useState(recovery ? 'reset' : (initialMode || 'login'))
   const [pendingEmail, setPendingEmail] = useState('')
@@ -766,8 +810,16 @@ export default function AuthScreen({
               onSwitch={() => { setLoginNotice(''); setMode('signup') }}
               onNeedsConfirmation={needsConfirmation}
               onForgotPassword={() => setMode('forgot')}
+              onLoggedIn={onLoggedIn}
               prefillEmail={pendingEmail || prefillEmail}
+              emailLocked={Boolean(prefillEmail)}
               notice={loginNotice}
+            />
+          )}
+          {mode === 'create-password' && (
+            <CreatePasswordForm
+              email={prefillEmail}
+              onCreatePassword={onCreatePassword}
             />
           )}
           {mode === 'signup' && (

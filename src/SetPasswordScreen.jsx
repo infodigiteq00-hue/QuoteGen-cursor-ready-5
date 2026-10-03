@@ -12,7 +12,7 @@ function paidProfile() {
   }
 }
 
-export default function SetPasswordScreen({ onDone }) {
+export default function SetPasswordScreen({ onDone, onSubmit, title = 'Set your password', kicker = 'Email verified' }) {
   const lead = readMetaAdsLead() || {}
   const paid = paidProfile()
   const name = String(paid.name || lead.name || '').trim()
@@ -35,15 +35,19 @@ export default function SetPasswordScreen({ onDone }) {
     }
     setLoading(true)
     try {
-      if (supabase) {
-        const { data } = await supabase.auth.getSession()
-        if (!data?.session) {
-          setError('Open this page on the phone where you verified your email, then set the password.')
-          setLoading(false)
-          return
+      if (onSubmit) {
+        await onSubmit(password)
+      } else {
+        if (supabase) {
+          const { data } = await supabase.auth.getSession()
+          if (!data?.session) {
+            setError('Open this page on the phone where you verified your email, then set the password.')
+            setLoading(false)
+            return
+          }
         }
+        await updatePassword(password)
       }
-      await updatePassword(password)
       if (supabase && name) {
         await supabase.auth.updateUser({ data: { full_name: name, name } }).catch(() => {})
       }
@@ -58,9 +62,9 @@ export default function SetPasswordScreen({ onDone }) {
   return (
     <main className="flex min-h-screen items-center justify-center bg-mist px-4 py-10">
       <form onSubmit={save} className="w-full max-w-md rounded-[20px] bg-white p-6 shadow-[0_20px_60px_rgba(15,23,42,.12)]">
-        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#1A73E8]">Payment received</p>
-        <h1 className="mt-2 text-2xl font-bold tracking-tight text-ink">Set your password</h1>
-        <p className="mt-2 text-sm text-slate-500">Name and email are already on the account. Choose a password to open QuoteGen.</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#1A73E8]">{kicker}</p>
+        <h1 className="mt-2 text-2xl font-bold tracking-tight text-ink">{title}</h1>
+        <p className="mt-2 text-sm text-slate-500">Name and email are already on the account. Choose a password once. This creates your QuoteGen login.</p>
         <label className="mt-5 block text-sm">
           <span className="mb-1.5 block font-medium text-slate-700">Name</span>
           <input value={name} readOnly className="w-full rounded-xl border border-sand bg-slate-50 px-3 py-2.5 text-sm text-slate-600" />

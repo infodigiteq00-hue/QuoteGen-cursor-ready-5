@@ -2,6 +2,7 @@ import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { sendAdminEmail, sendUserEmail } from './mail.js'
 import { canManageMetaAdsLeads, isSuperAdmin } from './superAdmin.js'
 import { accountSnapshotsByEmail } from './adminUsers.js'
+import { assignPlanOnPassword, loadUserControls, NEW_ACCOUNT_CUTOFF } from './accountAccess.js'
 import { appendLeadToSheet } from './googleSheetLead.js'
 
 function requireDb(res, requestId) {
@@ -125,7 +126,7 @@ async function findLatestLead(supabase, { email, phone }) {
   if (em) {
     const { data, error } = await supabase
       .from('meta_ads_leads')
-      .select('id, status, intent, email, phone, demo_at, purchase_order_id')
+      .select('id, name, status, intent, email, phone, demo_at, purchase_order_id')
       .eq('email', em)
       .order('created_at', { ascending: false })
       .limit(20)
@@ -140,7 +141,7 @@ async function findLatestLead(supabase, { email, phone }) {
   if (ph.length === 10) {
     const { data, error } = await supabase
       .from('meta_ads_leads')
-      .select('id, status, intent, email, phone, demo_at, purchase_order_id')
+      .select('id, name, status, intent, email, phone, demo_at, purchase_order_id')
       .eq('phone', ph)
       .order('created_at', { ascending: false })
       .limit(1)
@@ -229,7 +230,7 @@ function trialUserMeta(body) {
   return { email: String(body?.email || '').trim().toLowerCase(), meta, phoneDigits, name, company }
 }
 
-async function findAuthUserByEmail(supabase, email) {
+export async function findAuthUserByEmail(supabase, email) {
   const em = String(email || '').trim().toLowerCase()
   for (let page = 1; page <= 10; page += 1) {
     const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 200 })
@@ -380,6 +381,77 @@ export function registerPublicMetaAdsLeadRoutes(app) {
       if (/meta_ads_leads|schema cache|PGRST|42703/i.test(error?.message || '')) {
         return migrationRequired(res, requestId)
       }
+      supabaseError(error, res, requestId)
+    }
+  })
+
+  app.post('/api/meta-ads-trial/account', async (req, res) => {
+    const requestId = `mal-acct-${Date.now()}`
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+    const email = String(req.body?.email || '').trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Enter a valid email address.', code: 'VALIDATION', requestId })
+    }
+    try {
+      const lead = await findLatestLead(supabase, { email, phone: '' })
+      const user = await findAuthUserByEmail(supabase, email)
+      const verified = Boolean(lead?.id) || Boolean(user?.email_confirmed_at || user?.confirmed_at)
+      if (!verified) return res.json({ ok: true, verified: false, needsPassword: false, plan: null, requestId })
+      if (!user) return res.json({ ok: true, verified: true, needsPassword: true, plan: 'demo', requestId })
+      const controls = await loadUserControls(supabase, user.id)
+      const { count } = await supabase
+        .from('quotations')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+      const legacy = String(user.created_at || '') < NEW_ACCOUNT_CUTOFF || (count || 0) > 0
+      const plan = controls.billingPlan || (legacy ? 'legacy' : 'demo')
+      return res.json({
+        ok: true,
+        verified: true,
+        needsPassword: !legacy && !controls.passwordSetAt,
+        plan: legacy && !controls.billingPlan ? 'legacy' : plan,
+        requestId
+      })
+    } catch (error) {
+      console.error(`[${requestId}] trial account lookup failed`, error?.message)
+      supabaseError(error, res, requestId)
+    }
+  })
+
+  app.post('/api/meta-ads-trial/set-password', async (req, res) => {
+    const requestId = `mal-pass-${Date.now()}`
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+    const email = String(req.body?.email || '').trim().toLowerCase()
+    const password = String(req.body?.password || '')
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Enter a valid email address.', code: 'VALIDATION', requestId })
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Use at least 8 characters.', code: 'VALIDATION', requestId })
+    }
+    try {
+      const lead = await findLatestLead(supabase, { email, phone: '' })
+      let user = await findAuthUserByEmail(supabase, email)
+      const verified = Boolean(lead?.id) || Boolean(user?.email_confirmed_at || user?.confirmed_at)
+      if (!verified) {
+        return res.status(403).json({ error: 'Verify your email on the enquiry form first.', code: 'NOT_VERIFIED', requestId })
+      }
+      const legacy = user && String(user.created_at || '') < NEW_ACCOUNT_CUTOFF
+      if (legacy) {
+        return res.json({ ok: true, plan: 'legacy', needsLogin: true, requestId })
+      }
+      user = await ensureConfirmedMetaTrialUser(supabase, email, {
+        source: 'meta_ads_landing',
+        full_name: lead?.name || req.body?.name || ''
+      })
+      const { error } = await supabase.auth.admin.updateUserById(user.id, { password, email_confirm: true })
+      if (error) throw error
+      const plan = await assignPlanOnPassword(supabase, { ...user, email })
+      return res.json({ ok: true, plan, requestId })
+    } catch (error) {
+      console.error(`[${requestId}] set password failed`, error?.message)
       supabaseError(error, res, requestId)
     }
   })

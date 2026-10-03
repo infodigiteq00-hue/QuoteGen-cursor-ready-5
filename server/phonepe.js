@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { getSupabase, isSupabaseConfigured } from './db.js'
-import { markMetaAdsLeadStage } from './metaAdsLeads.js'
+import { findAuthUserByEmail, markMetaAdsLeadStage } from './metaAdsLeads.js'
+import { applyPaymentCredits } from './accountAccess.js'
 import { sendAdminEmail } from './mail.js'
 
 const OFFER_PRICE = 499
@@ -206,6 +207,15 @@ export function registerPublicPhonePeRoutes(app) {
           }).catch((error) => {
             console.error('[phonepe] lead purchase update failed', error?.message)
           })
+          findAuthUserByEmail(getSupabase(), m.udf4)
+            .then((user) => applyPaymentCredits(getSupabase(), {
+              userId: user?.id,
+              email: m.udf4,
+              label: m.udf5
+            }))
+            .catch((error) => {
+              console.error('[phonepe] quote credits update failed', error?.message)
+            })
         }
       }
 
