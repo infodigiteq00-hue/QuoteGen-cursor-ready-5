@@ -34,7 +34,10 @@ export const supabase = supabaseConfigured
         autoRefreshToken: true,
         // Turns the `#access_token=…` hash from the confirmation email into a
         // stored session, then strips it from the address bar.
-        detectSessionInUrl: true
+        detectSessionInUrl: true,
+        // The browser lock deadlocks after a hot reload: signInWithPassword
+        // waits forever and the button stays on “Logging in…”.
+        lock: async (_name, _acquireTimeout, fn) => fn()
       }
     })
   : null

@@ -7,7 +7,7 @@ export const A4_HEIGHT_PX = 1123
 /** Keep body content clear of the sheet run header/footer chrome. */
 export const A4_CONTENT_TOP_MARGIN = 10
 /** Packer reserve under last content — enough to clear the run-footer, not a half-empty sheet. */
-export const A4_CONTENT_BOTTOM_MARGIN = 52
+export const A4_CONTENT_BOTTOM_MARGIN = 28
 /** If closing almost fits, absorb this much overflow instead of a near-empty page. */
 export const A4_CLOSING_SQUEEZE_PX = 72
 /** Same slack for the subtotal block, so a few spare pixels do not open a new page. */
