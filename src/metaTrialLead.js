@@ -172,6 +172,8 @@ export function writeMetaAdsLead(lead) {
   const payload = {
     name: String(lead.name || '').trim(),
     phone: String(lead.phone || '').replace(/\D/g, ''),
+    whatsappSame: lead.whatsappSame !== false,
+    whatsapp: String(lead.whatsapp || lead.phone || '').replace(/\D/g, ''),
     email: String(lead.email || '').trim().toLowerCase(),
     company: String(lead.company || '').trim(),
     monthlyQuotes: String(lead.monthlyQuotes || '').trim(),
@@ -182,6 +184,7 @@ export function writeMetaAdsLead(lead) {
     submitted: true,
     submittedAt: lead.submittedAt || new Date().toISOString(),
     verified: Boolean(lead.verified),
+    demoCode: Number(lead.demoCode) || 0,
     id: lead.id || null
   }
   try { sessionStorage.setItem(META_ADS_LEAD_KEY, JSON.stringify(payload)) } catch { /* ignore */ }
@@ -202,6 +205,8 @@ export function saveVerifiedMetaLead(leadOverride) {
     body: JSON.stringify({
       name: lead.name || '',
       phone: String(lead.phone || '').replace(/\D/g, ''),
+      whatsapp: String(lead.whatsapp || lead.phone || '').replace(/\D/g, ''),
+      whatsappSame: lead.whatsappSame !== false,
       email: lead.email,
       company: lead.company || '',
       monthlyQuotes: lead.monthlyQuotes || '',

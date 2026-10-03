@@ -14,8 +14,9 @@ function needsPassword() {
 
 const path = pathName()
 const demoLink = path === '/' && new URLSearchParams(window.location.search).get('try') === '1'
+const shortDemo = /^\/(?:d|demo)\/\d+$/.test(path)
 const adsPath = path === '/metaadslanding' || path === '/meta-ads-landing' || path === '/trial-verify'
-const demoPath = path === '/demo' || path === '/payment-status' || path === '/set-password' || demoLink || (path === '/' && needsPassword())
+const demoPath = path === '/demo' || path === '/payment-status' || path === '/set-password' || demoLink || shortDemo || (path === '/' && needsPassword())
 
 window.__QG_BOOT_OWNER = 'boot'
 

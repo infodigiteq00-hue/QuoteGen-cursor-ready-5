@@ -31,6 +31,8 @@ async function notifyN8nLead(lead, saved) {
         name: lead.name,
         phone: lead.phone,
         phoneE164: lead.phone ? `+91${lead.phone}` : '',
+        whatsapp: lead.whatsapp || lead.phone,
+        whatsappE164: (lead.whatsapp || lead.phone) ? `+91${lead.whatsapp || lead.phone}` : '',
         email: lead.email,
         company: lead.company || '',
         monthlyQuotes: lead.monthlyQuotes,
@@ -63,7 +65,9 @@ function digitsOnly(v) {
 
 function normalizeLeadBody(body) {
   const name = String(body?.name || '').trim()
-  const phone = digitsOnly(body?.phone)
+  const phone = digitsOnly(body?.phone).slice(0, 10)
+  const whatsappSame = body?.whatsappSame !== false
+  const whatsapp = (whatsappSame ? phone : digitsOnly(body?.whatsapp)).slice(0, 10)
   const email = String(body?.email || '').trim().toLowerCase()
   const company = String(body?.company || '').trim()
   const monthlyQuotes = String(body?.monthlyQuotes || '').trim().slice(0, 40)
@@ -71,12 +75,13 @@ function normalizeLeadBody(body) {
   const source = String(body?.source || 'meta_ads_landing').trim() || 'meta_ads_landing'
   const path = String(body?.path || '').trim().slice(0, 200)
   const query = String(body?.query || '').trim().slice(0, 500)
-  return { name, phone, email, company, monthlyQuotes, industry, source, path, query }
+  return { name, phone, whatsapp, whatsappSame, email, company, monthlyQuotes, industry, source, path, query }
 }
 
 function validateLead(lead) {
   if (!lead.name) return 'Please enter your name.'
   if (lead.phone.length !== 10) return 'Enter a valid 10-digit mobile number.'
+  if (!lead.whatsappSame && lead.whatsapp.length !== 10) return 'Enter a valid 10-digit WhatsApp number.'
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lead.email)) return 'Enter a valid email address.'
   if (!lead.monthlyQuotes) return 'Enter how many quotations you make in a month.'
   if (!lead.industry) return 'Enter your industry.'
@@ -271,6 +276,17 @@ async function ensureConfirmedMetaTrialUser(supabase, email, meta) {
 
 /** Public — must be registered before requireAuth. */
 export function registerPublicMetaAdsLeadRoutes(app) {
+  app.get('/api/meta-ads-trial/demo/:code', async (req, res) => {
+    try {
+      const { readDemoLeadByCode } = await import('./googleSheetLead.js')
+      const lead = await readDemoLeadByCode(req.params.code)
+      if (!lead) return res.status(404).json({ error: 'This demo link was not found.' })
+      return res.json({ lead })
+    } catch (error) {
+      return res.status(500).json({ error: error.message || 'Could not open this demo link.' })
+    }
+  })
+
   app.post('/api/meta-ads-leads', async (req, res) => {
     const requestId = `mal-post-${Date.now()}`
     const supabase = requireDb(res, requestId)
@@ -283,22 +299,26 @@ export function registerPublicMetaAdsLeadRoutes(app) {
     }
 
     try {
-      const { data, error } = await supabase
-        .from('meta_ads_leads')
-        .insert({
-          name: lead.name,
-          phone: lead.phone,
-          email: lead.email,
-          company: lead.company,
-          monthly_quotes: lead.monthlyQuotes,
-          industry: lead.industry,
-          source: lead.source,
-          path: lead.path,
-          query: lead.query,
-          status: 'lead'
-        })
-        .select('id, created_at')
-        .single()
+      const row = {
+        name: lead.name,
+        phone: lead.phone,
+        whatsapp: lead.whatsapp || lead.phone,
+        email: lead.email,
+        company: lead.company,
+        monthly_quotes: lead.monthlyQuotes,
+        industry: lead.industry,
+        source: lead.source,
+        path: lead.path,
+        query: lead.query,
+        status: 'lead'
+      }
+      let inserted = await supabase.from('meta_ads_leads').insert(row).select('id, created_at').single()
+      if (inserted.error && /whatsapp|schema cache|42703/i.test(inserted.error.message || '')) {
+        const { whatsapp, ...withoutWhatsapp } = row
+        void whatsapp
+        inserted = await supabase.from('meta_ads_leads').insert(withoutWhatsapp).select('id, created_at').single()
+      }
+      const { data, error } = inserted
       if (error) throw error
 
       let emailed = false
@@ -311,6 +331,7 @@ export function registerPublicMetaAdsLeadRoutes(app) {
             '',
             `Name: ${lead.name}`,
             `Phone: +91 ${lead.phone}`,
+            `WhatsApp: +91 ${lead.whatsapp || lead.phone}`,
             `Email: ${lead.email}`,
             `Company: ${lead.company || '(not provided)'}`,
             `Quotations / month: ${lead.monthlyQuotes}`,

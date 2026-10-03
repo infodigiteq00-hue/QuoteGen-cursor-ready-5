@@ -1560,6 +1560,35 @@
   gap: 8px;
 }
 
+.meta-field label.meta-whatsapp-same {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  color: #C5D0E0;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.meta-field label.meta-whatsapp-same input {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 16px;
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: none;
+  accent-color: #1A73E8;
+}
+
+.meta-whatsapp-field {
+  margin-top: 10px;
+}
+
 .meta-phone-prefix {
   display: grid;
   place-items: center;

@@ -1,7 +1,62 @@
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const DEMO_LINK_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'demoLinks.json')
 
 const DEFAULT_SHEET_ID = '1rKISpU522DOODWglPH9QJ0hg-97rIUffwPwlKjJaSVk'
 const SHEET_TAB = () => process.env.GOOGLE_SHEETS_TAB?.trim() || 'Sheet1'
+/** Personal demo URL. The number is the sheet row, so row 12 is www.quotegen.ai/demo/12. */
+export function shortDemoLink(code) {
+  const n = Number(code)
+  if (!Number.isInteger(n) || n < 2) return ''
+  return `https://www.quotegen.ai/demo/${n}`
+}
+
+function leadFromSheetRow(row, code) {
+  if (!row?.some((cell) => String(cell || '').trim())) return null
+  const phone = String(row[1] || '').replace(/\D/g, '').slice(-10)
+  const email = String(row[8] || '').trim().toLowerCase()
+  if (!email && phone.length !== 10) return null
+  return {
+    name: String(row[0] || '').trim(),
+    phone,
+    email,
+    company: String(row[9] || '').trim(),
+    monthlyQuotes: String(row[10] || '').trim(),
+    industry: String(row[11] || '').trim(),
+    demoCode: code,
+    source: 'demo_link'
+  }
+}
+
+function bundledDemoLead(code) {
+  try {
+    const rows = JSON.parse(fs.readFileSync(DEMO_LINK_FILE, 'utf8'))
+    return (Array.isArray(rows) ? rows : []).find((row) => Number(row.demoCode) === Number(code)) || null
+  } catch {
+    return null
+  }
+}
+
+export async function readDemoLeadByCode(code) {
+  const n = Number(code)
+  if (!Number.isInteger(n) || n < 2) return null
+  try {
+    const account = serviceAccount()
+    if (account) {
+      const token = await accessToken(account)
+      const range = encodeURIComponent(`${SHEET_TAB()}!A${n}:L${n}`)
+      const data = await sheetsFetch(token, `/values/${range}`)
+      const lead = leadFromSheetRow(data.values?.[0] || [], n)
+      if (lead) return lead
+    }
+  } catch (error) {
+    console.warn('[demo-link] sheet lookup failed', error.message)
+  }
+  return bundledDemoLead(n)
+}
 
 function sheetId() {
   return process.env.GOOGLE_SHEETS_SPREADSHEET_ID?.trim() || DEFAULT_SHEET_ID
@@ -69,14 +124,22 @@ async function sheetsFetch(token, path, options = {}) {
 }
 
 async function ensureExtraHeaders(token) {
-  const range = encodeURIComponent(`${SHEET_TAB()}!I1:L1`)
+  const range = encodeURIComponent(`${SHEET_TAB()}!I1:M1`)
   const current = await sheetsFetch(token, `/values/${range}`)
-  if (String(current.values?.[0]?.[0] || '').trim()) return
+  const row = current.values?.[0] || []
+  const next = [
+    String(row[0] || '').trim() || 'Email',
+    String(row[1] || '').trim() || 'Company',
+    String(row[2] || '').trim() || 'Quotations per month',
+    String(row[3] || '').trim() || 'Industry',
+    String(row[4] || '').trim() || 'Demo link'
+  ]
+  const missingDemo = !String(row[4] || '').trim()
+  const missingEmail = !String(row[0] || '').trim()
+  if (!missingDemo && !missingEmail) return
   await sheetsFetch(token, `/values/${range}?valueInputOption=RAW`, {
     method: 'PUT',
-    body: JSON.stringify({
-      values: [['Email', 'Company', 'Quotations per month', 'Industry']]
-    })
+    body: JSON.stringify({ values: [next] })
   })
 }
 
@@ -86,13 +149,14 @@ export async function appendLeadToSheet(lead) {
   if (!account) return { ok: false, reason: 'not_configured' }
   const token = await accessToken(account)
   await ensureExtraHeaders(token)
-  const range = encodeURIComponent(`${SHEET_TAB()}!A:L`)
-  await sheetsFetch(token, `/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+  const range = encodeURIComponent(`${SHEET_TAB()}!A:M`)
+  const phone = lead.whatsapp || lead.phone || ''
+  const appended = await sheetsFetch(token, `/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
     method: 'POST',
     body: JSON.stringify({
       values: [[
         lead.name || '',
-        lead.phone || '',
+        phone,
         '',
         '',
         '',
@@ -102,9 +166,48 @@ export async function appendLeadToSheet(lead) {
         lead.email || '',
         lead.company || '',
         lead.monthlyQuotes || '',
-        lead.industry || ''
+        lead.industry || '',
+        ''
       ]]
     })
   })
-  return { ok: true }
+  const rowMatch = String(appended.updates?.updatedRange || '').match(/!(?:[A-Z]+)(\d+)/i)
+  const code = rowMatch ? Number(rowMatch[1]) : 0
+  const link = shortDemoLink(code)
+  if (link) {
+    const cell = encodeURIComponent(`${SHEET_TAB()}!M${code}`)
+    await sheetsFetch(token, `/values/${cell}?valueInputOption=RAW`, {
+      method: 'PUT',
+      body: JSON.stringify({ values: [[link]] })
+    })
+  }
+  return { ok: true, demoLink: link }
+}
+
+/** Fill column M only. Columns A–L are left untouched. */
+export async function backfillDemoLinks() {
+  const account = serviceAccount()
+  if (!account) return { ok: false, reason: 'not_configured' }
+  const token = await accessToken(account)
+  await ensureExtraHeaders(token)
+  const readRange = encodeURIComponent(`${SHEET_TAB()}!A2:M`)
+  const current = await sheetsFetch(token, `/values/${readRange}`)
+  const rows = current.values || []
+  const links = rows.map((row, index) => {
+    const blank = row.every((cell) => !String(cell || '').trim())
+    if (blank) return ['']
+    return [shortDemoLink(index + 2)]
+  })
+  const packed = rows.flatMap((row, index) => {
+    const lead = leadFromSheetRow(row, index + 2)
+    return lead ? [lead] : []
+  })
+  fs.writeFileSync(DEMO_LINK_FILE, `${JSON.stringify(packed, null, 2)}\n`)
+  if (!links.length) return { ok: true, updated: 0 }
+  const writeRange = encodeURIComponent(`${SHEET_TAB()}!M2:M${links.length + 1}`)
+  await sheetsFetch(token, `/values/${writeRange}?valueInputOption=RAW`, {
+    method: 'PUT',
+    body: JSON.stringify({ values: links })
+  })
+  return { ok: true, updated: links.filter((cell) => cell[0]).length }
 }

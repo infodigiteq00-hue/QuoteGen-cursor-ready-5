@@ -22,15 +22,21 @@ function currentPath() {
   return String(window.location.pathname || '/').replace(/\/+$/, '') || '/'
 }
 
+function storedTrialLead() {
+  if (currentPath() !== '/trial-verify') return null
+  return readMetaAdsLead()
+}
+
 function AdsApp() {
+  const resumedLead = storedTrialLead()
   const [authChecked, setAuthChecked] = useState(false)
   const [authUser, setAuthUser] = useState(null)
   const [publicPath, setPublicPath] = useState(currentPath)
   const [guestAuthMode, setGuestAuthMode] = useState(() => (currentPath() === '/trial-verify' ? 'meta-trial' : null))
-  const [guestEmail, setGuestEmail] = useState('')
-  const [guestPhone, setGuestPhone] = useState('')
-  const [guestLeadName, setGuestLeadName] = useState('')
-  const [guestLeadCompany, setGuestLeadCompany] = useState('')
+  const [guestEmail, setGuestEmail] = useState(resumedLead?.email || '')
+  const [guestPhone, setGuestPhone] = useState(resumedLead?.phone || '')
+  const [guestLeadName, setGuestLeadName] = useState(resumedLead?.name || '')
+  const [guestLeadCompany, setGuestLeadCompany] = useState(resumedLead?.company || '')
   const [metaWelcome, setMetaWelcome] = useState(() => Boolean(readMetaWelcome()))
   const [metaLeadError, setMetaLeadError] = useState('')
   const [saving, setSaving] = useState(false)

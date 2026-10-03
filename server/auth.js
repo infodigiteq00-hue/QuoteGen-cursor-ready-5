@@ -10,6 +10,7 @@
  * simply unlocks the app rather than scoping data to the signed-in user.
  */
 import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
+import { readDemoLeadByCode } from './googleSheetLead.js'
 
 function authUnavailable(res, requestId) {
   const err = new Error('Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env')
@@ -34,9 +35,27 @@ function isPublicApiRequest(req) {
   ))
 }
 
+async function isShortDemoQuote(req) {
+  const method = String(req.method || 'GET').toUpperCase()
+  if (method !== 'POST') return false
+  const full = String(req.originalUrl || req.url || '').split('?')[0]
+  const mounted = String(req.path || '').split('?')[0]
+  const paths = [full, mounted, `/api${mounted}`]
+  if (!paths.some((p) => p === '/api/generate-quotation' || p === '/generate-quotation')) return false
+  const code = String(req.get('x-demo-code') || '').replace(/\D/g, '')
+  if (!code) return false
+  try {
+    const lead = await readDemoLeadByCode(code)
+    return Boolean(lead?.email || (lead?.phone && lead.phone.length === 10))
+  } catch {
+    return false
+  }
+}
+
 /** Attach req.userId / req.userEmail from a Bearer access token, or 401. */
 export async function requireAuth(req, res, next) {
   if (isPublicApiRequest(req)) return next()
+  if (await isShortDemoQuote(req)) return next()
   const requestId = `auth-mw-${Date.now()}`
   if (!isSupabaseConfigured()) return authUnavailable(res, requestId)
   const header = req.headers.authorization || ''

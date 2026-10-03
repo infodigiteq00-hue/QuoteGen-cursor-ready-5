@@ -108,9 +108,14 @@ async function fetchNextQuoteNumber() {
 export async function generateTrialQuote({ enquiry, columns, customer = {} }) {
   const enquiryText = String(enquiry || '').trim()
   if (!enquiryText) throw new Error('Paste the customer enquiry to generate a quotation.')
+  const leadForCode = readMetaAdsLead()
+  const demoCode = Number(leadForCode?.demoCode) || 0
   const response = await fetch('/api/generate-quotation', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(demoCode ? { 'x-demo-code': String(demoCode) } : {})
+    },
     body: JSON.stringify({ enquiry: enquiryText, customer, columns }),
     signal: AbortSignal.timeout(40000)
   })

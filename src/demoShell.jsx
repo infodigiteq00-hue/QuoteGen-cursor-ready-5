@@ -7,7 +7,7 @@ import AuthScreen from './AuthScreen.jsx'
 import BrandMark from './BrandMark.jsx'
 import { getCurrentSession, installAuthFetch, onAuthChange, signIn } from './apiAuth.js'
 import { initMetaPixel } from './metaPixel.js'
-import { clearMetaTrialLock, readMetaAdsLead, usefulLead } from './metaTrialLead.js'
+import { clearMetaTrialLock, readMetaAdsLead, usefulLead, writeMetaAdsLead } from './metaTrialLead.js'
 import { saveCompanyProfile } from './quotePersistence.js'
 import {
   DEMO_QUOTE_CAP,
@@ -24,6 +24,11 @@ function currentPath() {
   return String(window.location.pathname || '/').replace(/\/+$/, '') || '/'
 }
 
+function demoCodeFromPath(path) {
+  const match = String(path || '').match(/^\/(?:d|demo)\/(\d+)$/)
+  return match ? Number(match[1]) : 0
+}
+
 function DemoGate() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-[#07111f] px-4">
@@ -37,8 +42,9 @@ function DemoGate() {
 }
 
 function DemoApp() {
-  const lead = usefulLead(readMetaAdsLead()) || readMetaAdsLead()
   const [path, setPath] = useState(currentPath)
+  const demoCode = demoCodeFromPath(path)
+  const [lead, setLead] = useState(() => (demoCode ? null : (usefulLead(readMetaAdsLead()) || readMetaAdsLead())))
   const [ready, setReady] = useState(false)
   const [enquiry, setEnquiry] = useState('')
   const [columns, setColumns] = useState([])
@@ -59,6 +65,34 @@ function DemoApp() {
   }
 
   useEffect(() => {
+    if (!demoCode) return undefined
+    let cancelled = false
+    fetch(`/api/meta-ads-trial/demo/${demoCode}`)
+      .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
+      .then(({ ok, data }) => {
+        if (cancelled) return
+        const next = data?.lead
+        if (!ok || !next || (!next.email && !next.phone)) {
+          setAccount({ verified: false, step: 'gate' })
+          setReady(true)
+          return
+        }
+        writeMetaAdsLead({ ...next, verified: true, demoCode })
+        setLead({ ...next, demoCode })
+        setUsed(readDemoQuoteCount(next.email))
+        setAccount({ verified: true, plan: 'demo', step: 'demo', needsPassword: false })
+        setReady(true)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAccount({ verified: false, step: 'gate' })
+        setReady(true)
+      })
+    return () => { cancelled = true }
+  }, [demoCode])
+
+  useEffect(() => {
+    if (demoCode) return undefined
     let cancelled = false
     const bootTimer = setTimeout(() => { if (!cancelled) setReady(true) }, 4500)
     const email = lead?.email
@@ -88,7 +122,7 @@ function DemoApp() {
     })
     const unsubscribe = onAuthChange(() => {})
     return () => { cancelled = true; clearTimeout(bootTimer); unsubscribe() }
-  }, [lead?.email])
+  }, [demoCode, lead?.email])
 
   useEffect(() => {
     if (!lead?.email) return undefined

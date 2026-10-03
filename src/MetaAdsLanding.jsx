@@ -294,6 +294,8 @@ function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn }) {
 function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyChange, initialLead = null }) {
   const [name, setName] = useState(initialLead?.name || '')
   const [phone, setPhone] = useState(initialLead?.phone || '')
+  const [whatsappSame, setWhatsappSame] = useState(initialLead?.whatsappSame !== false)
+  const [whatsapp, setWhatsapp] = useState(initialLead?.whatsapp || '')
   const [email, setEmail] = useState(initialLead?.email || '')
   const [company, setCompany] = useState(initialLead?.company || '')
   const [monthlyQuotes, setMonthlyQuotes] = useState(initialLead?.monthlyQuotes || '')
@@ -325,6 +327,11 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyCha
       setError('Enter a valid 10-digit mobile number.')
       return
     }
+    const wa = whatsappSame ? p : digitsOnly(whatsapp)
+    if (!whatsappSame && wa.length !== 10) {
+      setError('Enter a valid 10-digit WhatsApp number.')
+      return
+    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
       setError('Enter a valid email address.')
       return
@@ -342,6 +349,8 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyCha
     const payload = {
       name: n,
       phone: p,
+      whatsappSame,
+      whatsapp: wa,
       email: em,
       company: company.trim(),
       monthlyQuotes: quotes,
@@ -404,6 +413,29 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyCha
               placeholder="9876543210"
             />
           </div>
+          <label className="meta-whatsapp-same">
+            <input
+              type="checkbox"
+              checked={whatsappSame}
+              onChange={(e) => setWhatsappSame(e.target.checked)}
+            />
+            <span>Same as WhatsApp number</span>
+          </label>
+          {whatsappSame ? null : (
+            <div className="meta-phone-field meta-whatsapp-field">
+              <div className="meta-phone-prefix">+91</div>
+              <input
+                id="meta-whatsapp"
+                name="whatsapp"
+                inputMode="numeric"
+                autoComplete="tel"
+                value={whatsapp}
+                onChange={(e) => setWhatsapp(digitsOnly(e.target.value).slice(0, 10))}
+                placeholder="WhatsApp number"
+                aria-label="WhatsApp number"
+              />
+            </div>
+          )}
         </div>
         <div className="meta-field">
           <label htmlFor="meta-email">Work email</label>
