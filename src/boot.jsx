@@ -23,14 +23,20 @@ if (demoLink) {
   window.history.replaceState({}, '', '/demo')
 }
 
-if (adsPath) {
-  const { mountAdsShell } = await import('./adsShell.jsx')
-  mountAdsShell()
-} else if (demoPath || needsPassword()) {
-  if (path === '/' && needsPassword()) window.history.replaceState({}, '', '/set-password')
-  const { mountDemoShell } = await import('./demoShell.jsx')
-  mountDemoShell()
-} else {
-  const { mountQuoteGenApp } = await import('./main.jsx')
-  mountQuoteGenApp()
+async function bootApp() {
+  if (adsPath) {
+    const { mountAdsShell } = await import('./adsShell.jsx')
+    mountAdsShell()
+  } else if (demoPath || needsPassword()) {
+    if (path === '/' && needsPassword()) window.history.replaceState({}, '', '/set-password')
+    const { mountDemoShell } = await import('./demoShell.jsx')
+    mountDemoShell()
+  } else {
+    const { mountQuoteGenApp } = await import('./main.jsx')
+    mountQuoteGenApp()
+  }
 }
+
+bootApp().catch((error) => {
+  console.error('QuoteGen failed to start', error)
+})
