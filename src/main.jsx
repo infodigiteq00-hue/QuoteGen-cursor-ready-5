@@ -9967,7 +9967,9 @@ function WsUsersAdmin() {
         const text = `${who}your QuoteGen package is ready: ${data.request.label}. Open your account and the payment will be on your screen: ${link}`
         window.open(`https://wa.me/91${phone}?text=${encodeURIComponent(text)}`, '_blank', 'noopener')
       }
-      setPaySentId(payUser.id)
+      const sentId = payUser.id
+      setPaySentId(sentId)
+      window.setTimeout(() => setPaySentId((current) => (current === sentId ? '' : current)), 3000)
       setPayUser(null)
     } catch (err) {
       setPayError(err.message || 'Could not send the payment request.')
@@ -11151,7 +11153,9 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
         const text = `${who}your QuoteGen package is ready: ${data.request.label}. Pay here: ${link}`
         window.open(`https://wa.me/91${phone}?text=${encodeURIComponent(text)}`, '_blank', 'noopener')
       }
-      setPaySentId(payLead.id)
+      const sentId = payLead.id
+      setPaySentId(sentId)
+      window.setTimeout(() => setPaySentId((current) => (current === sentId ? '' : current)), 3000)
       setPayLead(null)
     } catch (err) {
       setPayError(err.message || 'Could not send the payment request.')

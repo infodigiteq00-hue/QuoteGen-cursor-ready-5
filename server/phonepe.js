@@ -5,7 +5,7 @@ import { findAuthUserByEmail, markMetaAdsLeadStage } from './metaAdsLeads.js'
 import { applyPaymentCredits } from './accountAccess.js'
 import { sendAdminEmail } from './mail.js'
 
-const OFFER_PRICE = 499
+const OFFER_PRICE = 399
 const REGULAR_PRICE = 799
 const OFFER_MS = 10 * 60 * 1000
 const OFFER_GRACE_MS = 2 * 60 * 1000

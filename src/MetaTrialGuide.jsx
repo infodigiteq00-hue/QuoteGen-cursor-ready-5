@@ -637,7 +637,7 @@ function GuideModal({ title, onClose, children, className = '' }) {
 }
 
 const PHONEPE_QR_SRC = '/phonepe-qr.png'
-const JOIN_PRICE = 499
+const JOIN_PRICE = 399
 const REGULAR_PRICE = 799
 const JOIN_SAVE = REGULAR_PRICE - JOIN_PRICE
 const JOIN_QUOTES = 50
