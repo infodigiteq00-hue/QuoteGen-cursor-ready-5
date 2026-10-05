@@ -17,6 +17,7 @@ import {
   readDemoQuoteCount,
   recordDemoQuote
 } from './demoQuotes.js'
+import { usePaymentRequestOffer } from './PaymentRequestPrompt.jsx'
 
 installAuthFetch()
 initMetaPixel()
@@ -56,6 +57,12 @@ function DemoApp() {
   const [account, setAccount] = useState(null)
   const [previewDemo, setPreviewDemo] = useState(false)
   const [linkWelcomeDone, setLinkWelcomeDone] = useState(false)
+  usePaymentRequestOffer({
+    email: lead?.email || '',
+    name: lead?.name || '',
+    company: lead?.company || '',
+    phone: lead?.phone || ''
+  })
 
   const openAccount = (row, session) => {
     setAccount(row)

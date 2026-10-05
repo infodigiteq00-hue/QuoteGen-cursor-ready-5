@@ -32,6 +32,7 @@ function isPublicApiRequest(req) {
     || p.startsWith('/meta-ads-trial/')
     || p.startsWith('/api/pay/phonepe/')
     || p.startsWith('/pay/phonepe/')
+    || ((p === '/api/pay/request' || p === '/pay/request') && method === 'GET')
   ))
 }
 

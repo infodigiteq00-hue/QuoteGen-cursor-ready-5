@@ -16,6 +16,7 @@ import {
   writeMetaAdsLead,
   writeMetaWelcome
 } from './metaTrialLead.js'
+import { usePaymentRequestOffer } from './PaymentRequestPrompt.jsx'
 
 installAuthFetch()
 initMetaPixel()
@@ -39,6 +40,12 @@ function AdsApp() {
   const [guestPhone, setGuestPhone] = useState(resumedLead?.phone || '')
   const [guestLeadName, setGuestLeadName] = useState(resumedLead?.name || '')
   const [guestLeadCompany, setGuestLeadCompany] = useState(resumedLead?.company || '')
+  usePaymentRequestOffer({
+    email: authUser?.email || guestEmail || '',
+    name: guestLeadName || '',
+    company: guestLeadCompany || '',
+    phone: guestPhone || ''
+  })
   const [metaWelcome, setMetaWelcome] = useState(() => Boolean(readMetaWelcome()))
   const [metaLeadError, setMetaLeadError] = useState('')
   const [saving, setSaving] = useState(false)

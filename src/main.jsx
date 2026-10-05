@@ -12,6 +12,8 @@ import MarketingLanding from './MarketingLanding.jsx'
 import MetaAdsLanding from './MetaAdsLanding.jsx'
 import MetaTrialGuide from './MetaTrialGuide.jsx'
 import PaymentStatus from './PaymentStatus.jsx'
+import { PaymentOfferModal, usePaymentRequestOffer } from './PaymentRequestPrompt.jsx'
+import { indiaMobileInputValue } from '../shared/phone.js'
 import LegalPages, { matchLegalPage } from './LegalPages.jsx'
 import { initMetaPixel } from './metaPixel.js'
 import { registerPwa } from './pwaInstall.js'
@@ -1156,6 +1158,12 @@ function App() {
   const [guestPhone, setGuestPhone] = useState('')
   const [guestLeadName, setGuestLeadName] = useState('')
   const [guestLeadCompany, setGuestLeadCompany] = useState('')
+  usePaymentRequestOffer({
+    email: authUser?.email || '',
+    name: guestLeadName || '',
+    company: guestLeadCompany || '',
+    phone: guestPhone || ''
+  })
   const [publicPath, setPublicPath] = useState(() => {
     if (typeof window === 'undefined') return '/'
     return String(window.location.pathname || '/').replace(/\/+$/, '') || '/'
@@ -10709,6 +10717,17 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
   const [removeError, setRemoveError] = React.useState('')
   const [leadFilter, setLeadFilter] = React.useState('lead')
   const [arrivalPreview, setArrivalPreview] = React.useState(false)
+  const [payLead, setPayLead] = React.useState(null)
+  const [payKind, setPayKind] = React.useState('399')
+  const [payAmount, setPayAmount] = React.useState('')
+  const [payQuotes, setPayQuotes] = React.useState('')
+  const [payPeriod, setPayPeriod] = React.useState('month')
+  const [payTill, setPayTill] = React.useState('')
+  const [payBusy, setPayBusy] = React.useState(false)
+  const [payError, setPayError] = React.useState('')
+  const [paySentId, setPaySentId] = React.useState('')
+  const [payPreview, setPayPreview] = React.useState(null)
+  const [payPreviewNote, setPayPreviewNote] = React.useState('')
 
   const load = React.useCallback(() => {
     setLoading(true)
@@ -10761,6 +10780,87 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [arrivalPreview])
+
+  React.useEffect(() => {
+    if (!payLead || payBusy || payPreview) return undefined
+    const onKey = (event) => {
+      if (event.key === 'Escape') setPayLead(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [payLead, payBusy, payPreview])
+
+  React.useEffect(() => {
+    if (!payPreview) return undefined
+    const onKey = (event) => {
+      if (event.key === 'Escape') { setPayPreview(null); setPayPreviewNote('') }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [payPreview])
+
+  const openPayment = (lead) => {
+    setPayError('')
+    setPayKind('plan:starter:month')
+    setPayAmount('')
+    setPayQuotes(lead.monthlyQuotes ? String(lead.monthlyQuotes).replace(/[^\d]/g, '') : '')
+    setPayPeriod('month')
+    setPayTill('')
+    setPayLead(lead)
+  }
+
+  const paymentPreviewOffer = () => {
+    const shortcut = billingShortcutOffer(payKind, payPeriod)
+    if (shortcut) return shortcut
+    const amount = Math.round(Number(payAmount))
+    const quotes = Math.round(Number(payQuotes))
+    if (!Number.isFinite(amount) || amount < 1) return { error: 'Enter the amount to preview their screen.' }
+    if (!Number.isFinite(quotes) || quotes < 1) return { error: 'Enter quotations per month to preview their screen.' }
+    if (payPeriod === 'year' && !/^\d{4}-\d{2}-\d{2}$/.test(payTill)) {
+      return { error: 'Choose the valid-till date to preview their screen.' }
+    }
+    const money = `₹${amount.toLocaleString('en-IN')}`
+    const quotesLabel = `${quotes.toLocaleString('en-IN')} quotations / month`
+    const till = payPeriod === 'year'
+      ? new Date(`${payTill}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+      : ''
+    return {
+      amount,
+      quotesPerMonth: quotes,
+      period: payPeriod,
+      validTill: payPeriod === 'year' ? payTill : '',
+      label: payPeriod === 'year' ? `${money} · ${quotesLabel} · yearly, valid till ${till}` : `${money} · ${quotesLabel}`
+    }
+  }
+
+  const openPaymentPreview = (offer) => {
+    setPayError('')
+    setPayPreviewNote('')
+    setPayPreview(offer)
+  }
+
+  const sendPayment = async () => {
+    if (!payLead || payBusy) return
+    setPayBusy(true)
+    setPayError('')
+    const body = payKind === 'custom'
+      ? { amount: payAmount, quotesPerMonth: payQuotes, period: payPeriod, validTill: payTill }
+      : { preset: payKind }
+    try {
+      const response = await fetch(`/api/meta-ads-leads/${payLead.id}/payment-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'Could not send the payment request.')
+      setPaySentId(payLead.id)
+      setPayLead(null)
+    } catch (err) {
+      setPayError(err.message || 'Could not send the payment request.')
+    }
+    setPayBusy(false)
+  }
 
   const setLeadActive = async (lead, active) => {
     setRowBusy(lead.id)
@@ -10911,6 +11011,13 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
             )}
             <button
               type="button"
+              onClick={() => openPaymentPreview({ amount: 399, label: '₹399 · Starter, 50 quotations / month', quotesPerMonth: 50, period: 'month', validTill: '' })}
+              style={{ minHeight: 42, padding: '0 14px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#1A73E8' }}
+            >
+              Preview payment
+            </button>
+            <button
+              type="button"
               onClick={load}
               disabled={loading}
               style={{ minHeight: 42, padding: '0 16px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#3D4859', opacity: loading ? 0.6 : 1 }}
@@ -11014,7 +11121,9 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
                 {detail('Follow-up', leadWhen(lead.followUpAt))}
               </div>
               {lead.remarks ? <div style={{ marginTop: 12, fontSize: 13.5, color: '#6B7688', lineHeight: 1.45 }}>{lead.remarks}</div> : null}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14, alignItems: 'center' }}>
+                <button type="button" onClick={() => openPayment(lead)} disabled={!lead.email} style={{ minHeight: 36, padding: '0 12px', border: 0, borderRadius: 10, background: lead.email ? '#1A73E8' : '#E6EDF6', color: lead.email ? '#fff' : '#8A94A6', fontSize: 13, fontWeight: 700, cursor: lead.email ? 'pointer' : 'default' }}>Request payment</button>
+                {paySentId === lead.id ? <span style={{ fontSize: 12.5, fontWeight: 700, color: '#1A73E8' }}>Sent to their screen</span> : null}
                 <button type="button" onClick={() => openEditor(lead)} style={{ minHeight: 36, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: '#1A73E8', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
                 <button type="button" disabled={rowBusy === lead.id} onClick={() => setLeadActive(lead, lead.deactivated)} style={{ minHeight: 36, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: '#3D4859', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
                   {rowBusy === lead.id ? 'Saving…' : lead.deactivated ? 'Activate' : 'Deactivate'}
@@ -11027,6 +11136,129 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
           )
         })}
       </div>
+      {payLead && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="qg-pay-request-title"
+          onMouseDown={(e) => { if (e.target === e.currentTarget && !payBusy) setPayLead(null) }}
+          style={{ position: 'fixed', inset: 0, zIndex: 230, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(15,23,42,.42)' }}
+        >
+          <div style={{ width: 'min(560px, 100%)', maxHeight: 'min(860px, calc(100vh - 48px))', overflow: 'auto', background: '#fff', borderRadius: 20, boxShadow: '0 28px 60px -24px rgba(20,35,80,.45)', border: '1px solid #E8EBF2', padding: '22px 24px 20px' }}>
+            <h2 id="qg-pay-request-title" style={{ margin: 0, fontSize: 20, fontWeight: 800, letterSpacing: '-.02em', color: '#0D1117' }}>Send payment request</h2>
+            <p style={{ margin: '6px 0 0', fontSize: 14, lineHeight: 1.5, color: '#6B7688' }}>
+              {payLead.name || 'This lead'} will see the package on their screen. They tap Pay and go to PhonePe.
+            </p>
+            <div style={{ marginTop: 16, fontSize: 12, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A94A6' }}>Top-ups</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, marginTop: 8 }}>
+              {BILLING_TOPUPS.map((topup) => {
+                const id = `topup:${topup.quotations}`
+                const on = payKind === id
+                return (
+                  <button key={id} type="button" onClick={() => setPayKind(id)} style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 12, border: on ? '1.5px solid #1A73E8' : '1.5px solid #E6EDF6', background: on ? '#F3F8FE' : '#fff', cursor: 'pointer' }}>
+                    <div style={{ fontSize: 15, fontWeight: 750, color: '#0D1117' }}>₹{topup.price.toLocaleString('en-IN')}</div>
+                    <div style={{ marginTop: 2, fontSize: 12.5, color: '#6B7688' }}>+{topup.quotations} quotations</div>
+                  </button>
+                )
+              })}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A94A6' }}>Plans</div>
+              <div style={{ display: 'flex', gap: 4, padding: 3, borderRadius: 999, background: '#F4F7FB' }}>
+                {[['month', 'Monthly'], ['year', 'Yearly']].map(([id, label]) => (
+                  <button key={id} type="button" onClick={() => { setPayPeriod(id); setPayKind((kind) => (kind.startsWith('plan:') ? kind.replace(/:(month|year)$/, `:${id}`) : kind)) }} style={{ minHeight: 32, padding: '0 12px', borderRadius: 999, border: 0, background: payPeriod === id ? '#fff' : 'transparent', color: payPeriod === id ? '#0D1117' : '#6B7688', fontSize: 13, fontWeight: 700, cursor: 'pointer', boxShadow: payPeriod === id ? '0 1px 2px rgba(15,23,42,.08)' : 'none' }}>{label}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginTop: 8 }}>
+              {BILLING_PLANS.map((plan) => {
+                const id = `plan:${plan.key}:${payPeriod}`
+                const on = payKind === id
+                const price = payPeriod === 'year' ? plan.yearly : plan.monthly
+                return (
+                  <button key={id} type="button" onClick={() => setPayKind(id)} style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 12, border: on ? '1.5px solid #1A73E8' : '1.5px solid #E6EDF6', background: on ? '#F3F8FE' : '#fff', cursor: 'pointer' }}>
+                    <div style={{ fontSize: 15, fontWeight: 750, color: '#0D1117' }}>{plan.name} · ₹{price.toLocaleString('en-IN')}</div>
+                    <div style={{ marginTop: 2, fontSize: 12.5, color: '#6B7688' }}>{plan.quotations.toLocaleString('en-IN')} quotations / month</div>
+                  </button>
+                )
+              })}
+            </div>
+            <button type="button" onClick={() => setPayKind('custom')} style={{ display: 'block', width: '100%', marginTop: 8, textAlign: 'left', padding: '10px 12px', borderRadius: 12, border: payKind === 'custom' ? '1.5px solid #1A73E8' : '1.5px solid #E6EDF6', background: payKind === 'custom' ? '#F3F8FE' : '#fff', cursor: 'pointer' }}>
+              <div style={{ fontSize: 15, fontWeight: 750, color: '#0D1117' }}>Custom amount</div>
+              <div style={{ marginTop: 2, fontSize: 12.5, color: '#6B7688' }}>Amount, quotations, monthly or yearly</div>
+            </button>
+            {payKind === 'custom' && (
+              <div style={{ display: 'grid', gap: 12, marginTop: 14 }}>
+                <label style={{ fontSize: 13, fontWeight: 700, color: '#3D4859' }}>
+                  Amount (₹)
+                  <input value={payAmount} onChange={(e) => setPayAmount(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" placeholder="2500" style={{ display: 'block', width: '100%', marginTop: 6, minHeight: 44, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, boxSizing: 'border-box' }} />
+                </label>
+                <label style={{ fontSize: 13, fontWeight: 700, color: '#3D4859' }}>
+                  Quotations per month
+                  <input value={payQuotes} onChange={(e) => setPayQuotes(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" placeholder="80" style={{ display: 'block', width: '100%', marginTop: 6, minHeight: 44, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, boxSizing: 'border-box' }} />
+                </label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {[['month', 'Monthly'], ['year', 'Yearly']].map(([id, label]) => (
+                    <button key={id} type="button" onClick={() => setPayPeriod(id)} style={{ flex: 1, minHeight: 40, borderRadius: 12, border: payPeriod === id ? '1.5px solid #1A73E8' : '1.5px solid #D5DDE9', background: payPeriod === id ? '#F3F8FE' : '#fff', color: '#0D1117', fontWeight: 700, cursor: 'pointer' }}>{label}</button>
+                  ))}
+                </div>
+                {payPeriod === 'year' && (
+                  <label style={{ fontSize: 13, fontWeight: 700, color: '#3D4859' }}>
+                    Valid till
+                    <input type="date" value={payTill} onChange={(e) => setPayTill(e.target.value)} style={{ display: 'block', width: '100%', marginTop: 6, minHeight: 44, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, boxSizing: 'border-box' }} />
+                  </label>
+                )}
+              </div>
+            )}
+            {payError && <p style={{ margin: '12px 0 0', fontSize: 13.5, color: '#B03A3A' }}>{payError}</p>}
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 18 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const offer = paymentPreviewOffer()
+                  if (offer.error) { setPayError(offer.error); return }
+                  openPaymentPreview(offer)
+                }}
+                style={{ minHeight: 42, padding: '0 14px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#1A73E8', fontSize: 14.5, fontWeight: 700, cursor: 'pointer' }}
+              >
+                Preview their screen
+              </button>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button type="button" onClick={() => { if (!payBusy) setPayLead(null) }} style={{ minHeight: 42, padding: '0 16px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#3D4859', fontSize: 14.5, fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                <button type="button" onClick={sendPayment} disabled={payBusy} style={{ minHeight: 42, padding: '0 18px', borderRadius: 12, border: 0, background: '#1A73E8', color: '#fff', fontSize: 14.5, fontWeight: 750, cursor: payBusy ? 'default' : 'pointer' }}>
+                  {payBusy ? 'Sending…' : 'Send to their screen'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+      {payPreview && createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(15,23,42,.55)' }}>
+          <button
+            type="button"
+            onClick={() => { setPayPreview(null); setPayPreviewNote('') }}
+            style={{ position: 'fixed', top: 16, right: 16, zIndex: 261, minHeight: 36, padding: '0 14px', borderRadius: 999, border: '1px solid rgba(255,255,255,.22)', background: 'rgba(255,255,255,.12)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+          >
+            Close preview
+          </button>
+          <div style={{ width: 390, height: 'min(780px, 86vh)', borderRadius: 36, background: '#f5f7fa', border: '10px solid #0D1117', boxShadow: '0 28px 60px -24px rgba(20,35,80,.55)', position: 'relative', overflow: 'hidden' }}>
+            <div style={{ padding: '28px 22px 0' }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: '#1a202c' }}>QuoteGen</div>
+              <div style={{ marginTop: 6, fontSize: 14, color: '#6B7688', lineHeight: 1.45 }}>This card covers their page until they choose.</div>
+            </div>
+            <PaymentOfferModal
+              framed
+              offer={payPreview}
+              note={payPreviewNote || 'Preview only. Nothing is sent.'}
+              onClose={() => { setPayPreview(null); setPayPreviewNote('') }}
+              onPay={() => setPayPreviewNote('On their screen, Pay now opens PhonePe.')}
+            />
+          </div>
+        </div>,
+        document.body
+      )}
       {editing && draft && createPortal(
         <div
           role="dialog"
@@ -11186,10 +11418,10 @@ function WsAccountSettings({ email, onSignOut }) {
             <input
               type="tel"
               inputMode="numeric"
-              maxLength={10}
+              maxLength={16}
               disabled={loading || saving}
               value={phone}
-              onChange={(e) => setPhone(String(e.target.value || '').replace(/\D/g, '').slice(0, 10))}
+              onChange={(e) => setPhone(indiaMobileInputValue(e.target.value))}
               placeholder="9876543210"
               style={{ border: 0, outline: 'none', padding: '12px 14px', fontSize: 15, minWidth: 160, background: 'transparent' }}
             />
@@ -11305,6 +11537,33 @@ const BILLING_TOPUPS = [
   { label: '+100 Quotations', quotations: 100, price: 499 },
   { label: '+250 Quotations', quotations: 250, price: 999 }
 ]
+
+function billingShortcutOffer(kind, period) {
+  const topup = BILLING_TOPUPS.find((item) => kind === `topup:${item.quotations}` || (kind === '199' && item.quotations === 25))
+  if (topup) {
+    return {
+      amount: topup.price,
+      quotesPerMonth: topup.quotations,
+      period: 'once',
+      validTill: '',
+      label: `₹${topup.price.toLocaleString('en-IN')} · ${topup.quotations.toLocaleString('en-IN')} quotations`
+    }
+  }
+  const matched = kind === '399' ? ['starter', 'month'] : (/^plan:([a-z]+):(month|year)$/.exec(kind) || []).slice(1)
+  const plan = BILLING_PLANS.find((item) => item.key === matched[0])
+  if (!plan) return null
+  const yearly = (matched[1] || period) === 'year'
+  const amount = yearly ? plan.yearly : plan.monthly
+  const quotes = `${plan.quotations.toLocaleString('en-IN')} quotations / month`
+  const money = `₹${amount.toLocaleString('en-IN')}`
+  return {
+    amount,
+    quotesPerMonth: plan.quotations,
+    period: yearly ? 'year' : 'month',
+    validTill: '',
+    label: yearly ? `${money} · ${plan.name} yearly, ${quotes}` : `${money} · ${plan.name}, ${quotes}`
+  }
+}
 
 function WsBilling({ email = '' }) {
   const [period, setPeriod] = useState('monthly')

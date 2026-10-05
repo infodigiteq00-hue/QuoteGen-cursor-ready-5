@@ -4,6 +4,7 @@ import logoUrl from './assets/landing/quotegen-logo.png'
 import { META_ADS_LEAD_KEY as LEAD_KEY, readMetaAdsLead, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaWelcome, recordMetaLeadProgress } from './metaTrialLead.js'
 import { trackPixel } from './metaPixel.js'
 import { whatsappChatsLink } from './whatsappEnquiry.js'
+import { indiaMobileInputValue, isValidIndiaMobile, normalizeIndiaMobileDigits } from '../shared/phone.js'
 import './metaAdsLanding.css'
 
 const CTA_STYLE = { fontFamily: 'Archivo, Inter, system-ui, sans-serif', fontWeight: 400 }
@@ -187,10 +188,6 @@ function IconWhatsApp({ size = 18 }) {
   )
 }
 
-function digitsOnly(v) {
-  return String(v || '').replace(/\D/g, '')
-}
-
 function NextChoices({ lead, onNextStep }) {
   const whatsapp = whatsappChatsLink()
   return (
@@ -309,9 +306,9 @@ function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn, onTryDemo }
 
 function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyChange, initialLead = null }) {
   const [name, setName] = useState(initialLead?.name || '')
-  const [phone, setPhone] = useState(initialLead?.phone || '')
+  const [phone, setPhone] = useState(() => indiaMobileInputValue(initialLead?.phone || ''))
   const [whatsappSame, setWhatsappSame] = useState(initialLead?.whatsappSame !== false)
-  const [whatsapp, setWhatsapp] = useState(initialLead?.whatsapp || '')
+  const [whatsapp, setWhatsapp] = useState(() => indiaMobileInputValue(initialLead?.whatsapp || ''))
   const [email, setEmail] = useState(initialLead?.email || '')
   const [company, setCompany] = useState(initialLead?.company || '')
   const [monthlyQuotes, setMonthlyQuotes] = useState(initialLead?.monthlyQuotes || '')
@@ -333,18 +330,18 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyCha
     e.preventDefault()
     setError('')
     const n = name.trim()
-    const p = digitsOnly(phone)
+    const p = normalizeIndiaMobileDigits(phone)
     const em = email.trim().toLowerCase()
     if (!n) {
       setError('Please enter your name.')
       return
     }
-    if (p.length !== 10) {
+    if (!isValidIndiaMobile(p)) {
       setError('Enter a valid 10-digit mobile number.')
       return
     }
-    const wa = whatsappSame ? p : digitsOnly(whatsapp)
-    if (!whatsappSame && wa.length !== 10) {
+    const wa = whatsappSame ? p : normalizeIndiaMobileDigits(whatsapp)
+    if (!whatsappSame && !isValidIndiaMobile(wa)) {
       setError('Enter a valid 10-digit WhatsApp number.')
       return
     }
@@ -425,8 +422,9 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyCha
               inputMode="numeric"
               autoComplete="tel-national"
               value={phone}
-              onChange={(e) => setPhone(digitsOnly(e.target.value).slice(0, 10))}
+              onChange={(e) => setPhone(indiaMobileInputValue(e.target.value))}
               placeholder="9876543210"
+              maxLength={16}
             />
           </div>
           <label className="meta-whatsapp-same">
@@ -446,8 +444,9 @@ function TrialForm({ formRef, autoFocusName, onNextStep, onSubmitted, onReadyCha
                 inputMode="numeric"
                 autoComplete="tel"
                 value={whatsapp}
-                onChange={(e) => setWhatsapp(digitsOnly(e.target.value).slice(0, 10))}
+                onChange={(e) => setWhatsapp(indiaMobileInputValue(e.target.value))}
                 placeholder="WhatsApp number"
+                maxLength={16}
                 aria-label="WhatsApp number"
               />
             </div>

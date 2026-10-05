@@ -50,6 +50,31 @@ function resolveCharge(body) {
   return { error: 'Choose a plan to continue.' }
 }
 
+async function resolveRequestCharge(body) {
+  const requestId = String(body?.requestId || '').trim()
+  const email = String(body?.email || '').trim().toLowerCase()
+  if (!/^[0-9a-f-]{36}$/i.test(requestId) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { error: 'This payment request is no longer available.' }
+  }
+  if (!isSupabaseConfigured()) return { error: 'Online payment is not set up yet.' }
+  const { data, error } = await getSupabase()
+    .from('payment_requests')
+    .select('id, email, amount, label, status')
+    .eq('id', requestId)
+    .maybeSingle()
+  if (error || !data || data.status !== 'pending' || data.email !== email) {
+    return { error: 'This payment request is no longer available.' }
+  }
+  const price = Number(data.amount)
+  if (!Number.isFinite(price) || price < 1) return { error: 'This payment request is no longer available.' }
+  return {
+    price,
+    label: data.label,
+    message: `QuoteGen ${data.label}`.slice(0, 120),
+    requestRowId: data.id
+  }
+}
+
 const HOSTS = {
   sandbox: {
     token: 'https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token',
@@ -114,12 +139,44 @@ function clip(v, max) {
 const notifiedOrders = new Set()
 
 export function registerPublicPhonePeRoutes(app) {
+  app.get('/api/pay/request', async (req, res) => {
+    const email = String(req.query?.email || '').trim().toLowerCase()
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !isSupabaseConfigured()) {
+      return res.json({ request: null })
+    }
+    try {
+      const { data, error } = await getSupabase()
+        .from('payment_requests')
+        .select('id, amount, label, quotes_per_month, period, valid_till')
+        .eq('email', email)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (error || !data) return res.json({ request: null })
+      return res.json({
+        request: {
+          id: data.id,
+          amount: data.amount,
+          label: data.label,
+          quotesPerMonth: data.quotes_per_month,
+          period: data.period,
+          validTill: data.valid_till
+        }
+      })
+    } catch (error) {
+      console.error('[pay] request lookup failed', error?.message)
+      return res.json({ request: null })
+    }
+  })
+
   app.post('/api/pay/phonepe/create', async (req, res) => {
     const cfg = config()
     if (!cfg) return res.status(503).json({ error: 'Online payment is not set up yet.', code: 'PHONEPE_NOT_CONFIGURED' })
 
     const body = req.body || {}
-    const charge = resolveCharge(body)
+    const product = String(body?.product || '').trim().toLowerCase()
+    const charge = product === 'request' ? await resolveRequestCharge(body) : resolveCharge(body)
     if (charge.error) return res.status(400).json({ error: charge.error, code: 'VALIDATION' })
     const price = charge.price
     const merchantOrderId = `QG-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`
@@ -153,6 +210,15 @@ export function registerPublicPhonePeRoutes(app) {
       if (!response.ok || !data?.redirectUrl) {
         console.error('[phonepe] create failed', response.status, data?.code, data?.message)
         return res.status(502).json({ error: data?.message || 'Could not start PhonePe payment.' })
+      }
+      if (charge.requestRowId && isSupabaseConfigured()) {
+        getSupabase()
+          .from('payment_requests')
+          .update({ phonepe_order_id: merchantOrderId })
+          .eq('id', charge.requestRowId)
+          .then(({ error }) => {
+            if (error) console.error('[pay] could not store order on request', error.message)
+          })
       }
       return res.json({ redirectUrl: data.redirectUrl, merchantOrderId, amount: price })
     } catch (error) {
@@ -207,6 +273,13 @@ export function registerPublicPhonePeRoutes(app) {
           }).catch((error) => {
             console.error('[phonepe] lead purchase update failed', error?.message)
           })
+          getSupabase()
+            .from('payment_requests')
+            .update({ status: 'paid' })
+            .eq('phonepe_order_id', orderId)
+            .then(({ error }) => {
+              if (error) console.error('[pay] request paid update failed', error.message)
+            })
           findAuthUserByEmail(getSupabase(), m.udf4)
             .then((user) => applyPaymentCredits(getSupabase(), {
               userId: user?.id,

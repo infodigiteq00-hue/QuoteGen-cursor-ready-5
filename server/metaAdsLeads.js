@@ -2,6 +2,7 @@ import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { sendAdminEmail, sendUserEmail } from './mail.js'
 import { canManageMetaAdsLeads, isSuperAdmin, superAdminEmails } from './superAdmin.js'
 import { isHiddenMetaLead } from '../shared/metaAdsAccess.js'
+import { isValidIndiaMobile, normalizeIndiaMobileDigits } from '../shared/phone.js'
 import { accountSnapshotsByEmail } from './adminUsers.js'
 import { assignPlanOnPassword, loadUserControls, NEW_ACCOUNT_CUTOFF } from './accountAccess.js'
 import { appendLeadToSheet, readSheetOutreach } from './googleSheetLead.js'
@@ -66,9 +67,9 @@ function digitsOnly(v) {
 
 function normalizeLeadBody(body) {
   const name = String(body?.name || '').trim()
-  const phone = digitsOnly(body?.phone).slice(0, 10)
+  const phone = normalizeIndiaMobileDigits(body?.phone)
   const whatsappSame = body?.whatsappSame !== false
-  const whatsapp = (whatsappSame ? phone : digitsOnly(body?.whatsapp)).slice(0, 10)
+  const whatsapp = whatsappSame ? phone : normalizeIndiaMobileDigits(body?.whatsapp)
   const email = String(body?.email || '').trim().toLowerCase()
   const company = String(body?.company || '').trim()
   const monthlyQuotes = String(body?.monthlyQuotes || '').trim().slice(0, 40)
@@ -81,8 +82,8 @@ function normalizeLeadBody(body) {
 
 function validateLead(lead) {
   if (!lead.name) return 'Please enter your name.'
-  if (lead.phone.length !== 10) return 'Enter a valid 10-digit mobile number.'
-  if (!lead.whatsappSame && lead.whatsapp.length !== 10) return 'Enter a valid 10-digit WhatsApp number.'
+  if (!isValidIndiaMobile(lead.phone)) return 'Enter a valid 10-digit mobile number.'
+  if (!lead.whatsappSame && !isValidIndiaMobile(lead.whatsapp)) return 'Enter a valid 10-digit WhatsApp number.'
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lead.email)) return 'Enter a valid email address.'
   if (!lead.monthlyQuotes) return 'Enter how many quotations you make in a month.'
   if (!lead.industry) return 'Enter your industry.'
@@ -101,7 +102,7 @@ function serializeLead(row) {
   return {
     id: row.id,
     name: row.name || '',
-    phone: row.phone || '',
+    phone: normalizeIndiaMobileDigits(row.phone) || row.phone || '',
     email: row.email || '',
     company: row.company || '',
     monthlyQuotes: row.monthly_quotes || '',
@@ -128,7 +129,7 @@ const LEAD_COLUMNS = 'id, name, phone, email, company, monthly_quotes, industry,
 
 async function findLatestLead(supabase, { email, phone }) {
   const em = String(email || '').trim().toLowerCase()
-  const ph = digitsOnly(phone)
+  const ph = normalizeIndiaMobileDigits(phone)
   if (em) {
     const { data, error } = await supabase
       .from('meta_ads_leads')
@@ -138,13 +139,13 @@ async function findLatestLead(supabase, { email, phone }) {
       .limit(20)
     if (error) throw error
     const rows = data || []
-    if (ph.length === 10) {
-      const byPhone = rows.find((row) => row.phone === ph)
+    if (isValidIndiaMobile(ph)) {
+      const byPhone = rows.find((row) => normalizeIndiaMobileDigits(row.phone) === ph || row.phone === ph)
       if (byPhone) return byPhone
     }
     return rows[0] || null
   }
-  if (ph.length === 10) {
+  if (isValidIndiaMobile(ph)) {
     const { data, error } = await supabase
       .from('meta_ads_leads')
       .select('id, name, status, intent, email, phone, demo_at, purchase_order_id')
@@ -172,7 +173,7 @@ export async function markMetaAdsLeadStage(supabase, {
   if (!nextStage) return null
 
   const em = String(email || '').trim().toLowerCase()
-  const ph = digitsOnly(phone)
+  const ph = normalizeIndiaMobileDigits(phone)
   const now = new Date().toISOString()
   const existing = await findLatestLead(supabase, { email: em, phone: ph })
 
@@ -205,7 +206,7 @@ export async function markMetaAdsLeadStage(supabase, {
 
   const insert = {
     name: String(name || '').trim() || 'Customer',
-    phone: ph.length === 10 ? ph : '',
+    phone: isValidIndiaMobile(ph) ? ph : '',
     email: em || '',
     company: String(company || '').trim(),
     source: 'phonepe',
@@ -224,11 +225,11 @@ export async function markMetaAdsLeadStage(supabase, {
 function trialUserMeta(body) {
   const name = String(body?.name || '').trim()
   const company = String(body?.company || '').trim()
-  const phoneDigits = digitsOnly(body?.phone).slice(0, 10)
+  const phoneDigits = normalizeIndiaMobileDigits(body?.phone)
   const meta = { source: 'meta_ads_landing' }
   if (name) meta.full_name = name
   if (company) meta.company = company
-  if (phoneDigits.length === 10) {
+  if (isValidIndiaMobile(phoneDigits)) {
     meta.phone_digits = phoneDigits
     meta.phone = `+91${phoneDigits}`
     meta.phone_e164 = `+91${phoneDigits}`
@@ -381,8 +382,8 @@ export function registerPublicMetaAdsLeadRoutes(app) {
       return res.status(400).json({ error: 'Unknown step.', code: 'VALIDATION', requestId })
     }
     const email = String(req.body?.email || '').trim().toLowerCase()
-    const phone = digitsOnly(req.body?.phone)
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || phone.length !== 10) {
+    const phone = normalizeIndiaMobileDigits(req.body?.phone)
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !isValidIndiaMobile(phone)) {
       return res.status(400).json({ error: 'Enter the same email and mobile used on the form.', code: 'VALIDATION', requestId })
     }
 
@@ -654,6 +655,85 @@ export function registerPublicMetaAdsLeadRoutes(app) {
   })
 }
 
+const PAYMENT_PLANS = [
+  ['starter', 'Starter', 399, 3990, 50],
+  ['growth', 'Growth', 799, 7990, 125],
+  ['business', 'Business', 1599, 15990, 300],
+  ['pro', 'Pro', 2999, 29990, 750],
+  ['enterprise', 'Enterprise', 4999, 49990, 1500],
+  ['scale', 'Scale', 8999, 89990, 5000]
+]
+const PAYMENT_TOPUPS = [
+  [25, 199],
+  [100, 499],
+  [250, 999]
+]
+
+function inr(amount) {
+  return `₹${Number(amount).toLocaleString('en-IN')}`
+}
+
+function paymentPreset(key) {
+  if (key === '199') return paymentPreset('topup:25')
+  if (key === '399') return paymentPreset('plan:starter:month')
+  const topup = /^topup:(\d+)$/.exec(key)
+  if (topup) {
+    const row = PAYMENT_TOPUPS.find(([quotes]) => String(quotes) === topup[1])
+    if (!row) return null
+    const [quotes, amount] = row
+    return { amount, quotesPerMonth: quotes, period: 'once', validTill: null, label: `${inr(amount)} · ${quotes.toLocaleString('en-IN')} quotations` }
+  }
+  const planKey = /^plan:([a-z]+):(month|year)$/.exec(key)
+  if (!planKey) return null
+  const plan = PAYMENT_PLANS.find(([id]) => id === planKey[1])
+  if (!plan) return null
+  const [, name, monthly, yearly, quotes] = plan
+  const yearlyPlan = planKey[2] === 'year'
+  const amount = yearlyPlan ? yearly : monthly
+  const quoteLabel = `${quotes.toLocaleString('en-IN')} quotations / month`
+  return {
+    amount,
+    quotesPerMonth: quotes,
+    period: yearlyPlan ? 'year' : 'month',
+    validTill: null,
+    label: yearlyPlan ? `${inr(amount)} · ${name} yearly, ${quoteLabel}` : `${inr(amount)} · ${name}, ${quoteLabel}`
+  }
+}
+
+function paymentDateLabel(iso) {
+  const date = new Date(`${iso}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function buildPaymentRequest(body) {
+  const preset = paymentPreset(String(body.preset || '').trim())
+  if (preset) return { ...preset, validTill: null }
+  const amount = Math.round(Number(body.amount))
+  const quotesPerMonth = Math.round(Number(body.quotesPerMonth))
+  const period = body.period === 'year' ? 'year' : body.period === 'month' ? 'month' : ''
+  if (!Number.isFinite(amount) || amount < 1 || amount > 500000) {
+    return { error: 'Enter an amount between ₹1 and ₹5,00,000.' }
+  }
+  if (!Number.isFinite(quotesPerMonth) || quotesPerMonth < 1 || quotesPerMonth > 100000) {
+    return { error: 'Enter how many quotations per month.' }
+  }
+  if (!period) return { error: 'Choose monthly or yearly.' }
+  let validTill = null
+  if (period === 'year') {
+    validTill = String(body.validTill || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(validTill)) {
+      return { error: 'Choose the date this yearly plan is valid till.' }
+    }
+  }
+  const money = `₹${amount.toLocaleString('en-IN')}`
+  const quotes = `${quotesPerMonth.toLocaleString('en-IN')} quotations / month`
+  const label = period === 'year'
+    ? `${money} · ${quotes} · yearly, valid till ${paymentDateLabel(validTill)}`
+    : `${money} · ${quotes}`
+  return { amount, quotesPerMonth, period, validTill, label }
+}
+
 /** Authenticated — super-admin list. */
 export function registerMetaAdsLeadRoutes(app) {
   app.get('/api/meta-ads-leads', async (req, res) => {
@@ -796,6 +876,75 @@ export function registerMetaAdsLeadRoutes(app) {
       console.error(`[${requestId}] meta ads lead update failed`, error?.code, error?.message)
       if (/meta_ads_leads|schema cache|PGRST|42703/i.test(error?.message || '')) {
         return migrationRequired(res, requestId)
+      }
+      supabaseError(error, res, requestId)
+    }
+  })
+
+  app.post('/api/meta-ads-leads/:id/payment-request', async (req, res) => {
+    const requestId = `mal-pay-${Date.now()}`
+    if (!canManageMetaAdsLeads(req.userEmail)) {
+      return res.status(403).json({ error: 'Meta ads leads access only.', code: 'FORBIDDEN', requestId })
+    }
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+
+    const id = String(req.params.id || '').trim()
+    if (!id) return res.status(400).json({ error: 'Lead id is required.', code: 'VALIDATION', requestId })
+
+    const built = buildPaymentRequest(req.body || {})
+    if (built.error) return res.status(400).json({ error: built.error, code: 'VALIDATION', requestId })
+
+    try {
+      const { data: lead, error: leadError } = await supabase
+        .from('meta_ads_leads')
+        .select('id, email, name')
+        .eq('id', id)
+        .maybeSingle()
+      if (leadError) throw leadError
+      const email = String(lead?.email || '').trim().toLowerCase()
+      if (!lead || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: 'This lead needs an email before a payment can be sent.', code: 'VALIDATION', requestId })
+      }
+
+      const { error: cancelError } = await supabase
+        .from('payment_requests')
+        .update({ status: 'cancelled' })
+        .eq('email', email)
+        .eq('status', 'pending')
+      if (cancelError) throw cancelError
+
+      const { data, error } = await supabase
+        .from('payment_requests')
+        .insert({
+          email,
+          lead_id: lead.id,
+          amount: built.amount,
+          label: built.label,
+          quotes_per_month: built.quotesPerMonth,
+          period: built.period,
+          valid_till: built.validTill,
+          status: 'pending'
+        })
+        .select('id, amount, label, quotes_per_month, period, valid_till')
+        .single()
+      if (error) throw error
+      return res.status(201).json({
+        ok: true,
+        request: {
+          id: data.id,
+          amount: data.amount,
+          label: data.label,
+          quotesPerMonth: data.quotes_per_month,
+          period: data.period,
+          validTill: data.valid_till
+        },
+        requestId
+      })
+    } catch (error) {
+      console.error(`[${requestId}] payment request failed`, error?.code, error?.message)
+      if (/payment_requests|schema cache|PGRST|42703/i.test(error?.message || '')) {
+        return res.status(503).json({ error: 'Payment requests are not ready yet.', code: 'MIGRATION_REQUIRED', requestId })
       }
       supabaseError(error, res, requestId)
     }

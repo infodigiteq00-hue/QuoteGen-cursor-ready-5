@@ -13,7 +13,7 @@ import {
 import { emailLinkError, supabaseConfigured } from './supabaseClient.js'
 import BrandMark from './BrandMark.jsx'
 import { trackPixel } from './metaPixel.js'
-import { INDIA_COUNTRY_CODE, isValidIndiaMobile, normalizeIndiaMobileDigits, toIndiaE164 } from '../shared/phone.js'
+import { INDIA_COUNTRY_CODE, indiaMobileInputValue, isValidIndiaMobile, normalizeIndiaMobileDigits, toIndiaE164 } from '../shared/phone.js'
 import { markMetaTrialUnpaid, readMetaAdsLead, writeMetaAdsLead } from './metaTrialLead.js'
 
 function Field({ label, hint, ...props }) {
@@ -225,14 +225,14 @@ function SignupForm({ onNeedsConfirmation, onAlreadyRegistered, onSwitch, prefil
             inputMode="numeric"
             autoComplete="tel-national"
             required
-            maxLength={10}
+            maxLength={16}
             value={mobile}
-            onChange={e => setMobile(normalizeIndiaMobileDigits(e.target.value).slice(0, 10))}
+            onChange={e => setMobile(indiaMobileInputValue(e.target.value))}
             placeholder="9876543210"
             className="w-full bg-transparent px-3 py-2.5 text-sm outline-none"
           />
         </div>
-        <span className="mt-1 block text-xs text-slate-400">10-digit Indian mobile. Country code {INDIA_COUNTRY_CODE} is fixed.</span>
+        <span className="mt-1 block text-xs text-slate-400">10-digit Indian mobile. A leading 0 or {INDIA_COUNTRY_CODE} is removed.</span>
       </label>
       <Field label="Password" type="password" autoComplete="new-password" required minLength={8} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 8 characters" />
       <Field label="Confirm password" type="password" autoComplete="new-password" required value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Retype your password" />

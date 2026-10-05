@@ -1,3 +1,5 @@
+import { normalizeIndiaMobileDigits } from '../shared/phone.js'
+
 export const META_ADS_LEAD_KEY = 'qg_meta_ads_lead'
 export const META_TRIAL_SEED_KEY = 'qg_trial_company_seed'
 export const META_NEXT_KEY = 'qg_meta_ads_next'
@@ -151,7 +153,7 @@ export function readMetaAdsLead() {
 export function recordMetaLeadProgress(stage, leadOverride) {
   const lead = usefulLead(leadOverride) || readMetaAdsLead() || {}
   const email = String(lead.email || '').trim().toLowerCase()
-  const phone = String(lead.phone || '').replace(/\D/g, '')
+  const phone = normalizeIndiaMobileDigits(lead.phone)
   if (!email || phone.length !== 10) return
   const next = stage === 'company' ? 'company' : 'demo'
   fetch('/api/meta-ads-leads/progress', {

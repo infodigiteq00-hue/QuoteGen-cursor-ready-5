@@ -6,11 +6,23 @@ export function digitsOnly(value) {
   return String(value || '').replace(/\D/g, '')
 }
 
-/** Strip leading 91 / 0 so we validate the local 10-digit mobile. */
+/** Strip +91, 91, or a leading 0 so a pasted 11–13 digit value becomes the local mobile. */
 export function normalizeIndiaMobileDigits(raw) {
   let digits = digitsOnly(raw)
-  if (digits.length === 12 && digits.startsWith('91')) digits = digits.slice(2)
-  if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1)
+  for (let pass = 0; pass < 4 && digits.length > 10; pass += 1) {
+    if (digits.startsWith('91')) digits = digits.slice(2)
+    else if (digits.startsWith('0')) digits = digits.slice(1)
+    else break
+  }
+  if (digits.length > 10 && /[6-9]\d{9}$/.test(digits)) digits = digits.slice(-10)
+  return digits
+}
+
+/** What the mobile field should show. A finished number snaps to 10 digits; a prefix can stay while it is typed. */
+export function indiaMobileInputValue(raw) {
+  const digits = digitsOnly(raw).slice(0, 13)
+  const normalized = normalizeIndiaMobileDigits(digits)
+  if (/^[6-9]\d{9}$/.test(normalized)) return normalized
   return digits
 }
 
