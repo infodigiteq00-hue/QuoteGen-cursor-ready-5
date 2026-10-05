@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 import MetaTrialGuide from './MetaTrialGuide.jsx'
+import MetaAdsLanding from './MetaAdsLanding.jsx'
 import PaymentStatus from './PaymentStatus.jsx'
 import AuthScreen from './AuthScreen.jsx'
 import BrandMark from './BrandMark.jsx'
@@ -54,6 +55,7 @@ function DemoApp() {
   const [used, setUsed] = useState(() => readDemoQuoteCount(lead?.email))
   const [account, setAccount] = useState(null)
   const [previewDemo, setPreviewDemo] = useState(false)
+  const [linkWelcomeDone, setLinkWelcomeDone] = useState(false)
 
   const openAccount = (row, session) => {
     setAccount(row)
@@ -214,6 +216,17 @@ function DemoApp() {
       <main className="flex min-h-screen items-center justify-center bg-mist">
         <div className="text-lg font-bold text-ink">Opening QuoteGen…</div>
       </main>
+    )
+  }
+
+  if (demoCode && account?.step === 'demo' && !linkWelcomeDone) {
+    return (
+      <MetaAdsLanding
+        celebrate
+        initialLead={lead}
+        onSignIn={() => window.location.assign('/signin')}
+        onContinueTrial={() => setLinkWelcomeDone(true)}
+      />
     )
   }
 
