@@ -5,7 +5,9 @@ import { isHiddenMetaLead } from '../shared/metaAdsAccess.js'
 import { isValidIndiaMobile, normalizeIndiaMobileDigits } from '../shared/phone.js'
 import { accountSnapshotsByEmail } from './adminUsers.js'
 import { assignPlanOnPassword, loadUserControls, NEW_ACCOUNT_CUTOFF } from './accountAccess.js'
-import { appendLeadToSheet, readSheetOutreach } from './googleSheetLead.js'
+import { upsertUserProfile } from './userProfile.js'
+import { appendLeadToSheet, findDemoCodeForLead, readSheetOutreach } from './googleSheetLead.js'
+import { buildPaymentRequest } from './paymentRequestBuild.js'
 
 function requireDb(res, requestId) {
   if (!isSupabaseConfigured()) {
@@ -465,12 +467,21 @@ export function registerPublicMetaAdsLeadRoutes(app) {
       if (legacy) {
         return res.json({ ok: true, plan: 'legacy', needsLogin: true, requestId })
       }
+      const phoneDigits = normalizeIndiaMobileDigits(req.body?.phone)
+      const company = String(req.body?.company || '').trim()
       user = await ensureConfirmedMetaTrialUser(supabase, email, {
         source: 'meta_ads_landing',
-        full_name: lead?.name || req.body?.name || ''
+        full_name: lead?.name || req.body?.name || '',
+        company: company || lead?.company || '',
+        phone_digits: isValidIndiaMobile(phoneDigits) ? phoneDigits : ''
       })
       const { error } = await supabase.auth.admin.updateUserById(user.id, { password, email_confirm: true })
       if (error) throw error
+      if (isValidIndiaMobile(phoneDigits)) {
+        await upsertUserProfile(supabase, { userId: user.id, email, phoneRaw: phoneDigits }).catch((profileError) => {
+          console.error(`[${requestId}] profile phone save failed`, profileError?.message)
+        })
+      }
       const plan = await assignPlanOnPassword(supabase, { ...user, email })
       return res.json({ ok: true, plan, requestId })
     } catch (error) {
@@ -655,85 +666,6 @@ export function registerPublicMetaAdsLeadRoutes(app) {
   })
 }
 
-const PAYMENT_PLANS = [
-  ['starter', 'Starter', 399, 3990, 50],
-  ['growth', 'Growth', 799, 7990, 125],
-  ['business', 'Business', 1599, 15990, 300],
-  ['pro', 'Pro', 2999, 29990, 750],
-  ['enterprise', 'Enterprise', 4999, 49990, 1500],
-  ['scale', 'Scale', 8999, 89990, 5000]
-]
-const PAYMENT_TOPUPS = [
-  [25, 199],
-  [100, 499],
-  [250, 999]
-]
-
-function inr(amount) {
-  return `₹${Number(amount).toLocaleString('en-IN')}`
-}
-
-function paymentPreset(key) {
-  if (key === '199') return paymentPreset('topup:25')
-  if (key === '399') return paymentPreset('plan:starter:month')
-  const topup = /^topup:(\d+)$/.exec(key)
-  if (topup) {
-    const row = PAYMENT_TOPUPS.find(([quotes]) => String(quotes) === topup[1])
-    if (!row) return null
-    const [quotes, amount] = row
-    return { amount, quotesPerMonth: quotes, period: 'once', validTill: null, label: `${inr(amount)} · ${quotes.toLocaleString('en-IN')} quotations` }
-  }
-  const planKey = /^plan:([a-z]+):(month|year)$/.exec(key)
-  if (!planKey) return null
-  const plan = PAYMENT_PLANS.find(([id]) => id === planKey[1])
-  if (!plan) return null
-  const [, name, monthly, yearly, quotes] = plan
-  const yearlyPlan = planKey[2] === 'year'
-  const amount = yearlyPlan ? yearly : monthly
-  const quoteLabel = `${quotes.toLocaleString('en-IN')} quotations / month`
-  return {
-    amount,
-    quotesPerMonth: quotes,
-    period: yearlyPlan ? 'year' : 'month',
-    validTill: null,
-    label: yearlyPlan ? `${inr(amount)} · ${name} yearly, ${quoteLabel}` : `${inr(amount)} · ${name}, ${quoteLabel}`
-  }
-}
-
-function paymentDateLabel(iso) {
-  const date = new Date(`${iso}T00:00:00`)
-  if (Number.isNaN(date.getTime())) return iso
-  return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
-}
-
-function buildPaymentRequest(body) {
-  const preset = paymentPreset(String(body.preset || '').trim())
-  if (preset) return { ...preset, validTill: null }
-  const amount = Math.round(Number(body.amount))
-  const quotesPerMonth = Math.round(Number(body.quotesPerMonth))
-  const period = body.period === 'year' ? 'year' : body.period === 'month' ? 'month' : ''
-  if (!Number.isFinite(amount) || amount < 1 || amount > 500000) {
-    return { error: 'Enter an amount between ₹1 and ₹5,00,000.' }
-  }
-  if (!Number.isFinite(quotesPerMonth) || quotesPerMonth < 1 || quotesPerMonth > 100000) {
-    return { error: 'Enter how many quotations per month.' }
-  }
-  if (!period) return { error: 'Choose monthly or yearly.' }
-  let validTill = null
-  if (period === 'year') {
-    validTill = String(body.validTill || '').trim()
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(validTill)) {
-      return { error: 'Choose the date this yearly plan is valid till.' }
-    }
-  }
-  const money = `₹${amount.toLocaleString('en-IN')}`
-  const quotes = `${quotesPerMonth.toLocaleString('en-IN')} quotations / month`
-  const label = period === 'year'
-    ? `${money} · ${quotes} · yearly, valid till ${paymentDateLabel(validTill)}`
-    : `${money} · ${quotes}`
-  return { amount, quotesPerMonth, period, validTill, label }
-}
-
 /** Authenticated — super-admin list. */
 export function registerMetaAdsLeadRoutes(app) {
   app.get('/api/meta-ads-leads', async (req, res) => {
@@ -768,7 +700,7 @@ export function registerMetaAdsLeadRoutes(app) {
       const leads = (data || []).map((row) => {
         const lead = serializeLead(row)
         const account = accounts.get(String(lead.email || '').trim().toLowerCase()) || null
-        const phone = String(lead.phone || '').replace(/\D/g, '').slice(-10)
+        const phone = normalizeIndiaMobileDigits(lead.phone)
         const outreach = outreachByPhone.get(phone) || outreachByEmail.get(String(lead.email || '').trim().toLowerCase()) || null
         return {
           ...lead,
@@ -777,7 +709,8 @@ export function registerMetaAdsLeadRoutes(app) {
           joinedAt: account?.joinedAt || null,
           videoSeen: outreach?.videoSeen || '',
           remindersSent: outreach?.remindersSent ?? null,
-          lastReply: outreach?.lastReply || ''
+          lastReply: outreach?.lastReply || '',
+          demoCode: outreach?.demoCode || 0
         }
       })
       const hiddenEmails = new Set([...superAdminEmails(), 'infodigiteq@gmail.com'])
@@ -898,7 +831,7 @@ export function registerMetaAdsLeadRoutes(app) {
     try {
       const { data: lead, error: leadError } = await supabase
         .from('meta_ads_leads')
-        .select('id, email, name')
+        .select('id, email, name, phone, company')
         .eq('id', id)
         .maybeSingle()
       if (leadError) throw leadError
@@ -929,15 +862,22 @@ export function registerMetaAdsLeadRoutes(app) {
         .select('id, amount, label, quotes_per_month, period, valid_till')
         .single()
       if (error) throw error
+      const demoCode = await findDemoCodeForLead({ email, phone: lead.phone })
+      const payPath = demoCode ? `/quotation/demo${demoCode}/paymentpage${built.amount}` : ''
       return res.status(201).json({
         ok: true,
+        payPath,
         request: {
           id: data.id,
           amount: data.amount,
           label: data.label,
           quotesPerMonth: data.quotes_per_month,
           period: data.period,
-          validTill: data.valid_till
+          validTill: data.valid_till,
+          email,
+          name: lead.name || '',
+          phone: lead.phone || '',
+          company: lead.company || ''
         },
         requestId
       })

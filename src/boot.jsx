@@ -16,7 +16,8 @@ const path = pathName()
 const demoLink = path === '/' && new URLSearchParams(window.location.search).get('try') === '1'
 const shortDemo = /^\/(?:d|demo)\/\d+$/.test(path)
 const adsPath = path === '/metaadslanding' || path === '/meta-ads-landing' || path === '/trial-verify'
-const demoPath = path === '/demo' || path === '/payment-status' || path === '/set-password' || demoLink || shortDemo || (path === '/' && needsPassword())
+const quotationPay = /^\/quotation\/demo\d+\/paymentpage\d+$/i.test(path)
+const demoPath = path === '/demo' || path === '/payment-status' || path === '/set-password' || /^\/pay\/[0-9a-f-]{36}$/i.test(path) || quotationPay || demoLink || shortDemo || (path === '/' && needsPassword())
 
 window.__QG_BOOT_OWNER = 'boot'
 

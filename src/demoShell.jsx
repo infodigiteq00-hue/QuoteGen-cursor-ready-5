@@ -17,7 +17,7 @@ import {
   readDemoQuoteCount,
   recordDemoQuote
 } from './demoQuotes.js'
-import { usePaymentRequestOffer } from './PaymentRequestPrompt.jsx'
+import { PaymentLinkPage, readPayAccount, savePayAccount, usePaymentRequestOffer } from './PaymentRequestPrompt.jsx'
 
 installAuthFetch()
 initMetaPixel()
@@ -46,6 +46,10 @@ function DemoGate() {
 function DemoApp() {
   const [path, setPath] = useState(currentPath)
   const demoCode = demoCodeFromPath(path)
+  const payId = (String(path || '').match(/^\/pay\/([0-9a-f-]{36})$/i) || [])[1] || ''
+  const quotationPay = String(path || '').match(/^\/quotation\/demo(\d+)\/paymentpage(\d+)$/i)
+  const payDemo = quotationPay ? Number(quotationPay[1]) : 0
+  const payAmount = quotationPay ? Number(quotationPay[2]) : 0
   const [lead, setLead] = useState(() => (demoCode ? null : (usefulLead(readMetaAdsLead()) || readMetaAdsLead())))
   const [ready, setReady] = useState(false)
   const [enquiry, setEnquiry] = useState('')
@@ -58,7 +62,7 @@ function DemoApp() {
   const [previewDemo, setPreviewDemo] = useState(false)
   const [linkWelcomeDone, setLinkWelcomeDone] = useState(false)
   usePaymentRequestOffer({
-    email: lead?.email || '',
+    email: payId || payDemo ? '' : (lead?.email || ''),
     name: lead?.name || '',
     company: lead?.company || '',
     phone: lead?.phone || ''
@@ -103,10 +107,27 @@ function DemoApp() {
   }, [demoCode])
 
   useEffect(() => {
+    if (payId || payDemo) {
+      setReady(true)
+      return undefined
+    }
     if (demoCode || previewDemo) return undefined
     let cancelled = false
     const bootTimer = setTimeout(() => { if (!cancelled) setReady(true) }, 4500)
     const email = lead?.email
+    const savedAccount = path === '/set-password' ? readPayAccount() : null
+    if (savedAccount?.email) {
+      clearTimeout(bootTimer)
+      setLead({
+        email: savedAccount.email,
+        name: savedAccount.name || '',
+        phone: savedAccount.phone || '',
+        company: savedAccount.company || ''
+      })
+      setAccount({ verified: true, needsPassword: true, step: 'password', plan: 'paid' })
+      setReady(true)
+      return
+    }
     Promise.all([
       getCurrentSession(),
       email
@@ -165,6 +186,8 @@ function DemoApp() {
     return () => { cancelled = true }
   }, [lead?.email])
 
+  if (payId || payDemo) return <PaymentLinkPage requestId={payId} demoCode={payDemo} amount={payAmount} />
+
   if (!ready) {
     let fromIntro = false
     try { fromIntro = sessionStorage.getItem('qg_demo_from_intro') === '1' } catch { /* ignore */ }
@@ -181,6 +204,10 @@ function DemoApp() {
     return (
       <PaymentStatus
         onPaid={() => { clearMetaTrialLock() }}
+        onAccountReady={(details) => {
+          savePayAccount(details)
+          window.location.assign('/set-password')
+        }}
         onContinue={(state) => {
           window.location.assign(state === 'COMPLETED' ? '/' : '/demo')
         }}
@@ -195,11 +222,21 @@ function DemoApp() {
       <AuthScreen
         initialMode="create-password"
         prefillEmail={lead.email}
+        prefillPhone={lead.phone || ''}
+        leadName={lead.name || ''}
+        leadCompany={lead.company || ''}
+        accountReady={account?.plan === 'paid'}
         onCreatePassword={async (password) => {
           const response = await fetch('/api/meta-ads-trial/set-password', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: lead.email, password, name: lead.name || '' })
+            body: JSON.stringify({
+              email: lead.email,
+              password,
+              name: lead.name || '',
+              phone: lead.phone || '',
+              company: lead.company || ''
+            })
           })
           const data = await response.json().catch(() => ({}))
           if (!response.ok) throw new Error(data.error || 'Could not save the password.')

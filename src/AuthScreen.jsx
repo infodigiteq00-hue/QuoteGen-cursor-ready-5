@@ -125,7 +125,7 @@ function LoginForm({ onSwitch, onNeedsConfirmation, onForgotPassword, onLoggedIn
   )
 }
 
-function CreatePasswordForm({ email, onCreatePassword }) {
+function CreatePasswordForm({ email, name = '', phone = '', company = '', accountReady = false, onCreatePassword }) {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [loading, setLoading] = useState(false)
@@ -154,10 +154,13 @@ function CreatePasswordForm({ email, onCreatePassword }) {
   return (
     <form onSubmit={submit} className="space-y-4">
       <Field label="Email" type="email" autoComplete="email" required readOnly value={email} placeholder="you@company.com" />
+      {accountReady && name ? <Field label="Name" readOnly value={name} /> : null}
+      {accountReady && phone ? <Field label="Mobile" readOnly value={phone.startsWith('+') ? phone : `+91 ${phone}`} /> : null}
+      {accountReady && company ? <Field label="Company" readOnly value={company} /> : null}
       <Field label="Create password" type="password" autoComplete="new-password" required minLength={8} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 8 characters" />
       <Field label="Confirm password" type="password" autoComplete="new-password" required value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Retype your password" />
       <Alert tone="error">{error}</Alert>
-      <Submit loading={loading} idle="Log in" busy="Logging in…" />
+      <Submit loading={loading} idle={accountReady ? 'Create account' : 'Log in'} busy={accountReady ? 'Creating account…' : 'Logging in…'} />
     </form>
   )
 }
@@ -733,6 +736,7 @@ export default function AuthScreen({
   prefillPhone = '',
   leadName = '',
   leadCompany = '',
+  accountReady = false,
   onPreferLogin,
   onCreatePassword,
   onLoggedIn
@@ -753,7 +757,9 @@ export default function AuthScreen({
     setMode('login')
   }
 
-  const copy = COPY[mode] || COPY.login
+  const copy = (mode === 'create-password' && accountReady)
+    ? { title: 'Create your account', blurb: 'Your details are already filled. Choose a password to sign in.' }
+    : (COPY[mode] || COPY.login)
 
   if (mode === 'meta-trial') {
     return (
@@ -819,6 +825,10 @@ export default function AuthScreen({
           {mode === 'create-password' && (
             <CreatePasswordForm
               email={prefillEmail}
+              name={leadName}
+              phone={prefillPhone}
+              company={leadCompany}
+              accountReady={accountReady}
               onCreatePassword={onCreatePassword}
             />
           )}

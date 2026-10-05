@@ -1,6 +1,7 @@
 import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { isSuperAdmin } from './superAdmin.js'
 import { formatIndiaMobileDisplay } from '../shared/phone.js'
+import { buildPaymentRequest } from './paymentRequestBuild.js'
 import {
   normalizeAccountStatus,
   normalizeQuoteLimit,
@@ -71,6 +72,11 @@ async function quotationCountsByUser(supabase) {
 function phoneFromMeta(user) {
   const meta = user?.user_metadata || {}
   return meta.phone_e164 || meta.phone || meta.phone_digits || ''
+}
+
+function nameFromMeta(user) {
+  const meta = user?.user_metadata || {}
+  return String(meta.full_name || meta.name || '').trim()
 }
 
 function emptyBuckets(range) {
@@ -194,6 +200,8 @@ export function registerAdminUserRoutes(app) {
           const limit = normalizeQuoteLimit(profile?.quote_limit_count, profile?.quote_limit_period)
           return {
             id: u.id,
+            name: nameFromMeta(u),
+            company: String(u.user_metadata?.company || '').trim(),
             email: u.email || profile?.email || '',
             phone: phoneRaw ? formatIndiaMobileDisplay(phoneRaw) : '',
             phoneE164: profile?.phone_e164 || (phoneRaw ? String(phoneRaw) : ''),
@@ -538,6 +546,84 @@ export function registerAdminUserRoutes(app) {
       })
     } catch (error) {
       console.error(`[${requestId}] admin remove failed`, error?.code, error?.message)
+      supabaseError(error, res, requestId)
+    }
+  })
+
+  app.post('/api/admin/users/:userId/payment-request', async (req, res) => {
+    const requestId = `admin-pay-${Date.now()}`
+    if (!requireSuperAdmin(req, res, requestId)) return
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+
+    const userId = String(req.params.userId || '').trim()
+    if (!userId) return res.status(400).json({ error: 'User id is required.', code: 'VALIDATION', requestId })
+
+    const built = buildPaymentRequest(req.body || {})
+    if (built.error) return res.status(400).json({ error: built.error, code: 'VALIDATION', requestId })
+
+    try {
+      const { data: userData, error: userError } = await supabase.auth.admin.getUserById(userId)
+      if (userError) throw userError
+      const user = userData?.user
+      const email = String(user?.email || '').trim().toLowerCase()
+      if (!user || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: 'This user needs an email before a payment can be sent.', code: 'VALIDATION', requestId })
+      }
+
+      const profile = await supabase
+        .from('user_profiles')
+        .select('phone_digits, phone_e164')
+        .eq('user_id', userId)
+        .maybeSingle()
+      const meta = user.user_metadata || {}
+      const phone = profile.data?.phone_digits || profile.data?.phone_e164 || meta.phone_digits || meta.phone || ''
+      const name = String(meta.full_name || meta.name || '').trim()
+
+      const { error: cancelError } = await supabase
+        .from('payment_requests')
+        .update({ status: 'cancelled' })
+        .eq('email', email)
+        .eq('status', 'pending')
+      if (cancelError) throw cancelError
+
+      const { data, error } = await supabase
+        .from('payment_requests')
+        .insert({
+          email,
+          lead_id: null,
+          amount: built.amount,
+          label: built.label,
+          quotes_per_month: built.quotesPerMonth,
+          period: built.period,
+          valid_till: built.validTill,
+          status: 'pending'
+        })
+        .select('id, amount, label, quotes_per_month, period, valid_till')
+        .single()
+      if (error) throw error
+
+      return res.status(201).json({
+        ok: true,
+        payPath: '/',
+        request: {
+          id: data.id,
+          amount: data.amount,
+          label: data.label,
+          quotesPerMonth: data.quotes_per_month,
+          period: data.period,
+          validTill: data.valid_till,
+          email,
+          name,
+          phone
+        },
+        requestId
+      })
+    } catch (error) {
+      console.error(`[${requestId}] user payment request failed`, error?.code, error?.message)
+      if (/payment_requests|schema cache|PGRST|42703/i.test(error?.message || '')) {
+        return res.status(503).json({ error: 'Payment requests are not ready yet.', code: 'MIGRATION_REQUIRED', requestId })
+      }
       supabaseError(error, res, requestId)
     }
   })

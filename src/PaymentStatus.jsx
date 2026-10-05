@@ -5,11 +5,17 @@ import './paymentStatus.css'
 const POLL_MS = 3000
 const MAX_POLLS = 40
 
-export default function PaymentStatus({ onContinue, onPaid }) {
+export default function PaymentStatus({ onContinue, onPaid, onAccountReady }) {
   const orderId = new URLSearchParams(window.location.search).get('order') || ''
   const [state, setState] = useState(orderId ? 'PENDING' : 'MISSING')
   const [amount, setAmount] = useState(0)
   const [error, setError] = useState('')
+  const [customer, setCustomer] = useState(null)
+
+  useEffect(() => {
+    if (state !== 'COMPLETED' || !customer?.setupAccount) return undefined
+    onAccountReady?.(customer)
+  }, [state, customer])
 
   useEffect(() => {
     if (!orderId) return undefined
@@ -29,8 +35,19 @@ export default function PaymentStatus({ onContinue, onPaid }) {
           setError('')
           setAmount(data.amount || 0)
           setState(data.state)
+          if (data.setupAccount) {
+            setCustomer({
+              setupAccount: true,
+              email: data.email || '',
+              name: data.name || '',
+              phone: data.phone || '',
+              company: data.company || ''
+            })
+          }
           if (data.state === 'COMPLETED') {
-            try { sessionStorage.removeItem('qg_needs_password') } catch { /* ignore */ }
+            if (!data.setupAccount) {
+              try { sessionStorage.removeItem('qg_needs_password') } catch { /* ignore */ }
+            }
             onPaid?.()
             trackPixel('Purchase', { value: data.amount || 0, currency: 'INR', content_name: 'QuoteGen monthly' }, { once: orderId })
           }
@@ -60,10 +77,12 @@ export default function PaymentStatus({ onContinue, onPaid }) {
           {done ? '✓' : failed ? '!' : ''}
         </div>
         <h1>
-          {done ? 'Welcome to QuoteGen!' : failed ? 'Payment not completed' : 'Confirming your payment…'}
+          {done && customer?.setupAccount ? 'Payment received' : done ? 'Welcome to QuoteGen!' : failed ? 'Payment not completed' : 'Confirming your payment…'}
         </h1>
         <p>
-          {done
+          {done && customer?.setupAccount
+            ? 'Opening your account. Only a password is left.'
+            : done
             ? `We received ₹${amount}. Your QuoteGen plan is active — our team will reach out shortly.`
             : failed
               ? 'No money was taken for this attempt. You can go back and try again.'
@@ -71,7 +90,7 @@ export default function PaymentStatus({ onContinue, onPaid }) {
         </p>
         {error && !done && !failed ? <p className="qg-pay-status-error">{error}</p> : null}
         {orderId ? <p className="qg-pay-status-ref">Reference: {orderId}</p> : null}
-        {done || failed ? (
+        {((done && !customer?.setupAccount) || failed) ? (
           <button type="button" onClick={() => onContinue?.(state)}>
             {done ? 'Go to QuoteGen' : 'Back to QuoteGen'}
           </button>

@@ -14,7 +14,7 @@ function tillLabel(value) {
   return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-export function PaymentOfferModal({ offer, busy, error, note, onPay, onClose, framed = false }) {
+export function PaymentOfferModal({ offer, busy, error, note, onPay, onClose, framed = false, allowDismiss = true }) {
   const quotes = Number(offer.quotesPerMonth)
   const quoteLine = Number.isFinite(quotes) && quotes > 0
     ? `${quotes.toLocaleString('en-IN')} quotations${offer.period === 'once' ? '' : ' / month'}`
@@ -49,7 +49,9 @@ export function PaymentOfferModal({ offer, busy, error, note, onPay, onClose, fr
           <p style={{ margin: '12px 0 0', fontSize: 13.5, color: '#B03A3A' }}>{error}</p>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
-          <button type="button" onClick={onClose} disabled={busy} style={{ minHeight: 42, padding: '0 16px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#3D4859', fontSize: 14.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer' }}>Not now</button>
+          {allowDismiss ? (
+            <button type="button" onClick={onClose} disabled={busy} style={{ minHeight: 42, padding: '0 16px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#3D4859', fontSize: 14.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer' }}>Not now</button>
+          ) : null}
           <button type="button" onClick={onPay} disabled={busy} style={{ minHeight: 42, padding: '0 18px', borderRadius: 12, border: 0, background: '#1A73E8', color: '#fff', fontSize: 14.5, fontWeight: 750, cursor: busy ? 'default' : 'pointer' }}>
             {busy ? 'Opening PhonePe…' : 'Pay now'}
           </button>
@@ -155,4 +157,98 @@ export function usePaymentRequestOffer({ email = '', name = '', company = '', ph
       host.remove()
     }
   }, [offer, dismissed, busy, error])
+}
+
+const PAY_ACCOUNT_KEY = 'qg_pay_account'
+
+export function savePayAccount(details) {
+  try { sessionStorage.setItem(PAY_ACCOUNT_KEY, JSON.stringify(details || {})) } catch { /* ignore */ }
+  try { sessionStorage.setItem('qg_needs_password', '1') } catch { /* ignore */ }
+}
+
+export function readPayAccount() {
+  try {
+    const raw = sessionStorage.getItem(PAY_ACCOUNT_KEY)
+    const data = raw ? JSON.parse(raw) : null
+    if (!data?.email) return null
+    return data
+  } catch {
+    return null
+  }
+}
+
+export function PaymentLinkPage({ requestId = '', demoCode = 0, amount = 0 }) {
+  const [offer, setOffer] = useState(null)
+  const [missing, setMissing] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let stop = false
+    const target = demoCode
+      ? `/api/pay/quotation/${demoCode}/${amount}`
+      : `/api/pay/request/${encodeURIComponent(requestId)}`
+    fetch(target)
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}))
+        if (stop) return
+        if (!response.ok || !data?.request?.id) {
+          setMissing(true)
+          return
+        }
+        if (data.paid) {
+          savePayAccount(data.request)
+          window.location.assign('/set-password')
+          return
+        }
+        setOffer(data.request)
+      })
+      .catch(() => { if (!stop) setMissing(true) })
+    return () => { stop = true }
+  }, [requestId, demoCode, amount])
+
+  const pay = async () => {
+    if (!offer || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const response = await fetch('/api/pay/phonepe/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          product: 'request',
+          requestId: offer.id,
+          email: offer.email || '',
+          name: offer.name || '',
+          company: offer.company || '',
+          phone: offer.phone || ''
+        })
+      })
+      const data = await response.json().catch(() => ({}))
+      if (response.ok && data?.redirectUrl) {
+        window.location.assign(data.redirectUrl)
+        return
+      }
+      setError(data?.error || 'Could not open PhonePe. Please try again.')
+    } catch {
+      setError('Could not open PhonePe. Check your connection and try again.')
+    }
+    setBusy(false)
+  }
+
+  if (missing) {
+    return (
+      <main style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: '#f5f7fa' }}>
+        <p style={{ fontSize: 16, color: '#3D4859' }}>This payment link is not available.</p>
+      </main>
+    )
+  }
+  if (!offer) {
+    return <main style={{ minHeight: '100vh', background: '#f5f7fa' }} />
+  }
+  return (
+    <main style={{ minHeight: '100vh', background: '#f5f7fa' }}>
+      <PaymentOfferModal offer={offer} busy={busy} error={error} onPay={pay} allowDismiss={false} />
+    </main>
+  )
 }

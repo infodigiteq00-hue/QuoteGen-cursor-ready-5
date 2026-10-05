@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import { getSupabase, isSupabaseConfigured } from './db.js'
+import { readDemoLeadByCode } from './googleSheetLead.js'
 import { findAuthUserByEmail, markMetaAdsLeadStage } from './metaAdsLeads.js'
 import { applyPaymentCredits } from './accountAccess.js'
 import { sendAdminEmail } from './mail.js'
@@ -139,6 +140,92 @@ function clip(v, max) {
 const notifiedOrders = new Set()
 
 export function registerPublicPhonePeRoutes(app) {
+  app.get('/api/pay/quotation/:demoCode/:amount', async (req, res) => {
+    const demoCode = Number(req.params.demoCode)
+    const amount = Number(req.params.amount)
+    if (!Number.isInteger(demoCode) || demoCode < 2 || !Number.isInteger(amount) || amount < 1 || !isSupabaseConfigured()) {
+      return res.status(404).json({ error: 'This payment link is not available.' })
+    }
+    try {
+      const lead = await readDemoLeadByCode(demoCode)
+      const email = String(lead?.email || '').trim().toLowerCase()
+      if (!email) return res.status(404).json({ error: 'This payment link is not available.' })
+      const { data, error } = await getSupabase()
+        .from('payment_requests')
+        .select('id, email, amount, label, quotes_per_month, period, valid_till, status')
+        .eq('email', email)
+        .eq('amount', amount)
+        .in('status', ['pending', 'paid'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (error || !data) return res.status(404).json({ error: 'This payment link is not available.' })
+      return res.json({
+        paid: data.status === 'paid',
+        request: {
+          id: data.id,
+          amount: data.amount,
+          label: data.label,
+          quotesPerMonth: data.quotes_per_month,
+          period: data.period,
+          validTill: data.valid_till,
+          email,
+          name: lead.name || '',
+          phone: lead.phone || '',
+          company: lead.company || ''
+        }
+      })
+    } catch (error) {
+      console.error('[pay] quotation link failed', error?.message)
+      return res.status(404).json({ error: 'This payment link is not available.' })
+    }
+  })
+
+  app.get('/api/pay/request/:id', async (req, res) => {
+    const id = String(req.params.id || '').trim()
+    if (!/^[0-9a-f-]{36}$/i.test(id) || !isSupabaseConfigured()) {
+      return res.status(404).json({ error: 'This payment link is not available.' })
+    }
+    try {
+      const supabase = getSupabase()
+      const { data, error } = await supabase
+        .from('payment_requests')
+        .select('id, email, lead_id, amount, label, quotes_per_month, period, valid_till, status')
+        .eq('id', id)
+        .maybeSingle()
+      if (error || !data || (data.status !== 'pending' && data.status !== 'paid')) {
+        return res.status(404).json({ error: 'This payment link is not available.' })
+      }
+      let customer = { name: '', phone: '', company: '' }
+      if (data.lead_id) {
+        const lead = await supabase
+          .from('meta_ads_leads')
+          .select('name, phone, company')
+          .eq('id', data.lead_id)
+          .maybeSingle()
+        if (lead.data) customer = { name: lead.data.name || '', phone: lead.data.phone || '', company: lead.data.company || '' }
+      }
+      return res.json({
+        paid: data.status === 'paid',
+        request: {
+          id: data.id,
+          amount: data.amount,
+          label: data.label,
+          quotesPerMonth: data.quotes_per_month,
+          period: data.period,
+          validTill: data.valid_till,
+          email: data.email,
+          name: customer.name,
+          phone: customer.phone,
+          company: customer.company
+        }
+      })
+    } catch (error) {
+      console.error('[pay] request link failed', error?.message)
+      return res.status(404).json({ error: 'This payment link is not available.' })
+    }
+  })
+
   app.get('/api/pay/request', async (req, res) => {
     const email = String(req.query?.email || '').trim().toLowerCase()
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !isSupabaseConfigured()) {
@@ -293,11 +380,23 @@ export function registerPublicPhonePeRoutes(app) {
       }
 
       const meta = data?.metaInfo || {}
+      let setupAccount = false
+      if (isSupabaseConfigured()) {
+        const linked = await getSupabase()
+          .from('payment_requests')
+          .select('id, lead_id')
+          .eq('phonepe_order_id', orderId)
+          .maybeSingle()
+        setupAccount = Boolean(linked.data?.lead_id)
+      }
       return res.json({
         state,
         amount,
         name: meta.udf1 || '',
-        email: meta.udf4 || ''
+        company: meta.udf2 || '',
+        phone: meta.udf3 || '',
+        email: meta.udf4 || '',
+        setupAccount
       })
     } catch (error) {
       console.error('[phonepe] status error', error?.message)

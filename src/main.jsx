@@ -13,7 +13,7 @@ import MetaAdsLanding from './MetaAdsLanding.jsx'
 import MetaTrialGuide from './MetaTrialGuide.jsx'
 import PaymentStatus from './PaymentStatus.jsx'
 import { PaymentOfferModal, usePaymentRequestOffer } from './PaymentRequestPrompt.jsx'
-import { indiaMobileInputValue } from '../shared/phone.js'
+import { indiaMobileInputValue, isValidIndiaMobile, normalizeIndiaMobileDigits } from '../shared/phone.js'
 import LegalPages, { matchLegalPage } from './LegalPages.jsx'
 import { initMetaPixel } from './metaPixel.js'
 import { registerPwa } from './pwaInstall.js'
@@ -9649,6 +9649,18 @@ function WsUsageBarChart({ series, emptyLabel = 'No quotations in this range' })
   )
 }
 
+function adminRecordMatches(query, fields) {
+  const raw = String(query || '').trim().toLowerCase()
+  if (!raw) return true
+  const haystack = fields.map((field) => String(field ?? '')).join(' ').toLowerCase()
+  const digits = haystack.replace(/\D/g, '')
+  return raw.split(/\s+/).filter(Boolean).every((token) => {
+    if (haystack.includes(token)) return true
+    const tokenDigits = token.replace(/\D/g, '')
+    return tokenDigits.length >= 3 && digits.includes(tokenDigits)
+  })
+}
+
 function WsUsersAdmin() {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState('')
@@ -9657,6 +9669,7 @@ function WsUsersAdmin() {
   const [activeCount, setActiveCount] = React.useState(0)
   const [nearingLimits, setNearingLimits] = React.useState([])
   const [users, setUsers] = React.useState([])
+  const [userQuery, setUserQuery] = React.useState('')
   const [selectedId, setSelectedId] = React.useState('')
   const [usageLoading, setUsageLoading] = React.useState(false)
   const [usageError, setUsageError] = React.useState('')
@@ -9667,6 +9680,17 @@ function WsUsersAdmin() {
   const [limitCount, setLimitCount] = React.useState('')
   const [limitPeriod, setLimitPeriod] = React.useState('month')
   const [removeTarget, setRemoveTarget] = React.useState(null) // { id, email }
+  const [payUser, setPayUser] = React.useState(null)
+  const [payKind, setPayKind] = React.useState('plan:starter:month')
+  const [payAmount, setPayAmount] = React.useState('')
+  const [payQuotes, setPayQuotes] = React.useState('')
+  const [payPeriod, setPayPeriod] = React.useState('month')
+  const [payTill, setPayTill] = React.useState('')
+  const [payBusy, setPayBusy] = React.useState(false)
+  const [payError, setPayError] = React.useState('')
+  const [paySentId, setPaySentId] = React.useState('')
+  const [payPreview, setPayPreview] = React.useState(null)
+  const [payPreviewNote, setPayPreviewNote] = React.useState('')
   const detailsRef = React.useRef(null)
 
   const load = React.useCallback(() => {
@@ -9696,6 +9720,24 @@ function WsUsersAdmin() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [removeTarget, actionBusy])
+
+  React.useEffect(() => {
+    if (!payUser || payBusy || payPreview) return undefined
+    const onKey = (event) => {
+      if (event.key === 'Escape') setPayUser(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [payUser, payBusy, payPreview])
+
+  React.useEffect(() => {
+    if (!payPreview) return undefined
+    const onKey = (event) => {
+      if (event.key === 'Escape') { setPayPreview(null); setPayPreviewNote('') }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [payPreview])
 
   React.useEffect(() => {
     if (!selectedId) return
@@ -9866,6 +9908,72 @@ function WsUsersAdmin() {
   const series = usage?.series?.[range] || []
   const statusOf = (u) => String(u?.accountStatus || 'active').toLowerCase()
   const isProtectedSuperAdmin = (u) => !!(u?.isSuperAdmin || String(u?.email || '').trim().toLowerCase() === 'info@digiteqsolution.com')
+
+  const openUserPayment = (user) => {
+    setPayError('')
+    setPayKind('plan:starter:month')
+    setPayAmount('')
+    setPayQuotes('')
+    setPayPeriod('month')
+    setPayTill('')
+    setPayUser(user)
+  }
+
+  const userPaymentPreviewOffer = () => {
+    const shortcut = billingShortcutOffer(payKind, payPeriod)
+    if (shortcut) return shortcut
+    const amount = Math.round(Number(payAmount))
+    const quotes = Math.round(Number(payQuotes))
+    if (!Number.isFinite(amount) || amount < 1) return { error: 'Enter the amount to preview their screen.' }
+    if (!Number.isFinite(quotes) || quotes < 1) return { error: 'Enter quotations per month to preview their screen.' }
+    if (payPeriod === 'year' && !/^\d{4}-\d{2}-\d{2}$/.test(payTill)) {
+      return { error: 'Choose the valid-till date to preview their screen.' }
+    }
+    const money = `₹${amount.toLocaleString('en-IN')}`
+    const quotesLabel = `${quotes.toLocaleString('en-IN')} quotations / month`
+    const till = payPeriod === 'year'
+      ? new Date(`${payTill}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+      : ''
+    return {
+      amount,
+      quotesPerMonth: quotes,
+      period: payPeriod,
+      validTill: payPeriod === 'year' ? payTill : '',
+      label: payPeriod === 'year' ? `${money} · ${quotesLabel} · yearly, valid till ${till}` : `${money} · ${quotesLabel}`
+    }
+  }
+
+  const sendUserPayment = async (channel) => {
+    if (!payUser || payBusy) return
+    setPayBusy(true)
+    setPayError('')
+    const body = payKind === 'custom'
+      ? { amount: payAmount, quotesPerMonth: payQuotes, period: payPeriod, validTill: payTill }
+      : { preset: payKind }
+    try {
+      const response = await fetch(`/api/admin/users/${encodeURIComponent(payUser.id)}/payment-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'Could not send the payment request.')
+      if (channel === 'whatsapp') {
+        const phone = normalizeIndiaMobileDigits(data.request?.phone || payUser.phone)
+        if (!isValidIndiaMobile(phone)) throw new Error('This user needs a 10-digit mobile number for WhatsApp.')
+        const link = 'https://www.quotegen.ai/'
+        const first = String(data.request?.name || '').trim().split(' ')[0]
+        const who = first ? `Hi ${first}, ` : 'Hi, '
+        const text = `${who}your QuoteGen package is ready: ${data.request.label}. Open your account and the payment will be on your screen: ${link}`
+        window.open(`https://wa.me/91${phone}?text=${encodeURIComponent(text)}`, '_blank', 'noopener')
+      }
+      setPaySentId(payUser.id)
+      setPayUser(null)
+    } catch (err) {
+      setPayError(err.message || 'Could not send the payment request.')
+    }
+    setPayBusy(false)
+  }
   const statusBadge = (status, userLike) => {
     if (isProtectedSuperAdmin(userLike)) {
       return (
@@ -10107,6 +10215,16 @@ function WsUsersAdmin() {
     </div>
   ) : null
 
+  const visibleUsers = users.filter((user) => adminRecordMatches(userQuery, [
+    user.name,
+    user.email,
+    user.phone,
+    user.phoneE164,
+    user.company,
+    user.accountStatus,
+    user.adminNote
+  ]))
+
   return (
     <div style={{ maxWidth: 980, display: 'flex', flexDirection: 'column', gap: 18 }}>
       <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 26 }}>
@@ -10199,21 +10317,36 @@ function WsUsersAdmin() {
       </section>
 
       <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 22 }}>
-        <div style={{ fontSize: 15, fontWeight: 750, marginBottom: 12 }}>User list</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{ fontSize: 15, fontWeight: 750 }}>User list</div>
+          {!loading && userQuery.trim() ? <div style={{ fontSize: 13, color: '#6B7688' }}>{visibleUsers.length} match{visibleUsers.length === 1 ? '' : 'es'}</div> : null}
+        </div>
+        <input
+          type="search"
+          value={userQuery}
+          onChange={(e) => setUserQuery(e.target.value)}
+          placeholder="Search name, email, mobile, or company"
+          aria-label="Search users"
+          style={{ display: 'block', width: '100%', boxSizing: 'border-box', minHeight: 44, marginBottom: 12, padding: '0 14px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, color: '#0D1117', background: '#fff' }}
+        />
         {!loading && users.length === 0 && !error && (
           <p style={{ margin: 0, fontSize: 14.5, color: '#94a3b8' }}>No users yet.</p>
         )}
+        {!loading && users.length > 0 && visibleUsers.length === 0 && (
+          <p style={{ margin: 0, fontSize: 14.5, color: '#6B7688' }}>No users match that search.</p>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {users.map((u) => (
+          {visibleUsers.map((u) => (
             <div key={u.id}>
               <div
                 style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderRadius: 12, border: '1px solid #EDF1F7', background: '#FBFCFE' }}
               >
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: '#1a202c', wordBreak: 'break-all' }}>
-                    {u.email || '(no email)'}
+                    {u.name || u.email || '(no email)'}
                     {statusBadge(u.accountStatus, u)}
                   </div>
+                  {u.name ? <div style={{ marginTop: 2, fontSize: 13, color: '#6B7688', wordBreak: 'break-all' }}>{u.email}</div> : null}
                   <div style={{ marginTop: 4, fontSize: 13, color: '#6B7688' }}>
                     {u.phone || 'Mobile not set'} · {u.quotationCount} quotation{u.quotationCount === 1 ? '' : 's'}
                     {u.quoteLimitCount != null && u.quoteLimitPeriod
@@ -10228,6 +10361,15 @@ function WsUsersAdmin() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => openUserPayment(u)}
+                    disabled={!u.email}
+                    style={{ minHeight: 40, padding: '0 12px', border: 0, borderRadius: 10, background: u.email ? '#1A73E8' : '#E6EDF6', fontSize: 13, fontWeight: 700, cursor: u.email ? 'pointer' : 'default', color: u.email ? '#fff' : '#8A94A6' }}
+                  >
+                    Request payment
+                  </button>
+                  {paySentId === u.id ? <span style={{ alignSelf: 'center', fontSize: 12.5, fontWeight: 700, color: '#1A73E8' }}>Sent to their screen</span> : null}
                   {!isProtectedSuperAdmin(u) && (statusOf(u) === 'active' ? (
                     <button
                       type="button"
@@ -10282,6 +10424,137 @@ function WsUsersAdmin() {
         </div>
       </section>
 
+      {payUser && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="qg-user-pay-request-title"
+          onMouseDown={(e) => { if (e.target === e.currentTarget && !payBusy) setPayUser(null) }}
+          style={{ position: 'fixed', inset: 0, zIndex: 230, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(15,23,42,.42)' }}
+        >
+          <div style={{ width: 'min(560px, 100%)', maxHeight: 'min(860px, calc(100vh - 48px))', overflow: 'auto', background: '#fff', borderRadius: 20, boxShadow: '0 28px 60px -24px rgba(20,35,80,.45)', border: '1px solid #E8EBF2', padding: '22px 24px 20px' }}>
+            <h2 id="qg-user-pay-request-title" style={{ margin: 0, fontSize: 20, fontWeight: 800, letterSpacing: '-.02em', color: '#0D1117' }}>Send payment request</h2>
+            <p style={{ margin: '6px 0 0', fontSize: 14, lineHeight: 1.5, color: '#6B7688' }}>
+              {payUser.email} already has an account. WhatsApp opens QuoteGen signed in, with this package on their screen. Pay goes to PhonePe.
+            </p>
+            <div style={{ marginTop: 16, fontSize: 12, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A94A6' }}>Top-ups</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, marginTop: 8 }}>
+              {BILLING_TOPUPS.map((topup) => {
+                const id = `topup:${topup.quotations}`
+                const on = payKind === id
+                return (
+                  <button key={id} type="button" onClick={() => setPayKind(id)} style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 12, border: on ? '1.5px solid #1A73E8' : '1.5px solid #E6EDF6', background: on ? '#F3F8FE' : '#fff', cursor: 'pointer' }}>
+                    <div style={{ fontSize: 15, fontWeight: 750, color: '#0D1117' }}>₹{topup.price.toLocaleString('en-IN')}</div>
+                    <div style={{ marginTop: 2, fontSize: 12.5, color: '#6B7688' }}>+{topup.quotations} quotations</div>
+                  </button>
+                )
+              })}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#8A94A6' }}>Plans</div>
+              <div style={{ display: 'flex', gap: 4, padding: 3, borderRadius: 999, background: '#F4F7FB' }}>
+                {[['month', 'Monthly'], ['year', 'Yearly']].map(([id, label]) => (
+                  <button key={id} type="button" onClick={() => { setPayPeriod(id); setPayKind((kind) => (kind.startsWith('plan:') ? kind.replace(/:(month|year)$/, `:${id}`) : kind)) }} style={{ minHeight: 32, padding: '0 12px', borderRadius: 999, border: 0, background: payPeriod === id ? '#fff' : 'transparent', color: payPeriod === id ? '#0D1117' : '#6B7688', fontSize: 13, fontWeight: 700, cursor: 'pointer', boxShadow: payPeriod === id ? '0 1px 2px rgba(15,23,42,.08)' : 'none' }}>{label}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginTop: 8 }}>
+              {BILLING_PLANS.map((plan) => {
+                const id = `plan:${plan.key}:${payPeriod}`
+                const on = payKind === id
+                const price = payPeriod === 'year' ? plan.yearly : plan.monthly
+                return (
+                  <button key={id} type="button" onClick={() => setPayKind(id)} style={{ textAlign: 'left', padding: '10px 12px', borderRadius: 12, border: on ? '1.5px solid #1A73E8' : '1.5px solid #E6EDF6', background: on ? '#F3F8FE' : '#fff', cursor: 'pointer' }}>
+                    <div style={{ fontSize: 15, fontWeight: 750, color: '#0D1117' }}>{plan.name} · ₹{price.toLocaleString('en-IN')}</div>
+                    <div style={{ marginTop: 2, fontSize: 12.5, color: '#6B7688' }}>{plan.quotations.toLocaleString('en-IN')} quotations / month</div>
+                  </button>
+                )
+              })}
+            </div>
+            <button type="button" onClick={() => setPayKind('custom')} style={{ display: 'block', width: '100%', marginTop: 8, textAlign: 'left', padding: '10px 12px', borderRadius: 12, border: payKind === 'custom' ? '1.5px solid #1A73E8' : '1.5px solid #E6EDF6', background: payKind === 'custom' ? '#F3F8FE' : '#fff', cursor: 'pointer' }}>
+              <div style={{ fontSize: 15, fontWeight: 750, color: '#0D1117' }}>Custom amount</div>
+              <div style={{ marginTop: 2, fontSize: 12.5, color: '#6B7688' }}>Amount, quotations, monthly or yearly</div>
+            </button>
+            {payKind === 'custom' && (
+              <div style={{ display: 'grid', gap: 12, marginTop: 14 }}>
+                <label style={{ fontSize: 13, fontWeight: 700, color: '#3D4859' }}>
+                  Amount (₹)
+                  <input value={payAmount} onChange={(e) => setPayAmount(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" placeholder="2500" style={{ display: 'block', width: '100%', marginTop: 6, minHeight: 44, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, boxSizing: 'border-box' }} />
+                </label>
+                <label style={{ fontSize: 13, fontWeight: 700, color: '#3D4859' }}>
+                  Quotations per month
+                  <input value={payQuotes} onChange={(e) => setPayQuotes(e.target.value.replace(/[^\d]/g, ''))} inputMode="numeric" placeholder="80" style={{ display: 'block', width: '100%', marginTop: 6, minHeight: 44, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, boxSizing: 'border-box' }} />
+                </label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {[['month', 'Monthly'], ['year', 'Yearly']].map(([id, label]) => (
+                    <button key={id} type="button" onClick={() => setPayPeriod(id)} style={{ flex: 1, minHeight: 40, borderRadius: 12, border: payPeriod === id ? '1.5px solid #1A73E8' : '1.5px solid #D5DDE9', background: payPeriod === id ? '#F3F8FE' : '#fff', color: '#0D1117', fontWeight: 700, cursor: 'pointer' }}>{label}</button>
+                  ))}
+                </div>
+                {payPeriod === 'year' && (
+                  <label style={{ fontSize: 13, fontWeight: 700, color: '#3D4859' }}>
+                    Valid till
+                    <input type="date" value={payTill} onChange={(e) => setPayTill(e.target.value)} style={{ display: 'block', width: '100%', marginTop: 6, minHeight: 44, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, boxSizing: 'border-box' }} />
+                  </label>
+                )}
+              </div>
+            )}
+            {payError && <p style={{ margin: '12px 0 0', fontSize: 13.5, color: '#B03A3A' }}>{payError}</p>}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 18 }}>
+              <button
+                type="button"
+                onClick={() => sendUserPayment('whatsapp')}
+                disabled={payBusy || !isValidIndiaMobile(payUser.phone)}
+                style={{ gridColumn: '1 / -1', minHeight: 44, padding: '0 16px', borderRadius: 12, border: 0, background: payBusy || !isValidIndiaMobile(payUser.phone) ? '#E6EDF6' : '#1A73E8', color: payBusy || !isValidIndiaMobile(payUser.phone) ? '#8A94A6' : '#fff', fontSize: 15, fontWeight: 750, cursor: payBusy || !isValidIndiaMobile(payUser.phone) ? 'default' : 'pointer' }}
+              >
+                {payBusy ? 'Sending…' : 'WhatsApp'}
+              </button>
+              <button type="button" onClick={() => sendUserPayment('screen')} disabled={payBusy} style={{ minHeight: 42, padding: '0 12px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#1A73E8', fontSize: 14, fontWeight: 700, cursor: payBusy ? 'default' : 'pointer' }}>
+                {payBusy ? 'Sending…' : 'Send to their screen'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const offer = userPaymentPreviewOffer()
+                  if (offer.error) { setPayError(offer.error); return }
+                  setPayError('')
+                  setPayPreviewNote('')
+                  setPayPreview(offer)
+                }}
+                style={{ minHeight: 42, padding: '0 12px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#1A73E8', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}
+              >
+                Preview their screen
+              </button>
+              <button type="button" onClick={() => { if (!payBusy) setPayUser(null) }} style={{ gridColumn: '1 / -1', minHeight: 42, padding: '0 12px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#3D4859', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+      {payPreview && createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(15,23,42,.55)' }}>
+          <button
+            type="button"
+            onClick={() => { setPayPreview(null); setPayPreviewNote('') }}
+            style={{ position: 'fixed', top: 16, right: 16, zIndex: 261, minHeight: 36, padding: '0 14px', borderRadius: 999, border: '1px solid rgba(255,255,255,.22)', background: 'rgba(255,255,255,.12)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+          >
+            Close preview
+          </button>
+          <div style={{ width: 390, height: 'min(780px, 86vh)', borderRadius: 36, background: '#f5f7fa', border: '10px solid #0D1117', boxShadow: '0 28px 60px -24px rgba(20,35,80,.55)', position: 'relative', overflow: 'hidden' }}>
+            <div style={{ padding: '28px 22px 0' }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: '#1a202c' }}>QuoteGen</div>
+              <div style={{ marginTop: 6, fontSize: 14, color: '#6B7688', lineHeight: 1.45 }}>This card covers their signed-in account until they choose.</div>
+            </div>
+            <PaymentOfferModal
+              framed
+              offer={payPreview}
+              note={payPreviewNote || 'Preview only. Nothing is sent.'}
+              onClose={() => { setPayPreview(null); setPayPreviewNote('') }}
+              onPay={() => setPayPreviewNote('On their screen, Pay now opens PhonePe.')}
+            />
+          </div>
+        </div>,
+        document.body
+      )}
       {removeTarget && (
         <div
           role="dialog"
@@ -10716,6 +10989,7 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
   const [removeBusy, setRemoveBusy] = React.useState(false)
   const [removeError, setRemoveError] = React.useState('')
   const [leadFilter, setLeadFilter] = React.useState('lead')
+  const [leadQuery, setLeadQuery] = React.useState('')
   const [arrivalPreview, setArrivalPreview] = React.useState(false)
   const [payLead, setPayLead] = React.useState(null)
   const [payKind, setPayKind] = React.useState('399')
@@ -10726,6 +11000,7 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
   const [payBusy, setPayBusy] = React.useState(false)
   const [payError, setPayError] = React.useState('')
   const [paySentId, setPaySentId] = React.useState('')
+  const [copiedLeadId, setCopiedLeadId] = React.useState('')
   const [payPreview, setPayPreview] = React.useState(null)
   const [payPreviewNote, setPayPreviewNote] = React.useState('')
 
@@ -10799,6 +11074,19 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [payPreview])
 
+  const copyDemoLink = async (lead) => {
+    const code = Number(lead?.demoCode)
+    if (!Number.isInteger(code) || code < 2) return
+    const link = `https://www.quotegen.ai/demo/${code}`
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopiedLeadId(lead.id)
+      window.setTimeout(() => setCopiedLeadId((current) => (current === lead.id ? '' : current)), 2000)
+    } catch {
+      setPayError('Could not copy the demo link.')
+    }
+  }
+
   const openPayment = (lead) => {
     setPayError('')
     setPayKind('plan:starter:month')
@@ -10839,7 +11127,7 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
     setPayPreview(offer)
   }
 
-  const sendPayment = async () => {
+  const sendPayment = async (channel) => {
     if (!payLead || payBusy) return
     setPayBusy(true)
     setPayError('')
@@ -10854,6 +11142,15 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.error || 'Could not send the payment request.')
+      if (channel === 'whatsapp') {
+        const phone = normalizeIndiaMobileDigits(data.request?.phone || payLead.phone)
+        if (!isValidIndiaMobile(phone)) throw new Error('This lead needs a 10-digit mobile number for WhatsApp.')
+        if (!data.payPath) throw new Error('This lead has no demo number yet, so the WhatsApp link cannot be made.')
+        const link = `https://www.quotegen.ai${data.payPath}`
+        const who = payLead.name ? `Hi ${payLead.name.split(' ')[0]}, ` : ''
+        const text = `${who}your QuoteGen package is ready: ${data.request.label}. Pay here: ${link}`
+        window.open(`https://wa.me/91${phone}?text=${encodeURIComponent(text)}`, '_blank', 'noopener')
+      }
       setPaySentId(payLead.id)
       setPayLead(null)
     } catch (err) {
@@ -10980,6 +11277,24 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
     { id: 'reminders', label: 'Reminders sent', value: remindersSentTotal, color: '#C47B2B' }
   ]
   const visibleLeads = leads.filter((lead) => {
+    const query = leadQuery.trim()
+    if (query) {
+      return adminRecordMatches(query, [
+        lead.name,
+        lead.email,
+        lead.phone,
+        lead.company,
+        lead.industry,
+        lead.remarks,
+        lead.status,
+        lead.monthlyQuotes,
+        lead.source,
+        lead.videoSeen,
+        lead.lastReply,
+        lead.demoCode ? `demo ${lead.demoCode}` : '',
+        lead.demoCode ? `demo/${lead.demoCode}` : ''
+      ])
+    }
     if (leadFilter === 'purchased') return !lead.deactivated && lead.status === 'purchased'
     if (leadFilter === 'demo') return !lead.deactivated && lead.status === 'demo'
     if (leadFilter === 'lead') return !lead.deactivated && lead.status !== 'purchased' && lead.status !== 'demo'
@@ -10998,6 +11313,14 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
             <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4, maxWidth: 520 }}>
               Each person on their own card. Video seen and reminders sent come from the outreach sheet.
             </div>
+            <input
+              type="search"
+              value={leadQuery}
+              onChange={(e) => setLeadQuery(e.target.value)}
+              placeholder="Search name, email, mobile, or company"
+              aria-label="Search leads"
+              style={{ display: 'block', width: 'min(420px, 100%)', boxSizing: 'border-box', minHeight: 44, marginTop: 14, padding: '0 14px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, color: '#0D1117', background: '#fff' }}
+            />
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {canDelete && (
@@ -11064,7 +11387,7 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
 
       {!loading && leads.length > 0 && visibleLeads.length === 0 && (
         <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 28 }}>
-          <p style={{ margin: 0, fontSize: 14.5, color: '#6B7688' }}>No leads in this filter.</p>
+          <p style={{ margin: 0, fontSize: 14.5, color: '#6B7688' }}>{leadQuery.trim() ? 'No leads match that search.' : 'No leads in this filter.'}</p>
         </section>
       )}
 
@@ -11123,6 +11446,7 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
               {lead.remarks ? <div style={{ marginTop: 12, fontSize: 13.5, color: '#6B7688', lineHeight: 1.45 }}>{lead.remarks}</div> : null}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14, alignItems: 'center' }}>
                 <button type="button" onClick={() => openPayment(lead)} disabled={!lead.email} style={{ minHeight: 36, padding: '0 12px', border: 0, borderRadius: 10, background: lead.email ? '#1A73E8' : '#E6EDF6', color: lead.email ? '#fff' : '#8A94A6', fontSize: 13, fontWeight: 700, cursor: lead.email ? 'pointer' : 'default' }}>Request payment</button>
+                <button type="button" onClick={() => copyDemoLink(lead)} disabled={!lead.demoCode} style={{ minHeight: 36, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: lead.demoCode ? '#1A73E8' : '#8A94A6', fontSize: 13, fontWeight: 700, cursor: lead.demoCode ? 'pointer' : 'default' }}>{copiedLeadId === lead.id ? 'Demo link copied' : 'Demo link'}</button>
                 {paySentId === lead.id ? <span style={{ fontSize: 12.5, fontWeight: 700, color: '#1A73E8' }}>Sent to their screen</span> : null}
                 <button type="button" onClick={() => openEditor(lead)} style={{ minHeight: 36, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: '#1A73E8', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
                 <button type="button" disabled={rowBusy === lead.id} onClick={() => setLeadActive(lead, lead.deactivated)} style={{ minHeight: 36, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: '#3D4859', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
@@ -11211,7 +11535,21 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
               </div>
             )}
             {payError && <p style={{ margin: '12px 0 0', fontSize: 13.5, color: '#B03A3A' }}>{payError}</p>}
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginTop: 18 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 18 }}>
+              <button
+                type="button"
+                onClick={() => sendPayment('whatsapp')}
+                disabled={payBusy || !payLead.phone}
+                style={{ gridColumn: '1 / -1', minHeight: 44, padding: '0 16px', borderRadius: 12, border: 0, background: payBusy || !payLead.phone ? '#E6EDF6' : '#1A73E8', color: payBusy || !payLead.phone ? '#8A94A6' : '#fff', fontSize: 15, fontWeight: 750, cursor: payBusy || !payLead.phone ? 'default' : 'pointer' }}
+              >
+                {payBusy ? 'Sending…' : 'WhatsApp'}
+              </button>
+              <button type="button" onClick={() => sendPayment('screen')} disabled={payBusy} style={{ minHeight: 42, padding: '0 12px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#1A73E8', fontSize: 14, fontWeight: 700, cursor: payBusy ? 'default' : 'pointer' }}>
+                {payBusy ? 'Sending…' : 'Send to their screen'}
+              </button>
+              <button type="button" onClick={() => copyDemoLink(payLead)} disabled={!payLead.demoCode} style={{ minHeight: 42, padding: '0 12px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: payLead.demoCode ? '#1A73E8' : '#8A94A6', fontSize: 14, fontWeight: 700, cursor: payLead.demoCode ? 'pointer' : 'default' }}>
+                {copiedLeadId === payLead.id ? 'Demo link copied' : 'Demo link'}
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -11219,16 +11557,11 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
                   if (offer.error) { setPayError(offer.error); return }
                   openPaymentPreview(offer)
                 }}
-                style={{ minHeight: 42, padding: '0 14px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#1A73E8', fontSize: 14.5, fontWeight: 700, cursor: 'pointer' }}
+                style={{ minHeight: 42, padding: '0 12px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#1A73E8', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}
               >
                 Preview their screen
               </button>
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button type="button" onClick={() => { if (!payBusy) setPayLead(null) }} style={{ minHeight: 42, padding: '0 16px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#3D4859', fontSize: 14.5, fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
-                <button type="button" onClick={sendPayment} disabled={payBusy} style={{ minHeight: 42, padding: '0 18px', borderRadius: 12, border: 0, background: '#1A73E8', color: '#fff', fontSize: 14.5, fontWeight: 750, cursor: payBusy ? 'default' : 'pointer' }}>
-                  {payBusy ? 'Sending…' : 'Send to their screen'}
-                </button>
-              </div>
+              <button type="button" onClick={() => { if (!payBusy) setPayLead(null) }} style={{ minHeight: 42, padding: '0 12px', borderRadius: 12, border: '1.5px solid #D5DDE9', background: '#fff', color: '#3D4859', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
             </div>
           </div>
         </div>,

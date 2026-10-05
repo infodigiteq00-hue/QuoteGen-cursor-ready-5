@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { normalizeIndiaMobileDigits } from '../shared/phone.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -40,23 +41,31 @@ function bundledDemoLead(code) {
   }
 }
 
-/** Outreach columns n8n keeps on the sheet: Video Seen (E) and Reminders Sent (F). */
+function demoCodeFromLink(value) {
+  const match = String(value || '').match(/\/demo\/(\d+)/i)
+  const code = match ? Number(match[1]) : 0
+  return Number.isInteger(code) && code >= 2 ? code : 0
+}
+
+/** Outreach columns n8n keeps on the sheet: Video Seen (E) and Reminders Sent (F). Demo number comes from the link in column M. */
 export async function readSheetOutreach() {
   const account = serviceAccount()
   if (!account) return []
   try {
     const token = await accessToken(account)
-    const range = encodeURIComponent(`${SHEET_TAB()}!A2:I`)
+    const range = encodeURIComponent(`${SHEET_TAB()}!A2:M`)
     const data = await sheetsFetch(token, `/values/${range}`)
-    return (data.values || []).flatMap((row) => {
-      const phone = String(row[1] || '').replace(/\D/g, '').slice(-10)
+    return (data.values || []).flatMap((row, index) => {
+      const phone = normalizeIndiaMobileDigits(row[1])
       const email = String(row[8] || '').trim().toLowerCase()
+      const demoCode = demoCodeFromLink(row[12]) || index + 2
       if (!phone && !email) return []
       const remindersRaw = String(row[5] || '').trim()
       const remindersSent = /^\d+$/.test(remindersRaw) ? Number(remindersRaw) : null
       return [{
         phone,
         email,
+        demoCode,
         videoSeen: String(row[4] || '').trim(),
         remindersSent,
         lastReply: String(row[7] || '').trim()
@@ -65,6 +74,25 @@ export async function readSheetOutreach() {
   } catch (error) {
     console.warn('[sheet] outreach read failed', error.message)
     return []
+  }
+}
+
+export async function findDemoCodeForLead({ email = '', phone = '' } = {}) {
+  const em = String(email || '').trim().toLowerCase()
+  const ph = normalizeIndiaMobileDigits(phone)
+  const rows = await readSheetOutreach()
+  const hit = rows.find((row) => (em && row.email === em) || (ph.length === 10 && row.phone === ph))
+  if (hit?.demoCode) return hit.demoCode
+  try {
+    const saved = JSON.parse(fs.readFileSync(DEMO_LINK_FILE, 'utf8'))
+    const local = (Array.isArray(saved) ? saved : []).find((row) => (
+      (em && String(row.email || '').trim().toLowerCase() === em)
+      || (ph.length === 10 && normalizeIndiaMobileDigits(row.phone) === ph)
+    ))
+    const code = Number(local?.demoCode)
+    return Number.isInteger(code) && code >= 2 ? code : 0
+  } catch {
+    return 0
   }
 }
 
