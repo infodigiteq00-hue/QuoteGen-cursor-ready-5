@@ -160,12 +160,15 @@ function withHardTimeout(promise, timeoutMs, label, onTimeout) {
   ])
 }
 
-/** Keep a client-supplied name usable as a download filename. */
+/** Keep a client-supplied name usable inside a Content-Disposition header. */
 export function safeFileName(raw) {
   const cleaned = String(raw || '')
-    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x20-\x7E]+/g, '-')
     .replace(/[\\/:*?"<>|]+/g, '-')
     .replace(/\s+/g, ' ')
+    .replace(/-+/g, '-')
     .replace(/^[.\s-]+|[.\s-]+$/g, '')
     .slice(0, 120)
     .trim()
@@ -707,7 +710,11 @@ export function registerPdfRoutes(app) {
         chromePath: status.chromePath || '(sparticuz)'
       })
       res.setHeader('Content-Type', 'application/pdf')
-      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
+      try {
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`)
+      } catch {
+        res.setHeader('Content-Disposition', 'attachment; filename="Quotation.pdf"')
+      }
       res.setHeader('Content-Length', String(pdf.length))
       res.setHeader('X-QuoteGen-Pdf', 'preview-v2')
       res.send(pdf)
