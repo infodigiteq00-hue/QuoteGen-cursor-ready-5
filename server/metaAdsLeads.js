@@ -1,9 +1,10 @@
 import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { sendAdminEmail, sendUserEmail } from './mail.js'
-import { canManageMetaAdsLeads, isSuperAdmin } from './superAdmin.js'
+import { canManageMetaAdsLeads, isSuperAdmin, superAdminEmails } from './superAdmin.js'
+import { isHiddenMetaLead } from '../shared/metaAdsAccess.js'
 import { accountSnapshotsByEmail } from './adminUsers.js'
 import { assignPlanOnPassword, loadUserControls, NEW_ACCOUNT_CUTOFF } from './accountAccess.js'
-import { appendLeadToSheet } from './googleSheetLead.js'
+import { appendLeadToSheet, readSheetOutreach } from './googleSheetLead.js'
 
 function requireDb(res, requestId) {
   if (!isSupabaseConfigured()) {
@@ -683,18 +684,35 @@ export function registerMetaAdsLeadRoutes(app) {
       } catch (accountError) {
         console.error(`[${requestId}] lead account lookup failed`, accountError?.message)
       }
+      const outreachRows = await readSheetOutreach()
+      const outreachByPhone = new Map()
+      const outreachByEmail = new Map()
+      for (const row of outreachRows) {
+        if (row.phone) outreachByPhone.set(row.phone, row)
+        if (row.email) outreachByEmail.set(row.email, row)
+      }
       const leads = (data || []).map((row) => {
         const lead = serializeLead(row)
         const account = accounts.get(String(lead.email || '').trim().toLowerCase()) || null
+        const phone = String(lead.phone || '').replace(/\D/g, '').slice(-10)
+        const outreach = outreachByPhone.get(phone) || outreachByEmail.get(String(lead.email || '').trim().toLowerCase()) || null
         return {
           ...lead,
           quotationCount: account ? account.quotationCount : null,
           accountStatus: account?.accountStatus || '',
-          joinedAt: account?.joinedAt || null
+          joinedAt: account?.joinedAt || null,
+          videoSeen: outreach?.videoSeen || '',
+          remindersSent: outreach?.remindersSent ?? null,
+          lastReply: outreach?.lastReply || ''
         }
       })
+      const hiddenEmails = new Set([...superAdminEmails(), 'infodigiteq@gmail.com'])
+      const visibleLeads = leads.filter((lead) => {
+        const email = String(lead.email || '').trim().toLowerCase()
+        return !isHiddenMetaLead(lead) && !hiddenEmails.has(email)
+      })
       const counts = { lead: 0, demo: 0, purchased: 0, inactive: 0 }
-      for (const lead of leads) {
+      for (const lead of visibleLeads) {
         if (lead.deactivated) {
           counts.inactive += 1
           continue
@@ -704,7 +722,7 @@ export function registerMetaAdsLeadRoutes(app) {
         else counts.lead += 1
       }
 
-      res.json({ total: count ?? leads.length, counts, leads, requestId })
+      res.json({ total: visibleLeads.length, counts, leads: visibleLeads, requestId })
     } catch (error) {
       console.error(`[${requestId}] meta ads leads list failed`, error?.code, error?.message)
       if (/meta_ads_leads|schema cache|PGRST|42703/i.test(error?.message || '')) {

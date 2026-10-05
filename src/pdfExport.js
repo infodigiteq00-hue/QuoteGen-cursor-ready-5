@@ -820,8 +820,20 @@ function withCaptureLayout() {
   frames.forEach((el) => {
     previous.push([el, 'zoom', el.style.zoom])
     previous.push([el, 'width', el.style.width])
+    previous.push([el, 'transform', el.style.transform])
+    previous.push([el, 'position', el.style.position])
+    previous.push([el, 'left', el.style.left])
+    previous.push([el, 'marginLeft', el.style.marginLeft])
     el.style.zoom = '1'
     el.style.width = `${A4_WIDTH_PX}px`
+    el.style.transform = 'none'
+    el.style.position = 'relative'
+    el.style.left = 'auto'
+    el.style.marginLeft = '0'
+  })
+  document.querySelectorAll('.qg-studio-fit').forEach((el) => {
+    previous.push([el, 'height', el.style.height])
+    el.style.height = 'auto'
   })
   studioPapers.forEach((el) => {
     previous.push([el, 'minHeight', el.style.minHeight])

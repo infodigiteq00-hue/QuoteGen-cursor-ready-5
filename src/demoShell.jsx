@@ -53,10 +53,12 @@ function DemoApp() {
   const [profile, setProfile] = useState(null)
   const [used, setUsed] = useState(() => readDemoQuoteCount(lead?.email))
   const [account, setAccount] = useState(null)
+  const [previewDemo, setPreviewDemo] = useState(false)
 
   const openAccount = (row, session) => {
     setAccount(row)
     if (!row?.verified) return 'gate'
+    if (session && row.plan === 'demo') return 'demo'
     if (row.needsPassword) return 'password'
     if (!session) return 'login'
     if (row.plan === 'demo') return 'demo'
@@ -92,7 +94,7 @@ function DemoApp() {
   }, [demoCode])
 
   useEffect(() => {
-    if (demoCode) return undefined
+    if (demoCode || previewDemo) return undefined
     let cancelled = false
     const bootTimer = setTimeout(() => { if (!cancelled) setReady(true) }, 4500)
     const email = lead?.email
@@ -108,6 +110,22 @@ function DemoApp() {
     ]).then(([session, row]) => {
       clearTimeout(bootTimer)
       if (cancelled) return
+      let adminPreview = false
+      try { adminPreview = sessionStorage.getItem('qg_admin_demo_preview') === '1' } catch { /* ignore */ }
+      if (adminPreview && session?.user) {
+        try { sessionStorage.removeItem('qg_admin_demo_preview') } catch { /* ignore */ }
+        setPreviewDemo(true)
+        if (!email) {
+          setLead({
+            name: session.user.user_metadata?.name || 'Preview',
+            email: session.user.email || '',
+            company: ''
+          })
+        }
+        setAccount({ verified: true, plan: 'demo', step: 'demo', needsPassword: false })
+        setReady(true)
+        return
+      }
       if (!email) {
         setAccount({ verified: false })
       } else if (row && row.verified != null) {
@@ -122,7 +140,12 @@ function DemoApp() {
     })
     const unsubscribe = onAuthChange(() => {})
     return () => { cancelled = true; clearTimeout(bootTimer); unsubscribe() }
-  }, [demoCode, lead?.email])
+  }, [demoCode, lead?.email, previewDemo])
+
+  useEffect(() => {
+    if (!ready) return
+    try { sessionStorage.removeItem('qg_demo_from_intro') } catch { /* ignore */ }
+  }, [ready])
 
   useEffect(() => {
     if (!lead?.email) return undefined
@@ -134,6 +157,9 @@ function DemoApp() {
   }, [lead?.email])
 
   if (!ready) {
+    let fromIntro = false
+    try { fromIntro = sessionStorage.getItem('qg_demo_from_intro') === '1' } catch { /* ignore */ }
+    if (fromIntro) return <main style={{ minHeight: '100vh', background: '#000' }} />
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-3.5 bg-mist">
         <BrandMark size={56} alt="" />
@@ -155,7 +181,7 @@ function DemoApp() {
 
   if (!lead?.email || account?.verified === false) return <DemoGate />
 
-  if (account?.step === 'password' || account?.needsPassword) {
+  if (account?.step === 'password') {
     return (
       <AuthScreen
         initialMode="create-password"
@@ -232,7 +258,7 @@ function DemoApp() {
         setError('')
         try {
           const built = await generateTrialQuote({ enquiry, columns: nextColumns })
-          const row = await recordDemoQuote(lead)
+          const row = previewDemo ? { used } : await recordDemoQuote(lead)
           setUsed(row.used)
           return built
         } catch (err) {

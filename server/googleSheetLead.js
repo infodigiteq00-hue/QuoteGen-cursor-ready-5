@@ -40,6 +40,34 @@ function bundledDemoLead(code) {
   }
 }
 
+/** Outreach columns n8n keeps on the sheet: Video Seen (E) and Reminders Sent (F). */
+export async function readSheetOutreach() {
+  const account = serviceAccount()
+  if (!account) return []
+  try {
+    const token = await accessToken(account)
+    const range = encodeURIComponent(`${SHEET_TAB()}!A2:I`)
+    const data = await sheetsFetch(token, `/values/${range}`)
+    return (data.values || []).flatMap((row) => {
+      const phone = String(row[1] || '').replace(/\D/g, '').slice(-10)
+      const email = String(row[8] || '').trim().toLowerCase()
+      if (!phone && !email) return []
+      const remindersRaw = String(row[5] || '').trim()
+      const remindersSent = /^\d+$/.test(remindersRaw) ? Number(remindersRaw) : null
+      return [{
+        phone,
+        email,
+        videoSeen: String(row[4] || '').trim(),
+        remindersSent,
+        lastReply: String(row[7] || '').trim()
+      }]
+    })
+  } catch (error) {
+    console.warn('[sheet] outreach read failed', error.message)
+    return []
+  }
+}
+
 export async function readDemoLeadByCode(code) {
   const n = Number(code)
   if (!Number.isInteger(n) || n < 2) return null

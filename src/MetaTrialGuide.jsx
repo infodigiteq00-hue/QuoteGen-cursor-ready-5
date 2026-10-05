@@ -2506,10 +2506,10 @@ export default function MetaTrialGuide({
           {step === 1 ? (
             <>
               <h1 className="meta-guide-title">
-                Paste or upload the <span>enquiry</span>
+                Paste or upload any of <span>your client's enquiry</span>
               </h1>
               <p className="meta-guide-lead">
-                Use a real client message — WhatsApp text, email, PDF, or a photo of the RFQ. No sample text.
+                WhatsApp text, email, PDF, or a photo of the RFQ.
               </p>
 
               <div

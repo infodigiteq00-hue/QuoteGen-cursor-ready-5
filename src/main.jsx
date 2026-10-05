@@ -38,6 +38,8 @@ import {
   ingestEnquiryFiles,
   learnFromQuote,
   listProducts,
+  listClientQuotations,
+  listQuotationClients,
   listQuotations,
   listRevisions,
   lookupHsnGst,
@@ -95,7 +97,7 @@ import FloatingPop from './FloatingPop.jsx'
 import { footerFitCssVars, normalizeFooterFit, patchFooterFit } from '../shared/footerFit.js'
 import { normalizeHeaderMeta } from '../shared/headerMeta.js'
 import { whatsAppPasteReplacement } from '../shared/enquiryText.js'
-import { canManageMetaAdsLeads } from '../shared/metaAdsAccess.js'
+import { canManageMetaAdsLeads, isHiddenMetaLead } from '../shared/metaAdsAccess.js'
 import {
   amountCellState,
   amountEditPatch,
@@ -1176,14 +1178,16 @@ function App() {
   const footerFitSaveTimer = useRef(null)
   const [persistenceConfigured, setPersistenceConfigured] = useState(false)
   const [recentQuotations, setRecentQuotations] = useState([])
+  const [quoteOverview, setQuoteOverview] = useState(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
   // Dashboard-shell navigation — which page shows inside the sidebar layout
   // when no quotation is open. Separate from `view`, which only gates the
   // full-screen Upload Doc flow.
   const [workspaceView, setWorkspaceView] = useState('home')
-  const [listQuery, setListQuery] = useState('')
+  const [listClient, setListClient] = useState(null)
   const [listTab, setListTab] = useState('all')
+  const [overviewTick, setOverviewTick] = useState(0)
   const [settingsTab, setSettingsTab] = useState('company')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [sidebarHidden, setSidebarHidden] = useState(() => {
@@ -1349,6 +1353,7 @@ function App() {
       setCompanyProfile(null)
       setCompanyDraft({})
       setRecentQuotations([])
+      setQuoteOverview(null)
       return
     }
     try {
@@ -1393,12 +1398,15 @@ function App() {
     setHistoryLoading(true)
     setHistoryError('')
     try {
-      const listRes = await listQuotations(200)
+      const listRes = await listQuotationClients()
       if (listRes.unavailable) {
         setPersistenceConfigured(false)
         setRecentQuotations([])
+        setQuoteOverview(null)
       } else {
-        setRecentQuotations(listRes.quotations)
+        setQuoteOverview(listRes)
+        setRecentQuotations(listRes.recent || [])
+        setOverviewTick(n => n + 1)
       }
     } catch (e) {
       setHistoryError(e.message || 'Could not load quotation history')
@@ -1522,8 +1530,8 @@ function App() {
     setWorkspaceView('home')
   }
 
-  // After the email code, save the lead, then show that the enquiry was received.
-  // The demo opens later from the WhatsApp link (?try=1), not from this screen.
+  // After the email code, save the lead, then offer the first trial.
+  // Try QuoteGen opens the existing demo. Sheet rows and demo links stay as they are.
   useEffect(() => {
     if (!authUser) return undefined
     let cancelled = false
@@ -2426,38 +2434,38 @@ function App() {
   // the only genuine "finished" signal this schema has, so it stands in for
   // Draft vs Completed.
   const wsNow = new Date()
-  const wsDraftCount = recentQuotations.filter(q => q.docType !== 'invoice').length
-  const wsCompletedCount = recentQuotations.filter(q => q.docType === 'invoice').length
-  const wsThisMonthCount = recentQuotations.filter(q => {
-    const d = new Date(q.updatedAt || q.createdAt)
-    return !Number.isNaN(d.getTime()) && d.getMonth() === wsNow.getMonth() && d.getFullYear() === wsNow.getFullYear()
-  }).length
-  const wsTotalValue = recentQuotations.reduce((a, q) => a + (q.total || 0), 0)
+  const wsQuoteCount = quoteOverview?.quotationCount || 0
+  const wsDraftCount = quoteOverview?.draftCount || 0
+  const wsCompletedCount = quoteOverview?.completedCount || 0
+  const wsThisMonthCount = quoteOverview?.thisMonthCount || 0
+  const wsTotalValue = quoteOverview?.total || 0
+  const wsCompletedValue = quoteOverview?.completedTotal || 0
+
+  const openQuoteList = (tab = 'all') => {
+    setListClient(null)
+    setListTab(tab)
+    setWorkspaceView('list')
+  }
 
   const wsHomeStats = [
-    { label: 'Drafts to finish', value: String(wsDraftCount), sub: `${wsDraftCount} of ${recentQuotations.length} total`, go: () => { setListTab('draft'); setWorkspaceView('list') } },
-    { label: 'Completed', value: String(wsCompletedCount), sub: 'Converted to invoice', go: () => { setListTab('completed'); setWorkspaceView('list') } },
-    { label: 'This month', value: String(wsThisMonthCount), sub: 'Quotations touched', go: () => setWorkspaceView('list') },
-    { label: 'Total quoted', value: money(wsTotalValue), sub: `Across ${recentQuotations.length} quotations`, go: () => setWorkspaceView('insights') }
+    { label: 'Drafts to finish', value: String(wsDraftCount), sub: `${wsDraftCount} of ${wsQuoteCount} total`, go: () => openQuoteList('draft') },
+    { label: 'Completed', value: String(wsCompletedCount), sub: 'Converted to invoice', go: () => openQuoteList('completed') },
+    { label: 'This month', value: String(wsThisMonthCount), sub: 'Quotations touched', go: () => openQuoteList('all') },
+    { label: 'Total quoted', value: money(wsTotalValue), sub: `Across ${wsQuoteCount} quotations`, go: () => setWorkspaceView('insights') }
   ]
 
-  const wsClientGroups = new Map()
-  for (const q of recentQuotations) {
-    const name = (q.customer?.company || q.customer?.name || '').trim()
-    if (!name) continue
-    const g = wsClientGroups.get(name) || { name, count: 0, value: 0 }
-    g.count += 1
-    g.value += q.total || 0
-    wsClientGroups.set(name, g)
-  }
-  const wsTopClientsRaw = [...wsClientGroups.values()].sort((a, b) => b.value - a.value).slice(0, 4)
+  const wsTopClientsRaw = (quoteOverview?.clients || [])
+    .filter(c => c.name && c.name !== 'No customer set')
+    .map(c => ({ name: c.name, count: c.count, value: c.total || 0 }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 4)
   const wsMaxClientValue = Math.max(1, ...wsTopClientsRaw.map(c => c.value))
   const wsTopClients = wsTopClientsRaw.map(c => ({ ...c, pct: Math.max(4, Math.round((c.value / wsMaxClientValue) * 100)) }))
 
   const wsInsightStats = [
-    { label: 'Total quoted', value: money(wsTotalValue), sub: `Across ${recentQuotations.length} quotations` },
-    { label: 'Completed value', value: money(recentQuotations.filter(q => q.docType === 'invoice').reduce((a, q) => a + (q.total || 0), 0)), sub: `${wsCompletedCount} quotations` },
-    { label: 'Average quotation', value: money(recentQuotations.length ? wsTotalValue / recentQuotations.length : 0), sub: 'Per enquiry' },
+    { label: 'Total quoted', value: money(wsTotalValue), sub: `Across ${wsQuoteCount} quotations` },
+    { label: 'Completed value', value: money(wsCompletedValue), sub: `${wsCompletedCount} quotations` },
+    { label: 'Average quotation', value: money(wsQuoteCount ? wsTotalValue / wsQuoteCount : 0), sub: 'Per enquiry' },
     { label: 'Drafts pending', value: String(wsDraftCount), sub: 'Finish these first' }
   ]
 
@@ -2481,15 +2489,17 @@ function App() {
     'meta-ads-leads': ['Meta ads leads', 'Who entered a lead, tried the demo, or purchased'],
     'users-admin': ['Users', 'Onboarded accounts and quotation usage']
   }
-  const [wsPageTitle, wsPageHint] = wsTitles[workspaceView] || wsTitles.home
+  const [wsPageTitle, wsPageHint] = (workspaceView === 'list' && listClient)
+    ? [listClient, 'Quotations for this client']
+    : (wsTitles[workspaceView] || wsTitles.home)
 
   return <div style={{ display: 'flex', minHeight: '100vh', alignItems: 'stretch', background: '#f5f7fa', color: '#2d3748' }}>
     <WsSidebar
       view={workspaceView}
-      onNav={(v) => { setWorkspaceView(v); setMobileNavOpen(false) }}
+      onNav={(v) => { if (v === 'list') setListClient(null); setWorkspaceView(v); setMobileNavOpen(false) }}
       onNewQuote={() => { goNewQuote(); setMobileNavOpen(false) }}
       onOpenEditor={() => { setView('open-editor'); setMobileNavOpen(false) }}
-      recentCount={recentQuotations.length}
+      recentCount={wsQuoteCount}
       authUserEmail={authUser.email}
       isMobile={isMobile}
       mobileOpen={mobileNavOpen}
@@ -2503,7 +2513,10 @@ function App() {
         title={wsPageTitle}
         hint={wsPageHint}
         showBack={workspaceView !== 'home'}
-        onBack={() => setWorkspaceView(workspaceView === 'new' ? 'home' : 'home')}
+        onBack={() => {
+          if (workspaceView === 'list' && listClient) { setListClient(null); return }
+          setWorkspaceView('home')
+        }}
         isMobile={isMobile}
         showMenu={isMobile || sidebarHidden}
         onMenu={() => {
@@ -2526,7 +2539,7 @@ function App() {
             onOpen={handleOpenQuotation}
             onClone={handleCloneQuotation}
             onConverted={handleConvertedDocument}
-            onOpenCompany={(name) => { setListQuery(name); setListTab('all'); setWorkspaceView('list') }}
+            onOpenCompany={(name) => { setListClient(name); setListTab('all'); setWorkspaceView('list') }}
             onNav={setWorkspaceView}
             onNewQuote={goNewQuote}
             onOpenEditor={() => setView('open-editor')}
@@ -2570,15 +2583,17 @@ function App() {
 
         {workspaceView === 'list' && (
           <WsList
-            quotations={recentQuotations}
-            query={listQuery}
-            setQuery={setListQuery}
+            clients={quoteOverview?.clients || []}
+            quotes={quoteOverview?.quotes || []}
+            loading={historyLoading}
+            openClient={listClient}
+            onOpenClient={setListClient}
+            refreshKey={overviewTick}
             tab={listTab}
             setTab={setListTab}
             onOpen={handleOpenQuotation}
             onClone={handleCloneQuotation}
             onConverted={handleConvertedDocument}
-            authUser={authUser}
           />
         )}
 
@@ -8290,10 +8305,26 @@ function WsQuoteConvertMenu({ disabled, menuUp = false, onSelect }) {
   )
 }
 
-function WsQuoteCard({ q, onOpen, onClone, onConverted }) {
+function cardMatchesSearch(q, query) {
+  const text = String(query || '').trim().toLowerCase()
+  if (!text) return true
+  const number = String(q.number || '').toLowerCase()
+  const title = String(q.title || '').toLowerCase()
+  if (number.includes(text) || title.includes(text)) return true
+  const compact = text.replace(/[\s,₹]/g, '')
+  const digits = compact.replace(/[^\d.]/g, '')
+  if (!digits) return false
+  const amount = Number(q.total) || 0
+  const plain = String(Math.round(amount))
+  const shown = money(amount).toLowerCase().replace(/[\s,₹]/g, '')
+  return plain.includes(digits.replace(/\./g, '')) || shown.includes(compact) || String(amount).includes(digits)
+}
+
+function WsQuoteCard({ q, onOpen, onClone, onConverted, headingFirst = false }) {
   const [convertType, setConvertType] = useState(null)
   const tag = q.docType === 'invoice' ? { label: 'COMPLETED', bg: '#e8f2ec', fg: '#2d6a4f' } : { label: 'DRAFT', bg: '#f0f3f8', fg: '#4C5768' }
   const clientName = q.customer?.company || q.customer?.name || 'No customer set'
+  const heading = q.title || q.number || 'Untitled'
   return (
     <>
     <div style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 16, padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -8302,8 +8333,10 @@ function WsQuoteCard({ q, onOpen, onClone, onConverted }) {
         <span style={{ fontSize: 13.5, color: '#8A94A6', marginLeft: 'auto' }}>{formatWsDate(q.date || q.updatedAt)}</span>
       </div>
       <div>
-        <div style={{ fontSize: 16.5, fontWeight: 600, lineHeight: 1.25 }}>{clientName}</div>
-        <div style={{ fontSize: 14, color: '#6B7688', marginTop: 4, lineHeight: 1.45 }}>{q.title || q.number}</div>
+        <div style={{ fontSize: 16.5, fontWeight: 600, lineHeight: 1.25 }}>{headingFirst ? heading : clientName}</div>
+        {(headingFirst ? (q.number && q.title ? q.number : '') : (q.title || q.number)) ? (
+          <div style={{ fontSize: 14, color: '#6B7688', marginTop: 4, lineHeight: 1.45 }}>{headingFirst ? q.number : (q.title || q.number)}</div>
+        ) : null}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 12, borderTop: '1px solid #EDF1F7' }}>
         <span style={{ fontSize: 17, fontWeight: 600 }}>{q.total ? money(q.total) : 'Not priced yet'}</span>
@@ -9157,7 +9190,7 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
   )
 }
 
-function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone, onConverted, authUser = null }) {
+function WsList({ clients, quotes = [], loading, openClient, onOpenClient, refreshKey, tab, setTab, onOpen, onClone, onConverted }) {
   const tabs = [['all', 'All'], ['draft', 'Drafts'], ['completed', 'Completed']]
   const filterOptions = [
     ['all', 'All quotations'],
@@ -9169,7 +9202,11 @@ function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone, onC
     ['this_month', 'This month'],
     ['custom_range', 'Custom range']
   ]
-
+  const [query, setQuery] = useState('')
+  const [cardQuery, setCardQuery] = useState('')
+  const [cards, setCards] = useState([])
+  const [cardsLoading, setCardsLoading] = useState(false)
+  const [cardsError, setCardsError] = useState('')
   const [filterOpen, setFilterOpen] = useState(false)
   const [advFilter, setAdvFilter] = useState('all')
   const [companyFilter, setCompanyFilter] = useState(null)
@@ -9186,17 +9223,45 @@ function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone, onC
     return () => document.removeEventListener('mousedown', onDocClick)
   }, [filterOpen])
 
+  useEffect(() => {
+    if (!openClient || quotes.length) {
+      setCards([])
+      setCardsError('')
+      return undefined
+    }
+    let cancelled = false
+    setCardsLoading(true)
+    setCardsError('')
+    listClientQuotations(openClient)
+      .then((result) => {
+        if (cancelled) return
+        if (result.unavailable) {
+          setCards([])
+          setCardsError('Quotation history is not available right now.')
+          return
+        }
+        setCards(result.quotations || [])
+      })
+      .catch((e) => {
+        if (!cancelled) setCardsError(e.message || 'Could not load this client’s quotations')
+      })
+      .finally(() => { if (!cancelled) setCardsLoading(false) })
+    return () => { cancelled = true }
+  }, [openClient, refreshKey, quotes.length])
+
+  const sourceQuotes = quotes.length ? quotes : cards
+
   const companyCounts = useMemo(() => {
     const m = new Map()
-    for (const q of quotations) {
-      const raw = (q.customer?.company || q.customer?.name || '').trim()
-      const label = raw || 'No customer set'
+    for (const q of sourceQuotes) {
+      const label = q.client || (q.customer?.company || q.customer?.name || '').trim() || 'No customer set'
       m.set(label, (m.get(label) || 0) + 1)
     }
+    if (!m.size) {
+      for (const client of clients) m.set(client.name, client.count || 0)
+    }
     return [...m.entries()].sort((a, b) => b[1] - a[1])
-  }, [quotations])
-
-  const isPriced = (q) => Number(q.total) > 0
+  }, [sourceQuotes, clients])
 
   const parseDayInput = (value) => {
     if (!value) return null
@@ -9216,17 +9281,16 @@ function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone, onC
 
   const matchesAdvFilter = (q) => {
     if (advFilter === 'all') return true
-    if (advFilter === 'not_priced') return !isPriced(q)
-    if (advFilter === 'priced') return isPriced(q)
+    if (advFilter === 'not_priced') return !(Number(q.total) > 0)
+    if (advFilter === 'priced') return Number(q.total) > 0
     if (advFilter === 'custom_range') {
       const from = parseDayInput(customFrom)
       const to = parseDayInput(customTo)
       if (!from && !to) return true
       const updated = quoteUpdatedMs(q)
       if (!updated) return false
-      const uDate = new Date(updated)
       const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
-      const uDay = startOfDay(uDate).getTime()
+      const uDay = startOfDay(new Date(updated)).getTime()
       if (from && uDay < startOfDay(from).getTime()) return false
       if (to) {
         const toEnd = startOfDay(to)
@@ -9253,57 +9317,74 @@ function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone, onC
       return uDate >= w
     }
     if (advFilter === 'this_month') {
-      const m = new Date(now.getFullYear(), now.getMonth(), 1)
-      return uDate >= m
+      return uDate >= new Date(now.getFullYear(), now.getMonth(), 1)
     }
     return true
   }
 
-  const matchesCompanyFilter = (q) => {
-    if (!companyFilter) return true
-    const raw = (q.customer?.company || q.customer?.name || '').trim()
-    const label = raw || 'No customer set'
-    return label === companyFilter
-  }
+  const clientNameOf = (q) => q.client || (q.customer?.company || q.customer?.name || '').trim() || 'No customer set'
 
-  const filterActive = advFilter !== 'all' || companyFilter
-    || (advFilter === 'custom_range' && (customFrom || customTo))
-
-  const matches = (q) => {
+  const matchesScope = (q) => {
     if (tab === 'draft' && q.docType === 'invoice') return false
     if (tab === 'completed' && q.docType !== 'invoice') return false
     if (!matchesAdvFilter(q)) return false
-    if (!matchesCompanyFilter(q)) return false
-    const hay = `${q.customer?.company || ''} ${q.customer?.name || ''} ${q.title || ''} ${q.number || ''}`.toLowerCase()
-    return hay.includes(query.toLowerCase())
+    if (companyFilter && clientNameOf(q) !== companyFilter) return false
+    if (openClient && clientNameOf(q) !== openClient) return false
+    return true
   }
-  const filtered = quotations.filter(matches)
 
-  // One row per company instead of per quotation — a company with 20
-  // quotations used to push everything else off the page; now it's one row
-  // that expands to show its quotations, same as "top clients" on Home.
-  const groups = new Map()
-  for (const q of filtered) {
-    const name = q.customer?.company || q.customer?.name || 'No customer set'
-    const g = groups.get(name) || { name, items: [], value: 0, latest: '' }
-    g.items.push(q)
-    g.value += q.total || 0
-    const d = q.date || q.updatedAt || ''
-    if (d > g.latest) g.latest = d
-    groups.set(name, g)
+  const matchesQuery = (q) => {
+    if (openClient) return cardMatchesSearch(q, cardQuery)
+    const text = String(query || '').trim().toLowerCase()
+    if (!text) return true
+    const company = clientNameOf(q).toLowerCase()
+    const title = String(q.title || '').toLowerCase()
+    return company.includes(text) || title.includes(text)
   }
-  const companies = [...groups.values()].sort((a, b) => (b.latest > a.latest ? 1 : b.latest < a.latest ? -1 : 0))
 
-  // Single-company search results (e.g. arriving from "See all" on a Home
-  // client row) don't need the extra click to expand what's already the one match.
-  const [expanded, setExpanded] = useState(null)
-  const isOpen = (name) => expanded === name || companies.length === 1
+  const filtered = sourceQuotes.filter((q) => matchesScope(q) && matchesQuery(q))
+
+  const visibleClients = useMemo(() => {
+    if (quotes.length) {
+      const groups = new Map()
+      for (const q of filtered) {
+        const name = clientNameOf(q)
+        const g = groups.get(name) || { name, count: 0, total: 0, latest: '' }
+        g.count += 1
+        g.total += q.total || 0
+        const stamp = q.updatedAt || q.date || q.createdAt || ''
+        if (stamp > g.latest) g.latest = stamp
+        groups.set(name, g)
+      }
+      return [...groups.values()].sort((a, b) => (b.latest > a.latest ? 1 : b.latest < a.latest ? -1 : 0))
+    }
+    return clients.filter((client) => {
+      if (companyFilter && client.name !== companyFilter) return false
+      if (query.trim() && !client.name.toLowerCase().includes(query.trim().toLowerCase())) return false
+      if (tab === 'draft') return client.draftCount > 0
+      if (tab === 'completed') return client.completedCount > 0
+      return client.count > 0
+    }).map((client) => ({
+      name: client.name,
+      count: tab === 'draft' ? client.draftCount : tab === 'completed' ? client.completedCount : client.count,
+      total: tab === 'draft' ? client.draftTotal : tab === 'completed' ? client.completedTotal : client.total,
+      latest: client.latest
+    }))
+  }, [quotes.length, filtered, clients, companyFilter, query, tab])
+
+  const visibleCards = filtered
+  const filterActive = advFilter !== 'all' || companyFilter || (advFilter === 'custom_range' && (customFrom || customTo))
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
         <div style={{ position: 'relative', flex: 1, minWidth: 260 }}>
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search by company or heading" style={{ width: '100%', minHeight: 54, padding: '0 16px 0 46px', border: '1.5px solid #D5DDE9', borderRadius: 14, fontSize: 16.5, background: '#fff' }} />
+          <input
+            value={openClient ? cardQuery : query}
+            onChange={e => (openClient ? setCardQuery : setQuery)(e.target.value)}
+            placeholder={openClient ? 'Search by quotation number, amount, or heading' : 'Search by company or heading'}
+            style={{ width: '100%', minHeight: 54, padding: '0 16px 0 46px', border: '1.5px solid #D5DDE9', borderRadius: 14, fontSize: 16.5, background: '#fff' }}
+          />
           <span style={{ position: 'absolute', left: 15, top: 15 }}><WsSearchIcon /></span>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -9384,14 +9465,12 @@ function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone, onC
                               type="date"
                               value={customFrom}
                               onChange={(e) => setCustomFrom(e.target.value)}
-                              placeholder="dd-mm-yyyy"
                               style={{ width: '100%', minHeight: 40, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, fontSize: 14, boxSizing: 'border-box' }}
                             />
                             <input
                               type="date"
                               value={customTo}
                               onChange={(e) => setCustomTo(e.target.value)}
-                              placeholder="dd-mm-yyyy"
                               style={{ width: '100%', minHeight: 40, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, fontSize: 14, boxSizing: 'border-box' }}
                             />
                           </div>
@@ -9408,7 +9487,7 @@ function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone, onC
                       <button
                         key={name}
                         type="button"
-                        onClick={() => { setCompanyFilter(name); setAdvFilter('all') }}
+                        onClick={() => { setCompanyFilter(name); setAdvFilter('all'); if (openClient && openClient !== name) onOpenClient(name) }}
                         style={{
                           display: 'flex',
                           alignItems: 'flex-start',
@@ -9441,46 +9520,61 @@ function WsList({ quotations, query, setQuery, tab, setTab, onOpen, onClone, onC
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {quotations.length >= 200 ? (
-          <p style={{ margin: 0, fontSize: 13.5, color: '#6B7688' }}>
-            Showing the 200 most recently updated quotations. Older ones stay in the database but are outside this list.
-          </p>
-        ) : null}
-        {companies.map(g => {
-          const open = isOpen(g.name)
-          return (
-            <div key={g.name} style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 18, overflow: 'hidden' }}>
+      {openClient ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {cardsError ? (
+            <div style={{ borderRadius: 12, background: '#FDF2F2', border: '1px solid #E7CFCF', padding: '12px 16px', fontSize: 14.5, color: '#B03A3A' }}>{cardsError}</div>
+          ) : null}
+          {cardsLoading ? (
+            <div style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 18, padding: '40px 24px', textAlign: 'center', color: '#6B7688', fontSize: 16 }}>Loading quotations…</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 14 }}>
+              {visibleCards.map(q => <WsQuoteCard key={q.id} q={q} headingFirst onOpen={onOpen} onClone={onClone} onConverted={onConverted} />)}
+            </div>
+          )}
+          {!cardsLoading && !cardsError && visibleCards.length === 0 && (
+            <div style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 18, padding: '56px 24px', textAlign: 'center' }}>
+              <div style={{ fontSize: 18, fontWeight: 750 }}>{cardQuery.trim() || filterActive ? 'No matching quotations' : 'Nothing here yet'}</div>
+              <div style={{ fontSize: 16, color: '#6B7688', marginTop: 6 }}>{cardQuery.trim() ? 'Try a quotation number, amount, or heading.' : 'Nothing in this client matches the current filter.'}</div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {loading && clients.length === 0 ? (
+            <div style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 18, padding: '40px 24px', textAlign: 'center', color: '#6B7688', fontSize: 16 }}>Loading clients…</div>
+          ) : null}
+          {visibleClients.map(client => {
+            const count = client.count || 0
+            const total = client.total || 0
+            return (
               <button
-                onClick={() => setExpanded(open ? null : g.name)}
-                style={{ display: 'flex', width: '100%', flexWrap: 'wrap', alignItems: 'center', gap: 18, padding: '18px 22px', border: 0, background: 'none', cursor: 'pointer', textAlign: 'left' }}
+                key={client.name}
+                type="button"
+                onClick={() => onOpenClient(client.name)}
+                style={{ display: 'flex', width: '100%', flexWrap: 'wrap', alignItems: 'center', gap: 18, padding: '18px 22px', border: '1px solid #e8edf3', borderRadius: 18, background: '#fff', cursor: 'pointer', textAlign: 'left' }}
               >
-                <div style={{ width: 46, height: 46, flex: '0 0 46px', borderRadius: 12, background: '#E7EEFB', color: '#1A73E8', fontSize: 19, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{g.name.charAt(0).toUpperCase()}</div>
+                <div style={{ width: 46, height: 46, flex: '0 0 46px', borderRadius: 12, background: '#E7EEFB', color: '#1A73E8', fontSize: 19, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{client.name.charAt(0).toUpperCase()}</div>
                 <div style={{ flex: 1, minWidth: 160 }}>
-                  <div style={{ fontSize: 16.5, fontWeight: 750, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{g.name}</div>
-                  <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 3 }}>{g.items.length} quotation{g.items.length === 1 ? '' : 's'}</div>
+                  <div style={{ fontSize: 16.5, fontWeight: 750, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{client.name}</div>
+                  <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 3 }}>{count} quotation{count === 1 ? '' : 's'}</div>
                 </div>
                 <div style={{ flex: '0 0 auto', textAlign: 'right' }}>
-                  <div style={{ fontSize: 17, fontWeight: 800 }}>{g.value ? money(g.value) : 'Not priced yet'}</div>
-                  <div style={{ fontSize: 14, color: '#8A94A6', marginTop: 3 }}>{formatWsDate(g.latest)}</div>
+                  <div style={{ fontSize: 17, fontWeight: 800 }}>{total ? money(total) : 'Not priced yet'}</div>
+                  <div style={{ fontSize: 14, color: '#8A94A6', marginTop: 3 }}>{formatWsDate(client.latest)}</div>
                 </div>
-                <span style={{ flex: '0 0 auto', color: '#8A94A6', fontSize: 20, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }}>⌄</span>
+                <span style={{ flex: '0 0 auto', color: '#8A94A6', fontSize: 22 }}>›</span>
               </button>
-              {open && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: 14, padding: '0 22px 22px' }}>
-                  {g.items.map(q => <WsQuoteCard key={q.id} q={q} onOpen={onOpen} onClone={onClone} onConverted={onConverted} />)}
-                </div>
-              )}
+            )
+          })}
+          {!loading && visibleClients.length === 0 && (
+            <div style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 18, padding: '56px 24px', textAlign: 'center' }}>
+              <div style={{ fontSize: 18, fontWeight: 750 }}>Nothing here yet</div>
+              <div style={{ fontSize: 16, color: '#6B7688', marginTop: 6 }}>Make a draft and it is saved here on its own.</div>
             </div>
-          )
-        })}
-        {companies.length === 0 && (
-          <div style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 18, padding: '56px 24px', textAlign: 'center' }}>
-            <div style={{ fontSize: 18, fontWeight: 750 }}>Nothing here yet</div>
-            <div style={{ fontSize: 16, color: '#6B7688', marginTop: 6 }}>Make a draft and it is saved here on its own.</div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -10400,27 +10494,27 @@ function metaLeadStatusView(lead) {
       hint: lead.purchasedAt
         ? `Payment received ${new Date(lead.purchasedAt).toLocaleString()}`
         : 'Payment received',
-      bg: '#ECFDF3',
-      color: '#15803D',
-      border: '#BBF7D0'
+      bg: '#F4FBF7',
+      color: '#3E7A57',
+      border: '#E3F2E8'
     }
   }
   if (lead?.status === 'demo' && lead?.intent === 'company') {
     return {
       label: 'Started setup',
       hint: lead.demoAt ? `Company details ${new Date(lead.demoAt).toLocaleString()}` : 'Opened company setup',
-      bg: '#F5F3FF',
-      color: '#6D28D9',
-      border: '#DDD6FE'
+      bg: '#F7F6FB',
+      color: '#6B6290',
+      border: '#E8E6F2'
     }
   }
   if (lead?.status === 'demo') {
     return {
       label: 'Tried demo',
       hint: lead.demoAt ? `Demo quotation ${new Date(lead.demoAt).toLocaleString()}` : 'Opened demo quotation',
-      bg: '#EFF6FF',
-      color: '#1D4ED8',
-      border: '#BFDBFE'
+      bg: '#F4F7FB',
+      color: '#4A6FA5',
+      border: '#E4EAF3'
     }
   }
   return {
@@ -10442,6 +10536,33 @@ const LEAD_REMINDER_OPTIONS = [
 ]
 const LEAD_ALERT_DISMISS_KEY = 'qg_lead_alert_dismissed'
 const LEAD_ALERT_SNOOZE_KEY = 'qg_lead_alert_snooze'
+
+function leadWhen(iso) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })
+}
+
+function outreachVideoView(value) {
+  const raw = String(value || '').trim().toLowerCase()
+  if (raw === 'yes' || raw === 'seen') return { label: 'Seen', color: '#1F8A4C' }
+  if (raw === 'pending' || raw === 'no') return { label: 'Not yet', color: '#C47B2B' }
+  return { label: 'No status', color: '#6B7688' }
+}
+
+function mergeSavedLead(row, next) {
+  return {
+    ...row,
+    ...next,
+    videoSeen: row.videoSeen,
+    remindersSent: row.remindersSent,
+    lastReply: row.lastReply,
+    quotationCount: next.quotationCount ?? row.quotationCount,
+    accountStatus: next.accountStatus || row.accountStatus,
+    joinedAt: next.joinedAt || row.joinedAt
+  }
+}
 
 function leadLocalInput(iso) {
   if (!iso) return ''
@@ -10586,6 +10707,8 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
   const [removing, setRemoving] = React.useState(null)
   const [removeBusy, setRemoveBusy] = React.useState(false)
   const [removeError, setRemoveError] = React.useState('')
+  const [leadFilter, setLeadFilter] = React.useState('lead')
+  const [arrivalPreview, setArrivalPreview] = React.useState(false)
 
   const load = React.useCallback(() => {
     setLoading(true)
@@ -10594,14 +10717,17 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
       .then(async (r) => {
         const data = await r.json().catch(() => ({}))
         if (!r.ok) throw new Error(data.error || data.message || `Could not load leads (${r.status})`)
-        setTotal(data.total || 0)
-        setCounts({
-          lead: Number(data.counts?.lead) || 0,
-          demo: Number(data.counts?.demo) || 0,
-          purchased: Number(data.counts?.purchased) || 0,
-          inactive: Number(data.counts?.inactive) || 0
-        })
-        setLeads(Array.isArray(data.leads) ? data.leads : [])
+        const rows = (Array.isArray(data.leads) ? data.leads : []).filter((lead) => !isHiddenMetaLead(lead))
+        const nextCounts = { lead: 0, demo: 0, purchased: 0, inactive: 0 }
+        for (const lead of rows) {
+          if (lead.deactivated) nextCounts.inactive += 1
+          else if (lead.status === 'purchased') nextCounts.purchased += 1
+          else if (lead.status === 'demo') nextCounts.demo += 1
+          else nextCounts.lead += 1
+        }
+        setTotal(rows.length)
+        setCounts(nextCounts)
+        setLeads(rows)
       })
       .catch((e) => setError(e.message || 'Could not load leads'))
       .finally(() => setLoading(false))
@@ -10627,6 +10753,15 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [removing, removeBusy])
 
+  React.useEffect(() => {
+    if (!arrivalPreview) return undefined
+    const onKey = (event) => {
+      if (event.key === 'Escape') setArrivalPreview(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [arrivalPreview])
+
   const setLeadActive = async (lead, active) => {
     setRowBusy(lead.id)
     setError('')
@@ -10638,7 +10773,7 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.error || data.message || 'Could not update this lead')
-      setLeads((rows) => rows.map((row) => (row.id === data.lead.id ? data.lead : row)))
+      setLeads((rows) => rows.map((row) => (row.id === data.lead.id ? mergeSavedLead(row, data.lead) : row)))
       setCounts((prev) => {
         const next = { ...prev }
         const wasInactive = Boolean(lead.deactivated)
@@ -10718,7 +10853,7 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
       })
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.error || data.message || 'Could not save')
-      setLeads((rows) => rows.map((row) => (row.id === data.lead.id ? data.lead : row)))
+      setLeads((rows) => rows.map((row) => (row.id === data.lead.id ? mergeSavedLead(row, data.lead) : row)))
       setEditing(null)
       setDraft(null)
     } catch (err) {
@@ -10728,135 +10863,170 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
     }
   }
 
-  const statChip = (label, value, color) => (
-    <div style={{ minWidth: 88 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: '#6B7688' }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 800, color, letterSpacing: '-0.03em', lineHeight: 1.1 }}>{loading ? '…' : value}</div>
-    </div>
-  )
+  const seenPeople = new Set()
+  for (const lead of leads) {
+    if (/^yes$/i.test(String(lead.videoSeen || ''))) seenPeople.add(String(lead.phone || lead.email || lead.id))
+  }
+  const videoSeenCount = seenPeople.size
+  const remindedQuiet = (lead) => Number(lead.remindersSent) > 0
+    && !(Number(lead.quotationCount) > 0)
+    && !/^yes$/i.test(String(lead.lastReply || '').trim())
+  const remindersSentTotal = leads.filter(remindedQuiet).length
+  const statCards = [
+    { id: 'lead', label: 'Total leads', value: counts.lead, color: '#4C5768' },
+    { id: 'demo', label: 'Started trial', value: counts.demo, color: '#1A73E8' },
+    { id: 'purchased', label: 'Purchased', value: counts.purchased, color: '#1F8A4C' },
+    { id: 'video', label: 'Video seen', value: videoSeenCount, color: '#1F8A4C' },
+    { id: 'reminders', label: 'Reminders sent', value: remindersSentTotal, color: '#C47B2B' }
+  ]
+  const visibleLeads = leads.filter((lead) => {
+    if (leadFilter === 'purchased') return !lead.deactivated && lead.status === 'purchased'
+    if (leadFilter === 'demo') return !lead.deactivated && lead.status === 'demo'
+    if (leadFilter === 'lead') return !lead.deactivated && lead.status !== 'purchased' && lead.status !== 'demo'
+    if (leadFilter === 'video') return /^yes$/i.test(String(lead.videoSeen || ''))
+    if (leadFilter === 'reminders') return remindedQuiet(lead)
+    return true
+  })
 
   return (
-    <div style={{ maxWidth: 1180, display: 'flex', flexDirection: 'column', gap: 18 }}>
-      <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 26 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start', justifyContent: 'space-between' }}>
+    <div style={{ maxWidth: 1080, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: '22px 22px 18px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8' }}>Meta ads landing</div>
             <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: '#1a202c' }}>Trial form leads</div>
-            <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4 }}>
-              Who submitted a lead, tried the demo, or completed a purchase.
+            <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4, maxWidth: 520 }}>
+              Each person on their own card. Video seen and reminders sent come from the outreach sheet.
             </div>
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, textAlign: 'right' }}>
-            {statChip('Purchased', counts.purchased, '#15803D')}
-            {statChip('Started trial', counts.demo, '#1A73E8')}
-            {statChip('Lead only', counts.lead, '#64748B')}
-            {statChip('Inactive', counts.inactive, '#94A3B8')}
-            {statChip('Total', total, '#1A73E8')}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {canDelete && (
+              <button
+                type="button"
+                onClick={() => setArrivalPreview(true)}
+                style={{ minHeight: 42, padding: '0 14px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#1A73E8' }}
+              >
+                Preview screen
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={load}
+              disabled={loading}
+              style={{ minHeight: 42, padding: '0 16px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#3D4859', opacity: loading ? 0.6 : 1 }}
+            >
+              {loading ? 'Refreshing…' : 'Refresh'}
+            </button>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={load}
-          disabled={loading}
-          style={{ marginTop: 16, minHeight: 42, padding: '0 16px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#3D4859', opacity: loading ? 0.6 : 1 }}
-        >
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </button>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))', gap: 10, marginTop: 18 }}>
+          {statCards.map((stat) => {
+            const active = leadFilter === stat.id
+            return (
+              <button
+                key={stat.id}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setLeadFilter(active && stat.id !== 'lead' ? 'lead' : stat.id)}
+                style={{
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  background: active ? '#fff' : '#FBFCFE',
+                  border: `1.5px solid ${active ? stat.color : '#EEF2F6'}`,
+                  boxShadow: active ? `0 0 0 3px ${stat.color}22` : 'none',
+                  borderRadius: 14,
+                  padding: '12px 14px'
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 700, color: active ? stat.color : '#6B7688' }}>{stat.label}</div>
+                <div style={{ marginTop: 4, fontSize: 24, fontWeight: 800, color: stat.color, letterSpacing: '-0.03em', lineHeight: 1.1 }}>{loading ? '…' : stat.value}</div>
+              </button>
+            )
+          })}
+        </div>
         {error && (
           <p style={{ marginTop: 14, borderRadius: 10, background: '#FDF2F2', border: '1px solid #E7CFCF', padding: '10px 14px', fontSize: 14, color: '#B03A3A' }}>{error}</p>
         )}
       </section>
 
-      <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 22, overflow: 'auto' }}>
-        <div style={{ fontSize: 15, fontWeight: 750, marginBottom: 12 }}>Leads</div>
-        {!loading && leads.length === 0 && !error && (
+      {!loading && leads.length === 0 && !error && (
+        <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 28 }}>
           <p style={{ margin: 0, fontSize: 14.5, color: '#94a3b8' }}>No leads yet. Submit the form on /metaadslanding to test.</p>
-        )}
-        {leads.length > 0 && (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-            <thead>
-              <tr style={{ textAlign: 'left', color: '#6B7688', fontSize: 12, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Name</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Status</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Phone</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Email</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Company</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Quotes / month</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Industry</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Made</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Account</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Joined</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>Follow-up</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }}>When</th>
-                <th style={{ padding: '10px 8px', borderBottom: '1px solid #EDF1F7', fontWeight: 700 }} />
-              </tr>
-            </thead>
-            <tbody>
-              {leads.map((lead) => {
-                const status = lead.deactivated
-                  ? { label: 'Inactive', hint: 'Deactivated', bg: '#F8FAFC', color: '#94A3B8', border: '#E2E8F0' }
-                  : metaLeadStatusView(lead)
-                const muted = lead.deactivated ? '#94A3B8' : null
-                return (
-                  <tr key={lead.id} style={lead.deactivated ? { background: '#F8FAFC' } : undefined}>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', fontWeight: 650, color: muted || '#1a202c' }}>{lead.name}</td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', verticalAlign: 'top' }}>
-                      <span style={{
-                        display: 'inline-block',
-                        padding: '4px 10px',
-                        borderRadius: 999,
-                        background: status.bg,
-                        color: status.color,
-                        border: `1px solid ${status.border}`,
-                        fontSize: 12,
-                        fontWeight: 750,
-                        whiteSpace: 'nowrap'
-                      }}>
-                        {status.label}
-                      </span>
-                      <div style={{ marginTop: 4, fontSize: 12, color: '#8A94A6', maxWidth: 220 }}>{status.hint}</div>
-                    </td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', whiteSpace: 'nowrap' }}>
-                      <a href={`tel:+91${lead.phone}`} style={{ color: muted || '#1A73E8', textDecoration: 'none', fontWeight: 600 }}>+91 {lead.phone}</a>
-                    </td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', wordBreak: 'break-all' }}>
-                      <a href={`mailto:${lead.email}`} style={{ color: muted || '#1A73E8', textDecoration: 'none' }}>{lead.email}</a>
-                    </td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859' }}>{lead.company || '—'}</td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859', whiteSpace: 'nowrap' }}>{lead.monthlyQuotes || '—'}</td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859' }}>{lead.industry || '—'}</td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859', whiteSpace: 'nowrap', fontWeight: 700 }}>
-                      {lead.quotationCount == null ? '—' : lead.quotationCount}
-                    </td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9' }}>
-                      <LeadAccountBadge status={lead.accountStatus} />
-                    </td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#8A94A6', whiteSpace: 'nowrap', fontSize: 13 }}>
-                      {lead.joinedAt ? new Date(lead.joinedAt).toLocaleString() : '—'}
-                    </td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: muted || '#3D4859', fontSize: 13, maxWidth: 180 }}>
-                      {lead.followUpAt ? new Date(lead.followUpAt).toLocaleString() : '—'}
-                      {lead.remarks ? <div style={{ marginTop: 4, color: '#8A94A6' }}>{lead.remarks}</div> : null}
-                    </td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', color: '#8A94A6', whiteSpace: 'nowrap', fontSize: 13 }}>
-                      {lead.createdAt ? new Date(lead.createdAt).toLocaleString() : ''}
-                    </td>
-                    <td style={{ padding: '12px 8px', borderBottom: '1px solid #F1F5F9', whiteSpace: 'nowrap' }}>
-                      <button type="button" onClick={() => openEditor(lead)} style={{ minHeight: 36, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: '#1A73E8', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
-                      <button type="button" disabled={rowBusy === lead.id} onClick={() => setLeadActive(lead, lead.deactivated)} style={{ minHeight: 36, marginLeft: 8, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: '#3D4859', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
-                        {rowBusy === lead.id ? 'Saving…' : lead.deactivated ? 'Activate' : 'Deactivate'}
-                      </button>
-                      {canDelete ? (
-                        <button type="button" onClick={() => { setRemoveError(''); setRemoving(lead) }} style={{ minHeight: 36, marginLeft: 8, padding: '0 12px', border: '1.5px solid #E7CFCF', borderRadius: 10, background: '#fff', color: '#B03A3A', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Delete</button>
-                      ) : null}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
-      </section>
+        </section>
+      )}
+
+      {!loading && leads.length > 0 && visibleLeads.length === 0 && (
+        <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 28 }}>
+          <p style={{ margin: 0, fontSize: 14.5, color: '#6B7688' }}>No leads in this filter.</p>
+        </section>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {visibleLeads.map((lead) => {
+          const status = lead.deactivated
+            ? { label: 'Inactive', hint: 'Deactivated', bg: '#F8FAFC', color: '#94A3B8', border: '#E2E8F0' }
+            : metaLeadStatusView(lead)
+          const video = outreachVideoView(lead.videoSeen)
+          const muted = lead.deactivated ? '#94A3B8' : '#1a202c'
+          const detail = (label, value) => (
+            <div key={label} style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#94A3B8' }}>{label}</div>
+              <div style={{ marginTop: 3, fontSize: 14.5, fontWeight: 650, color: muted, overflowWrap: 'anywhere' }}>{value}</div>
+            </div>
+          )
+          return (
+            <article key={lead.id} style={{ background: lead.deactivated ? '#F8FAFC' : '#fff', border: '1px solid #e8edf3', borderRadius: 18, padding: 18 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', gap: 12, minWidth: 0, flex: '1 1 240px' }}>
+                  <div style={{ width: 44, height: 44, flex: '0 0 44px', borderRadius: 12, background: '#F4F7FB', color: '#5B7C9A', fontSize: 18, fontWeight: 750, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {(lead.name || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 17, fontWeight: 800, color: muted, lineHeight: 1.25 }}>{lead.name || 'Unnamed lead'}</div>
+                    <div style={{ marginTop: 3, fontSize: 14, color: '#6B7688' }}>
+                      {[lead.company, lead.industry].filter(Boolean).join(' · ') || 'No company yet'}
+                    </div>
+                    <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                      <span style={{ display: 'inline-block', padding: '4px 10px', borderRadius: 999, background: status.bg, color: status.color, border: `1px solid ${status.border}`, fontSize: 12, fontWeight: 750 }}>{status.label}</span>
+                      <span style={{ fontSize: 12.5, color: '#8A94A6' }}>{status.hint}</span>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flex: '1 1 360px' }}>
+                  {[
+                    { label: 'Video', value: video.label, color: video.color },
+                    { label: 'Reminders sent', value: lead.remindersSent == null ? '—' : lead.remindersSent, color: '#C47B2B' },
+                    { label: 'Quotations made', value: lead.quotationCount == null ? '—' : lead.quotationCount, color: '#1A73E8' }
+                  ].map((metric) => (
+                    <div key={metric.label} style={{ flex: 1, minWidth: 104, borderRadius: 12, border: '1px solid #EEF2F6', background: '#FBFCFE', padding: '10px 12px' }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#6B7688' }}>{metric.label}</div>
+                      <div style={{ marginTop: 2, fontSize: 18, fontWeight: 750, color: metric.color }}>{metric.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px 18px', marginTop: 16, paddingTop: 14, borderTop: '1px solid #EDF1F7' }}>
+                {detail('Phone', lead.phone ? <a href={`tel:+91${lead.phone}`} style={{ color: '#1A73E8', textDecoration: 'none' }}>+91 {lead.phone}</a> : '—')}
+                {detail('Email', lead.email ? <a href={`mailto:${lead.email}`} style={{ color: '#1A73E8', textDecoration: 'none' }}>{lead.email}</a> : '—')}
+                {detail('Quotes / month', lead.monthlyQuotes || '—')}
+                {detail('Account', <LeadAccountBadge status={lead.accountStatus} />)}
+                {detail('Joined', leadWhen(lead.joinedAt))}
+                {detail('Follow-up', leadWhen(lead.followUpAt))}
+              </div>
+              {lead.remarks ? <div style={{ marginTop: 12, fontSize: 13.5, color: '#6B7688', lineHeight: 1.45 }}>{lead.remarks}</div> : null}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14 }}>
+                <button type="button" onClick={() => openEditor(lead)} style={{ minHeight: 36, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: '#1A73E8', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
+                <button type="button" disabled={rowBusy === lead.id} onClick={() => setLeadActive(lead, lead.deactivated)} style={{ minHeight: 36, padding: '0 12px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', color: '#3D4859', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                  {rowBusy === lead.id ? 'Saving…' : lead.deactivated ? 'Activate' : 'Deactivate'}
+                </button>
+                {canDelete ? (
+                  <button type="button" onClick={() => { setRemoveError(''); setRemoving(lead) }} style={{ minHeight: 36, padding: '0 12px', border: '1.5px solid #E7CFCF', borderRadius: 10, background: '#fff', color: '#B03A3A', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Delete</button>
+                ) : null}
+              </div>
+            </article>
+          )
+        })}
+      </div>
       {editing && draft && createPortal(
         <div
           role="dialog"
@@ -10896,6 +11066,29 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
               <button type="button" disabled={saving} onClick={saveEditor} style={{ flex: 1, minHeight: 46, border: 0, borderRadius: 12, background: '#1A73E8', color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer' }}>{saving ? 'Saving…' : 'Save'}</button>
             </div>
           </div>
+        </div>,
+        document.body
+      )}
+      {arrivalPreview && canDelete && createPortal(
+        <div style={{ position: 'fixed', inset: 0, zIndex: 220, overflow: 'auto', background: '#070B14' }}>
+          <button
+            type="button"
+            onClick={() => setArrivalPreview(false)}
+            style={{ position: 'fixed', top: 16, right: 16, zIndex: 221, minHeight: 36, padding: '0 14px', borderRadius: 999, border: '1px solid rgba(255,255,255,.22)', background: 'rgba(255,255,255,.1)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+          >
+            Close preview
+          </button>
+          <MetaAdsLanding
+            celebrate
+            onContinueTrial={() => {
+              try {
+                sessionStorage.setItem('qg_admin_demo_preview', '1')
+                sessionStorage.setItem('qg_demo_from_intro', '1')
+              } catch { /* ignore */ }
+              window.location.assign('/demo')
+            }}
+            onSignIn={() => setArrivalPreview(false)}
+          />
         </div>,
         document.body
       )}

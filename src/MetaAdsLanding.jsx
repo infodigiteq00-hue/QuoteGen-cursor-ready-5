@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import WelcomeIntro, { startWelcomeMusic } from './WelcomeIntro.jsx'
 import logoUrl from './assets/landing/quotegen-logo.png'
 import { META_ADS_LEAD_KEY as LEAD_KEY, readMetaAdsLead, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaWelcome, recordMetaLeadProgress } from './metaTrialLead.js'
 import { trackPixel } from './metaPixel.js'
@@ -227,7 +228,13 @@ function NextChoices({ lead, onNextStep }) {
   )
 }
 
-function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn }) {
+function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn, onTryDemo }) {
+  const [intro, setIntro] = useState(false)
+  const stopMusic = useRef(null)
+  useEffect(() => () => { stopMusic.current?.() }, [])
+  if (intro) {
+    return <WelcomeIntro onDone={() => { stopMusic.current?.(); onTryDemo?.() }} />
+  }
   let body = null
   if (saving) {
     body = (
@@ -262,12 +269,21 @@ function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn }) {
             <path className="meta-success-check" d="M15 27.5l7.2 7.2L37.5 18" />
           </svg>
         </div>
-        <p className="meta-next-kicker">Great, your enquiry is submitted</p>
-        <h2>Your enquiry has been received.</h2>
-        <p className="meta-form-lead">Our team will reach out to you shortly.</p>
-        <p className="meta-success-support">
-          Need help sooner? Call us on <a href="tel:+919067610118">+91 90676 10118</a>
-        </p>
+        <p className="meta-next-kicker">You’re all set</p>
+        <h2>Your account has been successfully set up.</h2>
+        <p className="meta-form-lead">Let’s start with your first trial now.</p>
+        <button
+          type="button"
+          className="meta-btn meta-btn-primary meta-btn-lg"
+          style={CTA_STYLE}
+          onClick={() => {
+            stopMusic.current?.()
+            stopMusic.current = startWelcomeMusic()
+            setIntro(true)
+          }}
+        >
+          Try QuoteGen
+        </button>
         <a
           className="meta-success-signin"
           href="/signin"
@@ -276,7 +292,7 @@ function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn }) {
             onSignIn?.()
           }}
         >
-          Sign in
+          Already have a password? Sign in
         </a>
       </div>
     )
@@ -502,6 +518,7 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial, onStartVerif
   // not restore the post-submit “You’re in” screen from a prior attempt.
   // A signed-in user coming Back from the trial guide lands on the choice card.
   useEffect(() => {
+    if (celebrate) return
     if (initialLead) {
       document.getElementById('trial-form')?.scrollIntoView({ block: 'center' })
       return
@@ -511,7 +528,7 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial, onStartVerif
       sessionStorage.removeItem('qg_meta_otp_sent')
     } catch { /* ignore */ }
     clearMetaTrialIntent()
-  }, [])
+  }, [celebrate, initialLead])
 
   useEffect(() => {
     const el = document.getElementById('trial-form')
@@ -568,6 +585,7 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial, onStartVerif
         saveError={saveError}
         onRetrySave={onRetrySave}
         onSignIn={onSignIn}
+        onTryDemo={onContinueTrial}
       />
     )
   }

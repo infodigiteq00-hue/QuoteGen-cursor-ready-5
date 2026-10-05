@@ -8,8 +8,10 @@ import { getCurrentSession, installAuthFetch, onAuthChange } from './apiAuth.js'
 import { initMetaPixel, trackPixel } from './metaPixel.js'
 import {
   clearMetaWelcome,
+  markMetaTrialUnpaid,
   readMetaAdsLead,
   readMetaWelcome,
+  recordMetaLeadProgress,
   saveVerifiedMetaLead,
   writeMetaAdsLead,
   writeMetaWelcome
@@ -91,6 +93,15 @@ function AdsApp() {
 
   const openSignIn = () => { window.location.assign('/signin') }
 
+  const openTrialDemo = () => {
+    const lead = readMetaAdsLead()
+    markMetaTrialUnpaid(lead?.email)
+    recordMetaLeadProgress('demo', lead)
+    clearMetaWelcome()
+    try { sessionStorage.setItem('qg_demo_from_intro', '1') } catch { /* ignore */ }
+    window.location.assign('/demo')
+  }
+
   if (!authChecked) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-3.5 bg-mist">
@@ -155,6 +166,7 @@ function AdsApp() {
             .finally(() => setSaving(false))
         }}
         onSignIn={openSignIn}
+        onContinueTrial={openTrialDemo}
       />
     )
   }

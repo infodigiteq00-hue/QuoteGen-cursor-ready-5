@@ -405,6 +405,26 @@ export async function saveProduct(product) {
   return { unavailable: false, product: data.product || null }
 }
 
+export async function listQuotationClients() {
+  const response = await fetch('/api/quotations/clients')
+  const data = await response.json().catch(() => ({}))
+  if (isPersistenceUnavailable(response, data)) {
+    return { unavailable: true, clients: [], recent: [], quotationCount: 0 }
+  }
+  if (!response.ok) throw new Error(data.error || 'Could not list clients')
+  return { unavailable: false, ...data, clients: data.clients || [], recent: data.recent || [] }
+}
+
+export async function listClientQuotations(name) {
+  const response = await fetch(`/api/quotations/by-client?name=${encodeURIComponent(name)}`)
+  const data = await response.json().catch(() => ({}))
+  if (isPersistenceUnavailable(response, data)) {
+    return { unavailable: true, quotations: [] }
+  }
+  if (!response.ok) throw new Error(data.error || 'Could not list quotations')
+  return { unavailable: false, quotations: data.quotations || [] }
+}
+
 export async function listQuotations(limit = 200) {
   const safeLimit = Math.min(Math.max(Number(limit) || 200, 1), 200)
   const response = await fetch(`/api/quotations?limit=${safeLimit}`)

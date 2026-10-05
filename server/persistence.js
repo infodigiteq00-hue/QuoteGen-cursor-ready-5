@@ -1331,6 +1331,176 @@ If something isn't specified, keep the current value.`
   })
 
   // ----- quotations CRUD -----
+  function clientLabel(customer) {
+    const company = String(customer?.company || '').trim()
+    const name = String(customer?.name || '').trim()
+    return company || name || 'No customer set'
+  }
+
+  function rowCustomer(row) {
+    return row.customer || row.data?.customer || {}
+  }
+
+  function rowItems(row) {
+    if (Array.isArray(row.items)) return row.items
+    return Array.isArray(row.data?.items) ? row.data.items : []
+  }
+
+  function rowColumns(row) {
+    if (Array.isArray(row.columns)) return row.columns
+    return Array.isArray(row.data?.columns) ? row.data.columns : []
+  }
+
+  function rowExtra(row) {
+    return row.extra_lines || row.extraLines || row.data?.extraLines
+  }
+
+  function cardFromRow(row) {
+    const items = rowItems(row)
+    const cols = rowColumns(row)
+    let total = 0
+    try { total = computeQuoteTotals(items, cols, rowExtra(row)).grandTotal || 0 } catch { total = 0 }
+    const customer = rowCustomer(row)
+    return {
+      id: row.id,
+      number: row.number || '',
+      title: row.title || '',
+      date: row.quote_date || null,
+      updatedAt: row.updated_at || null,
+      createdAt: row.created_at || null,
+      docType: row.doc_type || row.data?.docType || 'quotation',
+      itemCount: items.length,
+      total,
+      client: clientLabel(customer),
+      customer: { company: String(customer.company || '').trim(), name: String(customer.name || '').trim() }
+    }
+  }
+
+  const quotationCardCache = new Map()
+
+  function forgetQuotationCards(userId) {
+    quotationCardCache.delete(userId)
+  }
+
+  async function loadQuotationCards(supabase, userId) {
+    const hit = quotationCardCache.get(userId)
+    if (hit && Date.now() - hit.at < 20000) return hit.cards
+    const variants = [
+      'id, number, title, quote_date, updated_at, created_at, doc_type, customer:data->customer, items:data->items, columns:data->columns, extra_lines:data->extraLines',
+      'id, number, title, quote_date, updated_at, created_at, customer:data->customer, items:data->items, columns:data->columns, extra_lines:data->extraLines',
+      'id, number, title, quote_date, updated_at, created_at, doc_type, data',
+      'id, number, title, quote_date, updated_at, created_at, data'
+    ]
+    let columns = null
+    const rows = []
+    const pageSize = 80
+    for (let from = 0; from < 20000; from += pageSize) {
+      let page = null
+      let error = null
+      const attempts = columns ? [columns] : variants
+      for (const candidate of attempts) {
+        ;({ data: page, error } = await supabase
+          .from('quotations')
+          .select(candidate)
+          .eq('user_id', userId)
+          .order('updated_at', { ascending: false })
+          .range(from, from + pageSize - 1))
+        if (!error) {
+          columns = candidate
+          break
+        }
+      }
+      if (error) throw error
+      rows.push(...(page || []))
+      if (!page || page.length < pageSize) break
+    }
+    const cards = rows.map(cardFromRow)
+    quotationCardCache.set(userId, { at: Date.now(), cards })
+    return cards
+  }
+
+  app.get('/api/quotations/clients', async (req, res) => {
+    const requestId = `q-clients-${Date.now()}`
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+    try {
+      const cards = await loadQuotationCards(supabase, req.userId)
+      const groups = new Map()
+      let draftCount = 0
+      let completedCount = 0
+      let thisMonthCount = 0
+      let total = 0
+      let completedTotal = 0
+      const now = new Date()
+      for (const card of cards) {
+        const key = card.client
+        const group = groups.get(key) || {
+          name: key,
+          count: 0,
+          total: 0,
+          latest: '',
+          draftCount: 0,
+          draftTotal: 0,
+          completedCount: 0,
+          completedTotal: 0
+        }
+        group.count += 1
+        group.total += card.total || 0
+        const stamp = card.updatedAt || card.date || card.createdAt || ''
+        if (stamp > group.latest) group.latest = stamp
+        const completed = card.docType === 'invoice'
+        if (completed) {
+          group.completedCount += 1
+          group.completedTotal += card.total || 0
+          completedCount += 1
+          completedTotal += card.total || 0
+        } else {
+          group.draftCount += 1
+          group.draftTotal += card.total || 0
+          draftCount += 1
+        }
+        total += card.total || 0
+        const updated = new Date(card.updatedAt || card.createdAt || '')
+        if (!Number.isNaN(updated.getTime()) && updated.getMonth() === now.getMonth() && updated.getFullYear() === now.getFullYear()) {
+          thisMonthCount += 1
+        }
+        groups.set(key, group)
+      }
+      const clients = [...groups.values()].sort((a, b) => (b.latest > a.latest ? 1 : b.latest < a.latest ? -1 : 0))
+      const recent = cards.slice(0, 4).map(({ client, ...card }) => card)
+      res.json({
+        quotationCount: cards.length,
+        draftCount,
+        completedCount,
+        thisMonthCount,
+        total,
+        completedTotal,
+        clients,
+        recent,
+        quotes: cards
+      })
+    } catch (error) {
+      supabaseError(error, res, requestId)
+    }
+  })
+
+  app.get('/api/quotations/by-client', async (req, res) => {
+    const requestId = `q-client-${Date.now()}`
+    const supabase = requireDb(res, requestId)
+    if (!supabase) return
+    const name = String(req.query.name || '').trim()
+    if (!name) return res.status(400).json({ error: 'Client name is required.', code: 'VALIDATION', requestId })
+    try {
+      const cards = await loadQuotationCards(supabase, req.userId)
+      const quotations = cards
+        .filter((card) => card.client === name)
+        .map(({ client, ...card }) => card)
+      res.json({ quotations })
+    } catch (error) {
+      supabaseError(error, res, requestId)
+    }
+  })
+
   app.get('/api/quotations', async (req, res) => {
     const requestId = `q-list-${Date.now()}`
     const supabase = requireDb(res, requestId)
@@ -1424,6 +1594,7 @@ If something isn't specified, keep the current value.`
         .select('*')
         .single()
       if (error) throw error
+      forgetQuotationCards(req.userId)
       res.status(201).json({ quotation: mapQuotation(data) })
     } catch (error) {
       supabaseError(error, res, requestId)
@@ -1445,6 +1616,7 @@ If something isn't specified, keep the current value.`
         .maybeSingle()
       if (error) throw error
       if (!data) return res.status(404).json({ error: 'Quotation not found.', code: 'NOT_FOUND', requestId })
+      forgetQuotationCards(req.userId)
       res.json({ quotation: mapQuotation(data) })
     } catch (error) {
       supabaseError(error, res, requestId)
@@ -1572,6 +1744,7 @@ If something isn't specified, keep the current value.`
         .select('*')
         .single()
       if (error) throw error
+      forgetQuotationCards(req.userId)
       res.status(201).json({ invoice: mapQuotation(data) })
     } catch (error) {
       supabaseError(error, res, requestId)
@@ -1628,6 +1801,7 @@ If something isn't specified, keep the current value.`
       }
 
       console.log(`[${requestId}] quotation deleted`, { id, userId: req.userId })
+      forgetQuotationCards(req.userId)
       res.json({ ok: true, id })
     } catch (error) {
       if (busy(error)) {

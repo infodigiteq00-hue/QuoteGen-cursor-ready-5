@@ -27,7 +27,13 @@ select:focus {
 /* Outer canvas (coloured background behind the white paper) */
 .qg-studio-canvas {
   padding: 28px 32px 56px 24px;
-  overflow-x: auto;
+  overflow-x: hidden;
+  width: 100%;
+  max-width: 100%;
+}
+.qg-studio-fit {
+  position: relative;
+  width: 100%;
 }
 .qg-studio-paper-frame {
   margin: 0 auto;
@@ -4871,18 +4877,8 @@ body, #root {
 }
 
 @media screen {
-  .qg-studio-canvas {
-    container-type: inline-size;
-  }
   .qg-studio-paper-frame {
-    zoom: clamp(0.25, calc(100cqi / var(--qg-paper-width, 840px)), 1);
-  }
-}
-@supports not (width: 1cqi) {
-  @media screen and (max-width: 899px) {
-    .qg-studio-paper-frame {
-      zoom: clamp(0.25, calc((100vw - 20px) / var(--qg-paper-width, 840px)), 1);
-    }
+    zoom: 1;
   }
 }
 
@@ -5054,10 +5050,31 @@ body, #root {
   .qg-studio-canvas {
     container-type: normal;
   }
+  .qg-studio-fit {
+    height: auto !important;
+  }
   .qg-studio-paper-frame,
   .upload-word-page {
     zoom: 1 !important;
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    margin-left: 0 !important;
+    transform: none !important;
   }
+}
+html.qg-pdf-capture .qg-studio-fit,
+html.qg-a4-export .qg-studio-fit {
+  height: auto !important;
+}
+html.qg-pdf-capture .qg-studio-paper-frame,
+html.qg-a4-export .qg-studio-paper-frame {
+  position: static !important;
+  left: auto !important;
+  top: auto !important;
+  margin-left: 0 !important;
+  transform: none !important;
+  zoom: 1 !important;
 }
 
 /* Native Word preview (docx-preview) */

@@ -1244,6 +1244,47 @@ export function QuoteStudioCanvas({
     '--qg-accent-ink': theme.accentInk || theme.accent,
     '--qg-accent-on': theme.accentOn || '#ffffff'
   }
+  const canvasRef = useRef(null)
+  const frameRef = useRef(null)
+  const [fit, setFit] = useState({ scale: 1, height: 0 })
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current
+    const frame = frameRef.current
+    if (!canvas || !frame) return undefined
+    const apply = () => {
+      const exporting = document.documentElement.classList.contains('qg-a4-export')
+        || document.documentElement.classList.contains('qg-pdf-capture')
+      if (exporting) {
+        setFit({ scale: 1, height: 0 })
+        return
+      }
+      const cs = getComputedStyle(canvas)
+      const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+      const available = Math.max(0, canvas.clientWidth - pad)
+      const scale = available > 32 ? Math.min(1, available / width) : 1
+      const height = frame.offsetHeight || 0
+      setFit((prev) => (
+        Math.abs(prev.scale - scale) < 0.008 && Math.abs((prev.height || 0) - height) < 2
+          ? prev
+          : { scale, height }
+      ))
+    }
+    apply()
+    const ro = new ResizeObserver(apply)
+    ro.observe(canvas)
+    ro.observe(frame)
+    const mo = new MutationObserver(apply)
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    window.addEventListener('resize', apply)
+    return () => {
+      ro.disconnect()
+      mo.disconnect()
+      window.removeEventListener('resize', apply)
+    }
+  }, [width, pages.length])
+
+  const scaled = fit.scale < 0.995
   const paperVars = {
     background: theme.paperBg,
     color: theme.text,
@@ -1259,7 +1300,7 @@ export function QuoteStudioCanvas({
   }
 
   return (
-    <div className="qg-studio-canvas" style={{ background: theme.pageBg, '--qg-paper-width': `${width}px`, ...themeTokens }}>
+    <div ref={canvasRef} className="qg-studio-canvas" style={{ background: theme.pageBg, '--qg-paper-width': `${width}px`, ...themeTokens }}>
       <style>{`@page { size: ${pageSize}; margin: 0; page-orientation: upright; }
 @page qg-studio { size: ${pageSize}; margin: 0; page-orientation: upright; }
 @media print {
@@ -1274,7 +1315,22 @@ export function QuoteStudioCanvas({
         <span>{runningFooter?.left || ''}</span>
         <span>{runningFooter?.right || ''}{runningFooter?.right ? ' · ' : ''}Page <span className="qg-print-page-num" /></span>
       </div>
-      <div className="qg-studio-paper-frame" style={{ width }}>
+      <div className="qg-studio-fit" style={scaled ? { height: Math.ceil(fit.height * fit.scale) } : undefined}>
+      <div
+        ref={frameRef}
+        className="qg-studio-paper-frame"
+        style={{
+          width,
+          ...(scaled ? {
+            position: 'absolute',
+            left: '50%',
+            top: 0,
+            marginLeft: -(width / 2),
+            transform: `scale(${fit.scale})`,
+            transformOrigin: 'top center'
+          } : {})
+        }}
+      >
         {pages.map((page, i) => (
           <article
             key={i}
@@ -1304,6 +1360,7 @@ export function QuoteStudioCanvas({
             />
           </article>
         ))}
+      </div>
       </div>
     </div>
   )

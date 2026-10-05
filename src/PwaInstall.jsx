@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import logoUrl from './assets/landing/quotegen-logo.png'
 import {
-  isPwaInstalled,
+  isPwaSaved,
   onPwaInstallOpen,
   onPwaInstalled,
   openPwaInstall,
@@ -29,9 +29,9 @@ function Shot({ children, caption }) {
 }
 
 export function usePwaInstallAvailable() {
-  const [available, setAvailable] = useState(() => !isPwaInstalled())
+  const [available, setAvailable] = useState(() => !isPwaSaved())
   useEffect(() => {
-    const sync = () => setAvailable(!isPwaInstalled())
+    const sync = () => setAvailable(!isPwaSaved())
     const media = window.matchMedia?.('(display-mode: standalone)')
     media?.addEventListener?.('change', sync)
     const stop = onPwaInstalled(sync)

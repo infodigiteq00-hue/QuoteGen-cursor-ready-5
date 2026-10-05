@@ -1,5 +1,6 @@
 const OPEN_EVENT = 'qg-pwa-open'
 const INSTALLED_EVENT = 'qg-pwa-installed'
+const SAVED_KEY = 'qg_pwa_saved'
 
 let deferredPrompt = null
 let listening = false
@@ -14,6 +15,32 @@ export function isPwaInstalled() {
   if (window.matchMedia?.('(display-mode: window-controls-overlay)').matches) return true
   if (window.navigator.standalone === true) return true
   return false
+}
+
+export function markPwaSaved() {
+  try { localStorage.setItem(SAVED_KEY, '1') } catch { /* ignore */ }
+}
+
+export function isPwaSaved() {
+  if (isPwaInstalled()) return true
+  try { return localStorage.getItem(SAVED_KEY) === '1' } catch { return false }
+}
+
+export async function rememberInstalledPwa() {
+  if (isPwaInstalled()) {
+    markPwaSaved()
+    return true
+  }
+  if (typeof navigator.getInstalledRelatedApps !== 'function') return isPwaSaved()
+  try {
+    const apps = await navigator.getInstalledRelatedApps()
+    if (Array.isArray(apps) && apps.length > 0) {
+      markPwaSaved()
+      window.dispatchEvent(new Event(INSTALLED_EVENT))
+      return true
+    }
+  } catch { /* ignore */ }
+  return isPwaSaved()
 }
 
 export function pwaMode() {
@@ -61,6 +88,7 @@ export async function promptPwaInstall() {
   prompt.prompt()
   const choice = await prompt.userChoice.catch(() => ({ outcome: 'dismissed' }))
   if (choice?.outcome === 'accepted') {
+    markPwaSaved()
     window.dispatchEvent(new Event(INSTALLED_EVENT))
   }
   return choice || { outcome: 'dismissed' }
@@ -76,8 +104,11 @@ export function registerPwa() {
   })
   window.addEventListener('appinstalled', () => {
     deferredPrompt = null
+    markPwaSaved()
     window.dispatchEvent(new Event(INSTALLED_EVENT))
   })
+  if (isPwaInstalled()) markPwaSaved()
+  rememberInstalledPwa()
   if (!import.meta.env.PROD) return
   if (!('serviceWorker' in navigator)) return
   window.addEventListener('load', () => {
