@@ -46,12 +46,13 @@ export async function fetchDemoQuoteCount(lead) {
       body: JSON.stringify({
         action: 'read',
         email,
-        phone: lead?.phone || ''
+        phone: lead?.phone || '',
+        localUsed: local
       })
     })
     const data = await response.json().catch(() => ({}))
-    if (!response.ok) return { used: local, cap: DEMO_QUOTE_CAP, allowed: local < DEMO_QUOTE_CAP }
-    const used = Math.max(local, Number(data.used) || 0)
+    if (!response.ok || data.persisted === false) return { used: local, cap: DEMO_QUOTE_CAP, allowed: local < DEMO_QUOTE_CAP }
+    const used = Number.isFinite(Number(data.used)) ? Number(data.used) : local
     writeDemoQuoteCount(email, used)
     return { used, cap: DEMO_QUOTE_CAP, allowed: used < DEMO_QUOTE_CAP }
   } catch {
@@ -70,7 +71,8 @@ export async function recordDemoQuote(lead) {
       body: JSON.stringify({
         action: 'use',
         email,
-        phone: lead?.phone || ''
+        phone: lead?.phone || '',
+        localUsed: Math.max(0, local - 1)
       })
     })
     const data = await response.json().catch(() => ({}))

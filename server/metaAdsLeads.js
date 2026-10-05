@@ -483,37 +483,31 @@ export function registerPublicMetaAdsLeadRoutes(app) {
     const supabase = requireDb(res, requestId)
     if (!supabase) return
     const email = String(req.body?.email || '').trim().toLowerCase()
-    const phone = digitsOnly(req.body?.phone)
     const action = String(req.body?.action || 'read').trim().toLowerCase()
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || phone.length !== 10) {
-      return res.status(400).json({ error: 'Enter the same email and mobile used on the form.', code: 'VALIDATION', requestId })
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'A valid email is required to count demo quotations.', code: 'VALIDATION', requestId })
     }
     const cap = 10
     try {
-      const row = await findLatestLead(supabase, { email, phone })
-      if (!row?.id) return res.json({ ok: true, used: 0, cap, allowed: true, requestId })
       const { data, error } = await supabase
-        .from('meta_ads_leads')
-        .select('id, demo_quotes_used')
-        .eq('id', row.id)
+        .from('demo_quote_counts')
+        .select('used')
+        .eq('email', email)
         .maybeSingle()
       if (error) throw error
-      const used = Number(data?.demo_quotes_used) || 0
-      if (action !== 'use' || used >= cap) {
-        return res.json({ ok: true, used, cap, allowed: used < cap, requestId })
+      let used = Number(data?.used) || 0
+      const localUsed = Math.min(cap, Math.max(0, Number(req.body?.localUsed) || 0))
+      if (localUsed > used) used = localUsed
+      if (action === 'use' && used < cap) used += 1
+      if (used !== (Number(data?.used) || 0)) {
+        const { error: saveError } = await supabase
+          .from('demo_quote_counts')
+          .upsert({ email, used, updated_at: new Date().toISOString() }, { onConflict: 'email' })
+        if (saveError) throw saveError
       }
-      const next = used + 1
-      const { error: updateError } = await supabase
-        .from('meta_ads_leads')
-        .update({ demo_quotes_used: next })
-        .eq('id', row.id)
-      if (updateError) throw updateError
-      return res.json({ ok: true, used: next, cap, allowed: next < cap, requestId })
+      return res.json({ ok: true, used, cap, allowed: used < cap, persisted: true, requestId })
     } catch (error) {
       console.error(`[${requestId}] demo quote count failed`, error?.message)
-      if (/demo_quotes_used|schema cache|PGRST|42703/i.test(error?.message || '')) {
-        return res.json({ ok: true, used: 0, cap, allowed: true, requestId })
-      }
       supabaseError(error, res, requestId)
     }
   })
