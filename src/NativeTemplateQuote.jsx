@@ -116,8 +116,8 @@ export default function NativeTemplateQuote({
   )
 
   const totals = useMemo(
-    () => computeQuoteTotals(quote.items || [], columns, quote.extraLines),
-    [quote.items, columns, quote.extraLines]
+    () => computeQuoteTotals(quote.items || [], columns, quote.extraLines, quote.billAdjustments),
+    [quote.items, columns, quote.extraLines, quote.billAdjustments]
   )
 
   // Stable fingerprint so autosave noise doesn't thrash OnlyOffice.
@@ -131,8 +131,9 @@ export default function NativeTemplateQuote({
       amount: it.amount
     })),
     number: quote.number,
-    extraLines: quote.extraLines || []
-  }), [quote.customer, quote.items, quote.number, quote.extraLines])
+    extraLines: quote.extraLines || [],
+    billAdjustments: quote.billAdjustments || {}
+  }), [quote.customer, quote.items, quote.number, quote.extraLines, quote.billAdjustments])
 
   useEffect(() => {
     let cancelled = false

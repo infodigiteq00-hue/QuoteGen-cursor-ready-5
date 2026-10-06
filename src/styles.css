@@ -3410,6 +3410,12 @@ textarea.qg-inline-field {
   font-size: 0.88em;
   padding: 8px 4px !important;
 }
+.qg-studio-table th.qg-sr-col,
+.qg-studio-table td.qg-sr-col {
+  white-space: nowrap !important;
+  word-break: keep-all !important;
+  overflow-wrap: normal !important;
+}
 .qg-studio-table td.qg-cell-compact input,
 .qg-studio-table td.qg-cell-compact .print-only-cell {
   white-space: normal;
@@ -4757,6 +4763,12 @@ html.qg-a4-export .qg-footer-image {
     overflow: visible !important;
     overflow-wrap: break-word !important;
     word-break: normal !important;
+  }
+  .quote-items-table th.qg-sr-col,
+  .quote-items-table td.qg-sr-col {
+    white-space: nowrap !important;
+    word-break: keep-all !important;
+    overflow-wrap: normal !important;
   }
   .quote-items-table input { padding: 0 !important; }
   .quote-items-table { page-break-inside: auto; }

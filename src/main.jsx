@@ -129,6 +129,7 @@ import {
   insertTypedColumns,
   moveColumnInList,
   nestedFieldInfo,
+  normalizeBillAdjustments,
   normalizeColumnList,
   normalizeImageEdit,
   rateKey,
@@ -362,8 +363,28 @@ async function readApiResponse(response) {
   }
 }
 
+const MANUAL_DISCOUNT_KEY = 'qg_show_manual_discount'
+
+function readShowManualDiscount() {
+  try { return localStorage.getItem(MANUAL_DISCOUNT_KEY) !== '0' } catch { return true }
+}
+
+function writeShowManualDiscount(show) {
+  try { localStorage.setItem(MANUAL_DISCOUNT_KEY, show ? '1' : '0') } catch { /* ignore */ }
+}
+
 function money(n) {
   return `₹ ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function scrollableAncestor(node) {
+  let el = node?.parentElement
+  while (el && el !== document.body && el !== document.documentElement) {
+    const style = getComputedStyle(el)
+    if (/(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 2) return el
+    el = el.parentElement
+  }
+  return null
 }
 
 function TotalsExtraLines({ lines, base, onAdd, onUpdate, onRemove }) {
@@ -2253,7 +2274,13 @@ function App() {
   }
 
   const quoteColumns = quote?.columns || columns
-  const totals = computeQuoteTotals(quote?.items || [], quoteColumns, quote?.extraLines)
+  const quoteBill = normalizeBillAdjustments(quote?.billAdjustments)
+  const quoteShowDiscount = quoteBill.showDiscount === false
+    ? false
+    : quoteBill.showDiscount === true || String(quoteBill.discountValue || '').trim()
+      ? true
+      : readShowManualDiscount()
+  const totals = computeQuoteTotals(quote?.items || [], quoteColumns, quote?.extraLines, { ...quoteBill, showDiscount: quoteShowDiscount })
   const total = totals.grandTotal
 
   if (quote && activeUploadTemplate) {
@@ -5941,7 +5968,9 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const [paperWidthMode, setPaperWidthMode] = useState('a4')
   const studioRef = useRef(null)
   const exportReadyRef = useRef(null)
+  const pendingScrollRef = useRef(null)
   const [a4Pages, setA4Pages] = useState(() => defaultA4Pages(0))
+  const a4PackGuard = useRef({ sig: '', n: 0 })
   const [paperFontPx, setPaperFontPx] = useState(14)
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -6443,13 +6472,36 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   }
 
   const setItems = (nextItems) => update(['items'], nextItems)
-  const addItem = () => setItems([...items, blankItem(columns)])
+  const addItem = (event) => {
+    event?.currentTarget?.blur?.()
+    const scroller = event?.currentTarget ? scrollableAncestor(event.currentTarget) : null
+    pendingScrollRef.current = {
+      scroller,
+      top: scroller ? scroller.scrollTop : window.scrollY
+    }
+    setItems([...items, blankItem(columns)])
+  }
   const removeItem = i => setItems(items.filter((_, index) => index !== i))
   const extraLines = Array.isArray(quote.extraLines) ? quote.extraLines : []
   const setExtraLines = (next) => update(['extraLines'], next)
   const addExtraLine = (line) => setExtraLines([...extraLines, line || blankExtraLine()])
   const updateExtraLine = (i, patch) => setExtraLines(extraLines.map((row, index) => (index === i ? { ...row, ...patch } : row)))
   const removeExtraLine = (i) => setExtraLines(extraLines.filter((_, index) => index !== i))
+  const bill = normalizeBillAdjustments(quote?.billAdjustments)
+  const setBill = (patch) => update(['billAdjustments'], { ...bill, ...patch })
+  const showManualDiscount = bill.showDiscount === false
+    ? false
+    : bill.showDiscount === true || String(bill.discountValue || '').trim()
+      ? true
+      : readShowManualDiscount()
+  const hideManualDiscount = () => {
+    writeShowManualDiscount(false)
+    setBill({ showDiscount: false, discountValue: '' })
+  }
+  const restoreManualDiscount = () => {
+    writeShowManualDiscount(true)
+    setBill({ showDiscount: true })
+  }
   // Drag a row by its Sr. No. cell to drop it into a new position — replaces
   // the old one-at-a-time ↑+ "insert above" click with a direct move.
   const [dragRowIndex, setDragRowIndex] = useState(null)
@@ -6556,7 +6608,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   }
 
   const updateList = (key, raw) => update([key], raw.split('\n').filter(Boolean))
-  const quoteTotals = totals || computeQuoteTotals(items, columns, extraLines)
+  const quoteTotals = computeQuoteTotals(items, columns, extraLines, { ...bill, showDiscount: showManualDiscount })
   const hasNested = columns.some(isNestedColumn)
   const hasAmount = columns.some(c => c.id === 'amount') || hasNested
   const kbFilled = (quote.items || []).filter(i => i?._knowledgeFill?.fields?.length).length
@@ -6806,7 +6858,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     const next = Math.max(floor, Math.ceil(max + 14))
     setColumnWidths(prev => (prev[colId] === next ? prev : { ...prev, [colId]: next }))
   }
-  const SR_NO_COL_WIDTH = 36
+  const SR_NO_COL_WIDTH = 68
   const ROW_ACTIONS_COL_WIDTH = 0
   const colKeys = columns.map(col => (isNestedColumn(col) ? `${col.id}__rate` : col.id))
   const tableChromePx = SR_NO_COL_WIDTH + ROW_ACTIONS_COL_WIDTH
@@ -6940,12 +6992,16 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     if (!root) return false
     const measured = measureA4Blocks(root)
     measured.rowHeights = Array.from({ length: items.length }, (_, i) => measured.rowHeights[i] || 36)
-    const next = packA4Pages({
+    const next = normalizeA4Pages(packA4Pages({
       rowCount: items.length,
       ...measured,
       totalsHeight: hasAmount ? measured.totalsHeight : 0
-    })
-    if (!pagesEqual(next, normalizeA4Pages(a4Pages, items.length))) {
+    }), items.length)
+    const current = normalizeA4Pages(a4Pages, items.length)
+    if (!pagesEqual(next, current)) {
+      if (a4PackGuard.current.sig !== layoutSignature) a4PackGuard.current = { sig: layoutSignature, n: 0 }
+      if (a4PackGuard.current.n > 3) return false
+      a4PackGuard.current.n += 1
       setA4Pages(next)
       return true
     }
@@ -6953,8 +7009,18 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   }
 
   useLayoutEffect(() => {
-    if (runA4Pack()) return undefined
+    const packing = runA4Pack()
+    const pending = pendingScrollRef.current
+    const applyScroll = () => {
+      if (!pending) return
+      if (pending.scroller) pending.scroller.scrollTop = pending.top
+      else window.scrollTo(0, pending.top)
+    }
+    if (pending) applyScroll()
+    if (packing) return undefined
+    if (pending) pendingScrollRef.current = null
     const frame = requestAnimationFrame(() => {
+      applyScroll()
       requestAnimationFrame(() => exportReadyRef.current?.())
     })
     return () => cancelAnimationFrame(frame)
@@ -7404,7 +7470,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
             </colgroup>
             <thead data-qg-block="thead">
               <tr className="border-y uppercase tracking-wide" style={{ borderColor: 'var(--qg-table-border, #d2e3fc)' }}>
-                <th className="qg-cell-compact p-3">Sr.</th>
+                <th className="qg-cell-compact qg-sr-col p-3">Sr.</th>
                 {columns.map(col => (
                     <th
                       key={col.id}
@@ -7483,7 +7549,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                     onDrop={(e) => { e.preventDefault(); moveItem(dragRowIndex, i); setDragRowIndex(null); setDropRowIndex(null) }}
                     onDragEnd={() => { setDragRowIndex(null); setDropRowIndex(null) }}
                     title="Drag to reorder this row"
-                    className={`qg-cell-compact relative cursor-grab p-3 text-slate-400 active:cursor-grabbing`}
+                    className="qg-cell-compact qg-sr-col relative cursor-grab p-3 text-slate-400 active:cursor-grabbing"
                   >
                     <span className="no-print mr-1 text-slate-300">⠿</span>
                     {isEditorialPaper ? String(i + 1).padStart(2, '0') : i + 1}
@@ -7531,23 +7597,88 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         <button onClick={addItem} className="no-print mt-3 text-sm font-semibold text-moss">+ Add line item</button>
         ) : null}
         {page.showTotals && hasAmount && (
-          <div className="qg-totals-card" data-qg-block="totals">
+          <div
+            className="qg-totals-card"
+            data-qg-block="totals"
+            style={page.totalsFit > 0 && page.totalsFit < 0.995 ? { zoom: page.totalsFit } : undefined}
+          >
             <div className="flex justify-between text-sm text-slate-500"><span>Subtotal</span><span>{money(quoteTotals.subtotal)}</span></div>
-            {quoteTotals.perColumn.filter(entry => entry.type === 'discount').map(entry => (
+            {quoteTotals.summaryDiscount?.fromColumn ? quoteTotals.perColumn.filter(entry => entry.type === 'discount').map(entry => (
               <div key={entry.id} className="mt-1 flex justify-between text-sm text-rose-600">
                 <span>Less: {entry.label}</span><span>− {money(entry.amount)}</span>
               </div>
-            ))}
+            )) : quoteTotals.summaryDiscount?.hidden ? (
+              <button type="button" onClick={restoreManualDiscount} className="no-print mt-1 text-left text-[12px] font-normal text-slate-400 hover:text-moss">
+                + discount
+              </button>
+            ) : (
+              <div className="mt-1 flex justify-between text-sm text-rose-600">
+                <span className="flex min-w-0 items-center gap-1">
+                  <span>
+                    Less: Discount
+                    {bill.discountUnit === 'percent' && String(bill.discountValue || '').trim() ? (
+                      <span className="print-only-cell" style={{ display: 'none' }}>{` (${bill.discountValue}%)`}</span>
+                    ) : null}
+                  </span>
+                  <input
+                    value={bill.discountValue}
+                    onChange={(e) => setBill({ discountValue: e.target.value.replace(/[^\d.]/g, ''), showDiscount: true })}
+                    placeholder="0"
+                    inputMode="decimal"
+                    aria-label="Discount"
+                    className="no-print w-12 bg-transparent text-right text-[13px] text-rose-600 outline-none placeholder:text-rose-200"
+                  />
+                  <button
+                    type="button"
+                    title={bill.discountUnit === 'percent' ? 'Percent of subtotal' : 'Flat rupee amount'}
+                    onClick={() => setBill({ discountUnit: bill.discountUnit === 'percent' ? 'amount' : 'percent', showDiscount: true })}
+                    className="no-print w-5 text-xs text-rose-400 hover:text-rose-600"
+                  >
+                    {bill.discountUnit === 'percent' ? '%' : '₹'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={hideManualDiscount}
+                    title="Remove discount"
+                    className="no-print w-4 shrink-0 text-slate-300 hover:text-rose-500"
+                  >
+                    ×
+                  </button>
+                </span>
+                <span>− {money(quoteTotals.summaryDiscount?.amount)}</span>
+              </div>
+            )}
             {quoteTotals.discountTotal > 0 && (
               <div className="mt-1 flex justify-between border-t border-dashed border-sand pt-1 text-sm text-slate-500">
                 <span>Taxable value</span><span>{money(quoteTotals.taxableTotal)}</span>
               </div>
             )}
-            {quoteTotals.perColumn.filter(entry => entry.type === 'tax').map(entry => (
+            {quoteTotals.summaryTax?.fromColumn ? quoteTotals.perColumn.filter(entry => entry.type === 'tax').map(entry => (
               <div key={entry.id} className="mt-1 flex justify-between text-sm text-slate-500">
                 <span>Add: {entry.label}</span><span>{money(entry.amount)}</span>
               </div>
-            ))}
+            )) : (
+              <div className="mt-1 flex justify-between text-sm text-slate-500">
+                <span className="flex min-w-0 items-center gap-1">
+                  <span>
+                    Add: Tax
+                    {String(bill.taxPercent || '').trim() ? (
+                      <span className="print-only-cell" style={{ display: 'none' }}>{` (${bill.taxPercent}%)`}</span>
+                    ) : null}
+                  </span>
+                  <input
+                    value={bill.taxPercent}
+                    onChange={(e) => setBill({ taxPercent: e.target.value.replace(/[^\d.]/g, '') })}
+                    placeholder="0"
+                    inputMode="decimal"
+                    aria-label="Tax percent"
+                    className="no-print w-12 bg-transparent text-right text-[13px] text-slate-500 outline-none placeholder:text-slate-300"
+                  />
+                  <span className="no-print text-xs text-slate-400">%</span>
+                </span>
+                <span>{money(quoteTotals.summaryTax?.amount)}</span>
+              </div>
+            )}
             <TotalsExtraLines
               lines={extraLines}
               base={quoteTotals.extraBase ?? (quoteTotals.taxableTotal + quoteTotals.taxTotal)}
@@ -7558,7 +7689,6 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
               onRemove={removeExtraLine}
             />
             <div className="qg-totals-grand mt-2 flex justify-between border-t pt-2 text-base font-semibold" style={{ borderColor: 'var(--qg-accent)' }}><span>{isEditorialPaper ? 'Grand total' : 'Total'}</span><span>{money(quoteTotals.grandTotal)}</span></div>
-            {!hasNested && <p className="mt-1 text-right text-xs text-slate-400">Taxes extra as applicable</p>}
           </div>
         )}
       </div>

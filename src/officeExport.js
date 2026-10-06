@@ -130,11 +130,19 @@ export function buildQuotationWordHtml({ quote, profile, columns, totals, theme,
     const label = `${line.kind === 'add' ? 'Add' : 'Less'}: ${String(line.label || '').trim() || 'Extra'}`
     return [label, amt]
   })
+  const discountRows = totals?.summaryDiscount?.hidden
+    ? []
+    : totals?.summaryDiscount?.fromColumn
+      ? (totals?.perColumn || []).filter(e => e.type === 'discount').map(e => [`Less: ${e.label}`, e.amount])
+      : [[totals?.summaryDiscount?.label || 'Less: Discount', totals?.summaryDiscount?.amount || 0]]
+  const taxRows = totals?.summaryTax?.fromColumn
+    ? (totals?.perColumn || []).filter(e => e.type === 'tax').map(e => [`Add: ${e.label}`, e.amount])
+    : [[totals?.summaryTax?.label || 'Add: Tax', totals?.summaryTax?.amount || 0]]
   const totalRows = [
     ['Subtotal', totals?.subtotal],
-    ...(totals?.perColumn || []).filter(e => e.type === 'discount').map(e => [`Less: ${e.label}`, e.amount]),
+    ...discountRows,
     totals?.discountTotal > 0 ? ['Taxable value', totals.taxableTotal] : null,
-    ...(totals?.perColumn || []).filter(e => e.type === 'tax').map(e => [`Add: ${e.label}`, e.amount]),
+    ...taxRows,
     ...extraRows,
     ['Total', totals?.grandTotal]
   ].filter(Boolean).map(([label, amount], i, arr) => {
@@ -659,9 +667,19 @@ async function fillQuotationDataSheet(wb, { quote, profile, columns, totals, the
     r += 1
   }
   addTotal('Subtotal', totals?.subtotal)
-  for (const entry of (totals?.perColumn || []).filter(e => e.type === 'discount')) addTotal(`Less: ${entry.label}`, entry.amount)
+  if (totals?.summaryDiscount?.hidden) {
+    /* user removed the quote-level discount line */
+  } else if (totals?.summaryDiscount?.fromColumn) {
+    for (const entry of (totals?.perColumn || []).filter(e => e.type === 'discount')) addTotal(`Less: ${entry.label}`, entry.amount)
+  } else {
+    addTotal(totals?.summaryDiscount?.label || 'Less: Discount', totals?.summaryDiscount?.amount)
+  }
   if (totals?.discountTotal > 0) addTotal('Taxable value', totals.taxableTotal)
-  for (const entry of (totals?.perColumn || []).filter(e => e.type === 'tax')) addTotal(`Add: ${entry.label}`, entry.amount)
+  if (totals?.summaryTax?.fromColumn) {
+    for (const entry of (totals?.perColumn || []).filter(e => e.type === 'tax')) addTotal(`Add: ${entry.label}`, entry.amount)
+  } else {
+    addTotal(totals?.summaryTax?.label || 'Add: Tax', totals?.summaryTax?.amount)
+  }
   for (const line of (quote?.extraLines || [])) {
     const amt = extraLineResolvedAmount(line, totals?.extraBase)
     addTotal(`${line.kind === 'add' ? 'Add' : 'Less'}: ${String(line.label || '').trim() || 'Extra'}`, amt)

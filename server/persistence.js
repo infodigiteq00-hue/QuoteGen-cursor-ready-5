@@ -1355,11 +1355,15 @@ If something isn't specified, keep the current value.`
     return row.extra_lines || row.extraLines || row.data?.extraLines
   }
 
+  function rowBill(row) {
+    return row.bill_adjustments || row.billAdjustments || row.data?.billAdjustments
+  }
+
   function cardFromRow(row) {
     const items = rowItems(row)
     const cols = rowColumns(row)
     let total = 0
-    try { total = computeQuoteTotals(items, cols, rowExtra(row)).grandTotal || 0 } catch { total = 0 }
+    try { total = computeQuoteTotals(items, cols, rowExtra(row), rowBill(row)).grandTotal || 0 } catch { total = 0 }
     const customer = rowCustomer(row)
     return {
       id: row.id,
@@ -1386,8 +1390,8 @@ If something isn't specified, keep the current value.`
     const hit = quotationCardCache.get(userId)
     if (hit && Date.now() - hit.at < 20000) return hit.cards
     const variants = [
-      'id, number, title, quote_date, updated_at, created_at, doc_type, customer:data->customer, items:data->items, columns:data->columns, extra_lines:data->extraLines',
-      'id, number, title, quote_date, updated_at, created_at, customer:data->customer, items:data->items, columns:data->columns, extra_lines:data->extraLines',
+      'id, number, title, quote_date, updated_at, created_at, doc_type, customer:data->customer, items:data->items, columns:data->columns, extra_lines:data->extraLines, bill_adjustments:data->billAdjustments',
+      'id, number, title, quote_date, updated_at, created_at, customer:data->customer, items:data->items, columns:data->columns, extra_lines:data->extraLines, bill_adjustments:data->billAdjustments',
       'id, number, title, quote_date, updated_at, created_at, doc_type, data',
       'id, number, title, quote_date, updated_at, created_at, data'
     ]
@@ -1531,7 +1535,7 @@ If something isn't specified, keep the current value.`
           const items = Array.isArray(r.data?.items) ? r.data.items : []
           const cols = Array.isArray(r.data?.columns) ? r.data.columns : []
           let total = 0
-          try { total = computeQuoteTotals(items, cols, r.data?.extraLines).grandTotal || 0 } catch { total = 0 }
+          try { total = computeQuoteTotals(items, cols, r.data?.extraLines, r.data?.billAdjustments).grandTotal || 0 } catch { total = 0 }
           return {
             id: r.id,
             number: r.number,

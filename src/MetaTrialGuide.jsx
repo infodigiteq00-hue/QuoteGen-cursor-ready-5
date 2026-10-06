@@ -18,7 +18,8 @@ import {
   isNestedColumn,
   rateKey,
   recalcRow,
-  toNumber
+  toNumber,
+  normalizeBillAdjustments
 } from '../shared/quoteColumns.js'
 import { formatIndianAmount } from '../shared/templateMap.js'
 import { companySeedFromLead, readMetaAdsLead, usefulLead, readMetaGuideProgress, writeMetaGuideProgress } from './metaTrialLead.js'
@@ -106,6 +107,26 @@ function placeholderFor(col) {
 
 function money(n) {
   return `₹ ${formatIndianAmount(n)}`
+}
+
+const MANUAL_DISCOUNT_KEY = 'qg_show_manual_discount'
+
+function readShowManualDiscount() {
+  try { return localStorage.getItem(MANUAL_DISCOUNT_KEY) !== '0' } catch { return true }
+}
+
+function writeShowManualDiscount(show) {
+  try { localStorage.setItem(MANUAL_DISCOUNT_KEY, show ? '1' : '0') } catch { /* ignore */ }
+}
+
+function resolvedBill(raw) {
+  const bill = normalizeBillAdjustments(raw)
+  const showDiscount = bill.showDiscount === false
+    ? false
+    : bill.showDiscount === true || String(bill.discountValue || '').trim()
+      ? true
+      : readShowManualDiscount()
+  return { ...bill, showDiscount }
 }
 
 function stripMarkdownBold(text) {
@@ -240,7 +261,7 @@ function RealQuotePreviewTable({
   const columns = Array.isArray(quote?.columns) && quote.columns.length ? quote.columns : CORE_COLUMNS.map(({ locked, ...c }) => c)
   const allItems = Array.isArray(quote?.items) ? quote.items : []
   const items = maxRows != null ? allItems.slice(0, maxRows) : allItems
-  const totals = computeQuoteTotals(allItems, columns, quote?.extraLines)
+  const totals = computeQuoteTotals(allItems, columns, quote?.extraLines, quote?.billAdjustments)
   const amountCol = findFieldColumn(columns, 'amount')
   const rateCol = findFieldColumn(columns, 'rate')
   const profile = companyProfile || quote?.companyProfile || null
@@ -451,7 +472,7 @@ function RealQuotePreviewTable({
 function FinalQuoteDocument({ quote, companyProfile = null }) {
   const columns = Array.isArray(quote?.columns) && quote.columns.length ? quote.columns : CORE_COLUMNS.map(({ locked, ...c }) => c)
   const items = Array.isArray(quote?.items) ? quote.items : []
-  const totals = computeQuoteTotals(items, columns, quote?.extraLines)
+  const totals = computeQuoteTotals(items, columns, quote?.extraLines, quote?.billAdjustments)
   const amountCol = findFieldColumn(columns, 'amount')
   const profile = companyProfile || quote?.companyProfile || null
   const companyName = String(profile?.companyName || '').trim() || 'Your Company Name'
@@ -576,11 +597,38 @@ function FinalQuoteDocument({ quote, companyProfile = null }) {
             <span>Subtotal</span>
             <span>{money(totals.subtotal ?? totals.grandTotal)}</span>
           </div>
+          {totals.summaryDiscount?.hidden ? null : totals.summaryDiscount?.fromColumn ? (totals.perColumn || []).filter((entry) => entry.type === 'discount').map((entry) => (
+            <div key={entry.id} className="meta-guide-doc-totals-row">
+              <span>Less: {entry.label}</span>
+              <span>{money(entry.amount)}</span>
+            </div>
+          )) : (
+            <div className="meta-guide-doc-totals-row">
+              <span>{totals.summaryDiscount?.label || 'Less: Discount'}</span>
+              <span>{money(totals.summaryDiscount?.amount)}</span>
+            </div>
+          )}
+          {(totals.discountTotal || 0) > 0 ? (
+            <div className="meta-guide-doc-totals-row">
+              <span>Taxable value</span>
+              <span>{money(totals.taxableTotal)}</span>
+            </div>
+          ) : null}
+          {totals.summaryTax?.fromColumn ? (totals.perColumn || []).filter((entry) => entry.type === 'tax').map((entry) => (
+            <div key={entry.id} className="meta-guide-doc-totals-row">
+              <span>Add: {entry.label}</span>
+              <span>{money(entry.amount)}</span>
+            </div>
+          )) : (
+            <div className="meta-guide-doc-totals-row">
+              <span>{totals.summaryTax?.label || 'Add: Tax'}</span>
+              <span>{money(totals.summaryTax?.amount)}</span>
+            </div>
+          )}
           <div className="meta-guide-doc-totals-row is-total">
             <span>Total</span>
             <span>{money(totals.grandTotal)}</span>
           </div>
-          <p className="meta-guide-doc-totals-note">Taxes extra as applicable</p>
         </div>
 
         <section className="meta-guide-doc-terms">
@@ -807,10 +855,119 @@ function visibleCarouselThemeId(fallback) {
   return DEMO_PAPER_IDS[best] || fallback
 }
 
-function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', captureReady = false, onUploadLogo = null, logoBusy = false, onLogoSizeChange = null, onRateChange = null, onCustomerChange = null }) {
+function TrialBillTotals({ totals, bill, theme, editable, onChange }) {
+  const muted = theme?.muted || '#667085'
+  const set = (patch) => onChange?.({ ...bill, ...patch })
+  const hideDiscount = () => {
+    writeShowManualDiscount(false)
+    set({ showDiscount: false, discountValue: '' })
+  }
+  const restoreDiscount = () => {
+    writeShowManualDiscount(true)
+    set({ showDiscount: true })
+  }
+  return (
+    <div className="qg-totals-card" data-qg-block="totals" style={{ marginLeft: 'auto', marginTop: 16, maxWidth: 320 }}>
+      <div className="flex justify-between text-sm" style={{ color: muted }}>
+        <span>Subtotal</span>
+        <span>{money(totals.subtotal ?? totals.grandTotal)}</span>
+      </div>
+      {totals.summaryDiscount?.fromColumn ? (totals.perColumn || []).filter((entry) => entry.type === 'discount').map((entry) => (
+        <div key={entry.id} className="mt-1 flex justify-between text-sm text-rose-600">
+          <span>Less: {entry.label}</span>
+          <span>− {money(entry.amount)}</span>
+        </div>
+      )) : totals.summaryDiscount?.hidden ? (
+        editable ? (
+          <button type="button" onClick={restoreDiscount} className="no-print mt-1 text-left text-[12px] font-normal text-slate-400 hover:text-moss">
+            + discount
+          </button>
+        ) : null
+      ) : (
+        <div className="mt-1 flex justify-between text-sm text-rose-600">
+          <span className="flex min-w-0 items-center gap-1">
+            <span>
+              Less: Discount
+              {bill.discountUnit === 'percent' && String(bill.discountValue || '').trim() ? (
+                <span className={editable ? 'print-only-cell' : undefined} style={editable ? { display: 'none' } : undefined}>{` (${bill.discountValue}%)`}</span>
+              ) : null}
+            </span>
+            {editable ? (
+              <>
+                <input
+                  value={bill.discountValue}
+                  onChange={(e) => set({ discountValue: e.target.value.replace(/[^\d.]/g, ''), showDiscount: true })}
+                  placeholder="0"
+                  inputMode="decimal"
+                  aria-label="Discount"
+                  className="no-print w-12 bg-transparent text-right text-[13px] text-rose-600 outline-none"
+                />
+                <button
+                  type="button"
+                  title={bill.discountUnit === 'percent' ? 'Percent of subtotal' : 'Flat rupee amount'}
+                  onClick={() => set({ discountUnit: bill.discountUnit === 'percent' ? 'amount' : 'percent', showDiscount: true })}
+                  className="no-print w-5 text-xs text-rose-400"
+                >
+                  {bill.discountUnit === 'percent' ? '%' : '₹'}
+                </button>
+                <button type="button" onClick={hideDiscount} title="Remove discount" className="no-print w-4 text-slate-300 hover:text-rose-500">×</button>
+              </>
+            ) : null}
+          </span>
+          <span>− {money(totals.summaryDiscount?.amount)}</span>
+        </div>
+      )}
+      {(totals.discountTotal || 0) > 0 ? (
+        <div className="mt-1 flex justify-between border-t border-dashed pt-1 text-sm" style={{ color: muted, borderColor: 'var(--qg-table-border, #e2e8f0)' }}>
+          <span>Taxable value</span>
+          <span>{money(totals.taxableTotal)}</span>
+        </div>
+      ) : null}
+      {totals.summaryTax?.fromColumn ? (totals.perColumn || []).filter((entry) => entry.type === 'tax').map((entry) => (
+        <div key={entry.id} className="mt-1 flex justify-between text-sm" style={{ color: muted }}>
+          <span>Add: {entry.label}</span>
+          <span>{money(entry.amount)}</span>
+        </div>
+      )) : (
+        <div className="mt-1 flex justify-between text-sm" style={{ color: muted }}>
+          <span className="flex min-w-0 items-center gap-1">
+            <span>
+              Add: Tax
+              {String(bill.taxPercent || '').trim() ? (
+                <span className={editable ? 'print-only-cell' : undefined} style={editable ? { display: 'none' } : undefined}>{` (${bill.taxPercent}%)`}</span>
+              ) : null}
+            </span>
+            {editable ? (
+              <>
+                <input
+                  value={bill.taxPercent}
+                  onChange={(e) => set({ taxPercent: e.target.value.replace(/[^\d.]/g, '') })}
+                  placeholder="0"
+                  inputMode="decimal"
+                  aria-label="Tax percent"
+                  className="no-print w-12 bg-transparent text-right text-[13px] outline-none"
+                  style={{ color: muted }}
+                />
+                <span className="no-print text-xs">%</span>
+              </>
+            ) : null}
+          </span>
+          <span>{money(totals.summaryTax?.amount)}</span>
+        </div>
+      )}
+      <div className="qg-totals-grand flex justify-between text-sm" style={{ borderColor: theme?.accent }}>
+        <span>Total</span>
+        <span>{money(totals.grandTotal)}</span>
+      </div>
+    </div>
+  )
+}
+
+function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', captureReady = false, onUploadLogo = null, logoBusy = false, onLogoSizeChange = null, onRateChange = null, onCustomerChange = null, onBillChange = null }) {
   const columns = Array.isArray(quote?.columns) && quote.columns.length ? quote.columns : CORE_COLUMNS.map(({ locked, ...c }) => c)
   const items = Array.isArray(quote?.items) ? quote.items : []
-  const totals = computeQuoteTotals(items, columns, quote?.extraLines)
+  const bill = resolvedBill(quote?.billAdjustments)
+  const totals = computeQuoteTotals(items, columns, quote?.extraLines, bill)
   const profile = companyProfile || quote?.companyProfile || null
   const companyName = String(profile?.companyName || '').trim() || 'Your Company Name'
   const headerText = String(profile?.headerText || '').trim()
@@ -966,16 +1123,13 @@ function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', c
   ].filter(([, value]) => String(value || '').trim())
 
   const totalsBlock = (
-    <div className="qg-totals-card" data-qg-block="totals" style={{ marginLeft: 'auto', marginTop: 16, maxWidth: 240 }}>
-      <div className="flex justify-between text-sm" style={{ color: theme.muted }}>
-        <span>Subtotal</span>
-        <span>{money(totals.subtotal ?? totals.grandTotal)}</span>
-      </div>
-      <div className="qg-totals-grand flex justify-between text-sm" style={{ borderColor: theme.accent }}>
-        <span>Total</span>
-        <span>{money(totals.grandTotal)}</span>
-      </div>
-    </div>
+    <TrialBillTotals
+      totals={totals}
+      bill={bill}
+      theme={theme}
+      editable={!captureReady && Boolean(onBillChange)}
+      onChange={onBillChange}
+    />
   )
 
   const closing = (
@@ -1144,7 +1298,7 @@ function ScaledQuotePaper({ children }) {
   )
 }
 
-function TrialFormatCarousel({ quote, companyProfile, themeId, onThemeChange, ready, onAddLogo, logoBusy, onReadingChange, onLogoSizeChange, onRateChange = null, onCustomerChange = null }) {
+function TrialFormatCarousel({ quote, companyProfile, themeId, onThemeChange, ready, onAddLogo, logoBusy, onReadingChange, onLogoSizeChange, onRateChange = null, onCustomerChange = null, onBillChange = null }) {
   const scrollerRef = useRef(null)
   const hintingRef = useRef(false)
   const [hinting, setHinting] = useState(false)
@@ -1272,6 +1426,7 @@ function TrialFormatCarousel({ quote, companyProfile, themeId, onThemeChange, re
                       onLogoSizeChange={onLogoSizeChange}
                       onRateChange={id === active ? onRateChange : null}
                       onCustomerChange={id === active ? onCustomerChange : null}
+                      onBillChange={id === active ? onBillChange : null}
                     />
                   </ScaledQuotePaper>
                 ) : (
@@ -1635,6 +1790,12 @@ export default function MetaTrialGuide({
       return { ...q, items }
     })
     if (nextItems) onPatchQuote?.({ items: nextItems })
+  }
+
+  const patchRevealBill = (nextBill) => {
+    const bill = normalizeBillAdjustments(nextBill)
+    setRevealQuote((q) => (q ? { ...q, billAdjustments: bill } : q))
+    onPatchQuote?.({ billAdjustments: bill })
   }
 
   const applyPaperStyle = (id) => {
@@ -2029,6 +2190,7 @@ export default function MetaTrialGuide({
               onLogoSizeChange={applyLogoSize}
               onRateChange={patchRevealRate}
               onCustomerChange={patchRevealCustomer}
+              onBillChange={patchRevealBill}
             />
           </div>
           <input

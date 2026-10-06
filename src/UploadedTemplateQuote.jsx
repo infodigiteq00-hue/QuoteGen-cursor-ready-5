@@ -729,8 +729,8 @@ export default function UploadedTemplateQuote({
   // real figures are computed here and filled into those rows — same engine as
   // the original QuoteGen layout (formulas + extra lines below subtotal).
   const totals = useMemo(
-    () => computeQuoteTotals(quote.items || [], columns, quote.extraLines),
-    [quote.items, columns, quote.extraLines]
+    () => computeQuoteTotals(quote.items || [], columns, quote.extraLines, quote.billAdjustments),
+    [quote.items, columns, quote.extraLines, quote.billAdjustments]
   )
   const suggestClients = useMemo(() => clientsFromQuotations(historyQuotes, quote.customer), [historyQuotes, quote.customer])
   const suggestProducts = useMemo(

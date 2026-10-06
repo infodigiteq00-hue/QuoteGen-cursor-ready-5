@@ -529,8 +529,30 @@ export function blankExtraLine() {
   }
 }
 
+/** Quote-level discount (percent or flat ₹) and tax percent, used when there is no column. */
+export function normalizeBillAdjustments(raw) {
+  const showDiscount = raw?.showDiscount === false ? false : raw?.showDiscount === true ? true : null
+  return {
+    taxPercent: raw?.taxPercent ?? '',
+    discountValue: raw?.discountValue ?? '',
+    discountUnit: raw?.discountUnit === 'amount' ? 'amount' : 'percent',
+    showDiscount
+  }
+}
+
+function summaryDiscountLabel(bill) {
+  const raw = String(bill?.discountValue || '').trim()
+  if (bill?.discountUnit === 'percent' && raw) return `Less: Discount (${raw}%)`
+  return 'Less: Discount'
+}
+
+function summaryTaxLabel(bill) {
+  const raw = String(bill?.taxPercent || '').trim()
+  return raw ? `Add: Tax (${raw}%)` : 'Add: Tax'
+}
+
 /** Quote-level totals: subtotal -> discounts -> taxable -> taxes -> extra lines -> grand total. */
-export function computeQuoteTotals(items, columns, extraLines) {
+export function computeQuoteTotals(items, columns, extraLines, billAdjustments) {
   const cols = columns || []
   const rows = Array.isArray(items) ? items : []
   const nestedCols = cols.filter(isNestedColumn)
@@ -545,7 +567,6 @@ export function computeQuoteTotals(items, columns, extraLines) {
   let discountTotal = 0
   let taxTotal = 0
   let taxableTotal = 0
-  let lineTotal = 0
 
   for (const item of rows) {
     const totals = computeRowTotals(item, cols)
@@ -553,7 +574,6 @@ export function computeQuoteTotals(items, columns, extraLines) {
     discountTotal += totals.discount
     taxTotal += totals.tax
     taxableTotal += totals.taxable
-    lineTotal += totals.total
     for (const entry of perColumn) {
       entry.amount = round2(entry.amount + (totals.perColumn[entry.id] || 0))
     }
@@ -566,7 +586,29 @@ export function computeQuoteTotals(items, columns, extraLines) {
   // max(0, subtotal − discounts): an over-discount on one row must not steal
   // taxable value from another.
   taxableTotal = round2(taxableTotal)
-  const extraBase = round2(lineTotal)
+
+  const bill = normalizeBillAdjustments(billAdjustments)
+  const hasTaxColumn = cols.some(col => columnType(col) === 'tax')
+  const hasDiscountColumn = cols.some(col => columnType(col) === 'discount')
+  const hideManualDiscount = !hasDiscountColumn && bill.showDiscount === false
+  let manualDiscount = 0
+  if (!hasDiscountColumn && !hideManualDiscount) {
+    const raw = Math.abs(toNumber(bill.discountValue) || 0)
+    manualDiscount = bill.discountUnit === 'percent'
+      ? round2(subtotal * raw / 100)
+      : round2(Math.min(subtotal, raw))
+  }
+  const shownDiscount = round2(hasDiscountColumn ? discountTotal : manualDiscount)
+  const taxBase = hasDiscountColumn ? taxableTotal : round2(Math.max(0, subtotal - manualDiscount))
+  const manualTax = hasTaxColumn
+    ? 0
+    : round2(taxBase * Math.abs(toNumber(bill.taxPercent) || 0) / 100)
+  const shownTax = round2(hasTaxColumn ? taxTotal : manualTax)
+  const productTotal = round2(Math.max(0, subtotal - shownDiscount + shownTax))
+  discountTotal = shownDiscount
+  taxTotal = shownTax
+  taxableTotal = taxBase
+  const extraBase = productTotal
   const resolvedExtraLines = normalizeExtraLines(extraLines).map(line => ({
     ...line,
     resolved: extraLineResolvedAmount(line, extraBase)
@@ -597,6 +639,21 @@ export function computeQuoteTotals(items, columns, extraLines) {
     grandTotal: round2(Math.max(0, extraBase + extraAdd - extraLess)),
     perColumn,
     resolvedExtraLines,
+    summaryDiscount: {
+      fromColumn: hasDiscountColumn,
+      hidden: hideManualDiscount,
+      unit: hasDiscountColumn ? 'amount' : bill.discountUnit,
+      rate: hasDiscountColumn ? '' : bill.discountValue,
+      amount: shownDiscount,
+      label: summaryDiscountLabel(bill)
+    },
+    summaryTax: {
+      fromColumn: hasTaxColumn,
+      unit: 'percent',
+      rate: hasTaxColumn ? '' : bill.taxPercent,
+      amount: shownTax,
+      label: summaryTaxLabel(bill)
+    },
     hasNested: nestedCols.length > 0
   }
 }

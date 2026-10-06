@@ -79,7 +79,7 @@ export async function fillTemplateForQuote({
   }
 
   const cols = columns?.length ? columns : (template.mapping?.columns || [])
-  const totals = computeQuoteTotals(quote?.items || [], cols, quote?.extraLines)
+  const totals = computeQuoteTotals(quote?.items || [], cols, quote?.extraLines, quote?.billAdjustments)
   const design = template.design || {}
 
   let outBuf

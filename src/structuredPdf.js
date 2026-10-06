@@ -318,11 +318,19 @@ export async function downloadStructuredQuotationPdf({
 
   // Totals
   y += 4
+  const discountRows = totals?.summaryDiscount?.hidden
+    ? []
+    : totals?.summaryDiscount?.fromColumn
+      ? (totals?.perColumn || []).filter(e => e.type === 'discount').map(e => [`Less: ${e.label}`, e.amount])
+      : [[totals?.summaryDiscount?.label || 'Less: Discount', totals?.summaryDiscount?.amount || 0]]
+  const taxRows = totals?.summaryTax?.fromColumn
+    ? (totals?.perColumn || []).filter(e => e.type === 'tax').map(e => [`Add: ${e.label}`, e.amount])
+    : [[totals?.summaryTax?.label || 'Add: Tax', totals?.summaryTax?.amount || 0]]
   const totalLines = [
     ['Subtotal', totals?.subtotal],
-    ...(totals?.perColumn || []).filter(e => e.type === 'discount').map(e => [`Less: ${e.label}`, e.amount]),
+    ...discountRows,
     totals?.discountTotal > 0 ? ['Taxable value', totals.taxableTotal] : null,
-    ...(totals?.perColumn || []).filter(e => e.type === 'tax').map(e => [`Add: ${e.label}`, e.amount]),
+    ...taxRows,
     ...(quote?.extraLines || []).map(line => {
       const amt = extraLineResolvedAmount(line, totals?.extraBase)
       return [`${line.kind === 'add' ? 'Add' : 'Less'}: ${line.label || 'Extra'}`, line.kind === 'less' ? -Math.abs(amt) : amt]

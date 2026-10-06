@@ -10,8 +10,9 @@ export const A4_CONTENT_TOP_MARGIN = 10
 export const A4_CONTENT_BOTTOM_MARGIN = 28
 /** If closing almost fits, absorb this much overflow instead of a near-empty page. */
 export const A4_CLOSING_SQUEEZE_PX = 72
-/** Same slack for the subtotal block, so a few spare pixels do not open a new page. */
-const A4_TOTALS_SQUEEZE_PX = 72
+/** If the subtotal is only a little too tall, shrink it instead of opening a sparse next page. */
+const A4_TOTALS_SQUEEZE_PX = 110
+const A4_TOTALS_MIN_FIT = 0.8
 /** Under this many products, never drag 2–3 rows onto the subtotal page. */
 const A4_SHORT_QUOTE_ROWS = 8
 /** Gap above the pinned sheet footer after totals/closing. */
@@ -36,20 +37,41 @@ export function defaultA4Pages(rowCount) {
   ]
 }
 
+function pageRecord(page, count) {
+  return {
+    showHeader: !!page.showHeader,
+    showMeta: !!page.showMeta,
+    rows: (page.rows || []).filter(i => i >= 0 && i < count),
+    showTotals: !!page.showTotals,
+    showClosing: !!page.showClosing,
+    totalsFit: page.showTotals && Number(page.totalsFit) > 0 && Number(page.totalsFit) < 1
+      ? Number(page.totalsFit)
+      : 1
+  }
+}
+
 /** If a saved plan is missing rows (item added/removed), fall back to one measuring pass. */
 export function normalizeA4Pages(plan, rowCount) {
   const count = Math.max(0, rowCount)
   const pages = Array.isArray(plan) ? plan : []
   const rows = pages.flatMap(page => (page?.rows || []).filter(i => i >= 0 && i < count))
   const unique = new Set(rows)
-  if (unique.size !== count) return defaultA4Pages(count)
-  return pages.map(page => ({
-    showHeader: !!page.showHeader,
-    showMeta: !!page.showMeta,
-    rows: (page.rows || []).filter(i => i >= 0 && i < count),
-    showTotals: !!page.showTotals,
-    showClosing: !!page.showClosing
-  }))
+  if (unique.size !== count) {
+    const missing = []
+    for (let i = 0; i < count; i += 1) if (!unique.has(i)) missing.push(i)
+    const appended = missing.length > 0 && missing[0] === unique.size && pages.length > 0
+    if (appended) {
+      const next = pages.map(page => pageRecord(page, count))
+      let host = 0
+      for (let i = next.length - 1; i >= 0; i -= 1) {
+        if (next[i].rows.length) { host = i; break }
+      }
+      next[host] = { ...next[host], rows: [...next[host].rows, ...missing] }
+      return next
+    }
+    return defaultA4Pages(count)
+  }
+  return pages.map(page => pageRecord(page, count))
 }
 
 function boxExtras(el) {
@@ -129,6 +151,14 @@ export function measureA4Blocks(root) {
     }
   }
   const papers = Array.from(root.querySelectorAll('.qg-studio-paper'))
+  const zoomed = []
+  root.querySelectorAll('[data-qg-block="totals"]').forEach((node) => {
+    zoomed.push([node, node.style.zoom])
+    node.style.zoom = ''
+  })
+  const restoreZoom = () => {
+    zoomed.forEach(([node, zoom]) => { node.style.zoom = zoom })
+  }
   const firstPaper = papers[0]
   const continuedPaper = papers.slice(1).find(Boolean)
   const heightOf = (selector) => {
@@ -161,6 +191,7 @@ export function measureA4Blocks(root) {
       ? Array.from(closingEl.children).reduce((sum, node) => sum + localHeight(node), 0) + boxExtras(closingEl)
       : 0
   const closingHeight = Math.max(closingInner, 0)
+  restoreZoom()
   return {
     headerHeight: heightOf('[data-qg-block="header"]'),
     metaHeight: heightOf('[data-qg-block="meta"]'),
@@ -259,26 +290,51 @@ export function packA4Pages({
 
   const lastItems = () => pages[pages.length - 1]
 
-  const continuedFits = (rowIds) => {
+  const continuedFits = (rowIds, fit = 1) => {
     const rowsH = rowIds.reduce((sum, i) => sum + heightOf(i), 0)
     const chrome = (rowIds.length ? theadHeight : 0) + pad + A4_FOOTER_GAP
-    return chrome + rowsH + totals <= continuedBudget + A4_TOTALS_SQUEEZE_PX
+    return chrome + rowsH + totals * fit <= continuedBudget + 1
+  }
+
+  const placeTotals = (page, room) => {
+    if (room >= totals) {
+      page.showTotals = true
+      page.totalsFit = 1
+      return true
+    }
+    const fit = room > 0 ? room / totals : 0
+    if (totals - room <= A4_TOTALS_SQUEEZE_PX && fit >= A4_TOTALS_MIN_FIT) {
+      page.showTotals = true
+      page.totalsFit = Math.round(fit * 1000) / 1000
+      return true
+    }
+    return false
   }
 
   if (totals > 0 && count > 0) {
     const last = lastItems()
     const room = leftoverOf(last)
-    if (last.rows.length > 0 && room + A4_TOTALS_SQUEEZE_PX >= totals) {
-      last.showTotals = true
-    } else {
+    if (!(last.rows.length > 0 && placeTotals(last, room))) {
       // Keep the earlier page full. Move the fewest trailing rows that let the
-      // subtotal fit on the next sheet. A short quote moves one, then two only
+      // subtotal sit above the footer. A short quote moves one, then two only
       // if one row still leaves the subtotal cut off.
       const maxMove = Math.min(count < A4_SHORT_QUOTE_ROWS ? 2 : 4, last.rows.length)
       let move = 0
+      let moveFit = 1
       for (let n = 1; n <= maxMove; n += 1) {
-        if (continuedFits(last.rows.slice(-n))) {
+        const tail = last.rows.slice(-n)
+        if (continuedFits(tail, 1)) {
           move = n
+          moveFit = 1
+          break
+        }
+        const rowsH = tail.reduce((sum, i) => sum + heightOf(i), 0)
+        const chrome = theadHeight + pad + A4_FOOTER_GAP
+        const nextRoom = continuedBudget - chrome - rowsH
+        const fit = nextRoom > 0 ? nextRoom / totals : 0
+        if (totals - nextRoom <= A4_TOTALS_SQUEEZE_PX && fit >= A4_TOTALS_MIN_FIT) {
+          move = n
+          moveFit = Math.round(fit * 1000) / 1000
           break
         }
       }
@@ -288,7 +344,8 @@ export function packA4Pages({
           showMeta: false,
           rows: [],
           showTotals: true,
-          showClosing: false
+          showClosing: false,
+          totalsFit: 1
         })
       } else {
         const tail = last.rows.splice(last.rows.length - move, move)
@@ -297,7 +354,8 @@ export function packA4Pages({
           showMeta: false,
           rows: tail,
           showTotals: true,
-          showClosing: false
+          showClosing: false,
+          totalsFit: moveFit
         })
       }
     }
@@ -305,7 +363,8 @@ export function packA4Pages({
 
   const last = lastItems()
   const leftover = leftoverOf(last)
-  const closeLeft = leftover - (last.showTotals ? totals : 0)
+  const fittedTotals = last.showTotals ? totals * (Number(last.totalsFit) > 0 ? Number(last.totalsFit) : 1) : 0
+  const closeLeft = leftover - fittedTotals
   const closeShort = Math.max(0, closing - closeLeft)
   const canSqueezeClose = closing > 0
     && closeShort > 0
