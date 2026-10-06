@@ -2,19 +2,19 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
-import UploadDoc from './UploadDoc.jsx'
-import OpenEditor from './OpenEditor.jsx'
-import UploadedTemplateQuote from './UploadedTemplateQuote.jsx'
-import NativeTemplateQuote from './NativeTemplateQuote.jsx'
-import KnowledgeBasePanel from './KnowledgeBasePanel.jsx'
-import AuthScreen from './AuthScreen.jsx'
-import MarketingLanding from './MarketingLanding.jsx'
-import MetaAdsLanding from './MetaAdsLanding.jsx'
-import MetaTrialGuide from './MetaTrialGuide.jsx'
+const UploadDoc = React.lazy(() => import('./UploadDoc.jsx'))
+const OpenEditor = React.lazy(() => import('./OpenEditor.jsx'))
+const UploadedTemplateQuote = React.lazy(() => import('./UploadedTemplateQuote.jsx'))
+const NativeTemplateQuote = React.lazy(() => import('./NativeTemplateQuote.jsx'))
+const KnowledgeBasePanel = React.lazy(() => import('./KnowledgeBasePanel.jsx'))
+const AuthScreen = React.lazy(() => import('./AuthScreen.jsx'))
+const MarketingLanding = React.lazy(() => import('./MarketingLanding.jsx'))
+const MetaAdsLanding = React.lazy(() => import('./MetaAdsLanding.jsx'))
+const MetaTrialGuide = React.lazy(() => import('./MetaTrialGuide.jsx'))
 import PaymentStatus from './PaymentStatus.jsx'
 import { PaymentOfferModal, usePaymentRequestOffer } from './PaymentRequestPrompt.jsx'
 import { indiaMobileInputValue, isValidIndiaMobile, normalizeIndiaMobileDigits } from '../shared/phone.js'
-import LegalPages, { matchLegalPage } from './LegalPages.jsx'
+const LegalPages = React.lazy(() => import('./LegalPages.jsx'))
 import { initMetaPixel } from './metaPixel.js'
 import { registerPwa } from './pwaInstall.js'
 import PwaInstallHost, { PwaAccountCard, PwaHomeCard, PwaInstallButton } from './PwaInstall.jsx'
@@ -22,8 +22,7 @@ import WsConvertModal from './WsConvertModal.jsx'
 import BrandMark from './BrandMark.jsx'
 import { emailLinkError } from './supabaseClient.js'
 import { getCurrentSession, installAuthFetch, onAuthChange, signOut } from './apiAuth.js'
-import { downloadQuotationPdf, onQuoteAssetImgError, quotationFileName, quoteAssetSrc } from './pdfExport.js'
-import { downloadQuotationExcel, downloadQuotationWord } from './officeExport.js'
+import { onQuoteAssetImgError, quotationFileName, quoteAssetSrc } from './quoteAssets.js'
 import { formatIndianAmount, layoutRolesFromMapping } from '../shared/templateMap.js'
 import {
   autofillFromKnowledge,
@@ -86,9 +85,9 @@ import {
 } from './QuoteStudio.jsx'
 import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, normalizeAccentHex, peekPreferredPaperStyle, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId, normalizePaperStyle } from './quotePaperThemes.js'
 import { peekPreferredColumns, readPreferredColumns, writePreferredColumns } from './quoteLayoutPrefs.js'
-import QuoteGenerateCeremony, { CEREMONY_MIN_MS } from './QuoteGenerateCeremony.jsx'
+const QuoteGenerateCeremony = React.lazy(() => import('./QuoteGenerateCeremony.jsx'))
 import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaTrialLock, clearMetaWelcome, readMetaWelcome, writeMetaWelcome, saveVerifiedMetaLead, recordMetaLeadProgress, markMetaTrialUnpaid, markMetaTrialPaid, isMetaTrialUnpaid, isMetaGuideActive } from './metaTrialLead.js'
-import { DEMO_QUOTE_CAP, readDemoQuoteCount, recordDemoQuote } from './demoQuotes.js'
+import { DEMO_QUOTE_CAP, generateTrialQuote, readDemoQuoteCount, recordDemoQuote } from './demoQuotes.js'
 import { trackPixel } from './metaPixel.js'
 import { A4_WIDTH_PX, defaultA4Pages, measureA4Blocks, normalizeA4Pages, packA4Pages, pagesEqual } from './a4Pagination.js'
 import { SuggestField, SuggestionMenu } from './SuggestField.jsx'
@@ -1165,6 +1164,15 @@ function hasAuthRedirectHash() {
   return params.has('access_token') || params.has('error_code') || params.get('type') === 'recovery'
 }
 
+function matchLegalPage(pathname) {
+  const path = String(pathname || '/').replace(/\/+$/, '') || '/'
+  if (path === '/privacy' || path === '/privacy-policy') return 'privacy'
+  if (path === '/terms' || path === '/terms-of-service' || path === '/terms-and-conditions') return 'terms'
+  if (path === '/refund' || path === '/refund-policy' || path === '/cancellation') return 'refund'
+  if (path === '/contact' || path === '/contact-us') return 'contact'
+  return null
+}
+
 function isSignInPath(path) {
   const value = String(path || '').replace(/\/+$/, '') || '/'
   return value === '/signin' || value === '/login' || value === '/sign-in'
@@ -2120,7 +2128,11 @@ function App() {
     if (!enquiryText) return setError('Paste the customer enquiry to generate a quotation.')
     const playCeremony = overrides.ceremony !== false
     const colsForCeremony = colsOverride || columns
-    if (playCeremony) setGenerateCeremony({ enquiry: enquiryText, columns: colsForCeremony })
+    let ceremonyMinMs = 0
+    if (playCeremony) {
+      setGenerateCeremony({ enquiry: enquiryText, columns: colsForCeremony })
+      ceremonyMinMs = (await import('./QuoteGenerateCeremony.jsx')).CEREMONY_MIN_MS
+    }
     const ceremonyStarted = Date.now()
     setLoading(true); setError('')
     try {
@@ -2173,7 +2185,7 @@ function App() {
 
       await openQuoteInEditor(built, { id: null, template: tplData || null })
       if (playCeremony) {
-        const wait = CEREMONY_MIN_MS - (Date.now() - ceremonyStarted)
+        const wait = ceremonyMinMs - (Date.now() - ceremonyStarted)
         if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait))
       }
       return built
@@ -6384,14 +6396,16 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
     setPdfNote('')
     try {
       if (kind === 'word') {
+        const { downloadQuotationWord } = await import('./officeExport.js')
         downloadQuotationWord({ quote, profile, columns, totals: quoteTotals, theme: paperTheme, docLabel })
         return
       }
       if (kind === 'excel') {
+        const { downloadQuotationExcel } = await import('./officeExport.js')
         await downloadQuotationExcel({ quote, profile, columns, totals: quoteTotals, theme: paperTheme, docLabel })
         return
       }
-      // pdf / preview-pdf — exact preview pages, light PDF (not PNG screenshots)
+      const { downloadQuotationPdf } = await import('./pdfExport.js')
       await downloadQuotationPdf(quotationFileName(quote, 'pdf'))
     } catch (error) {
       if (kind === 'pdf' || kind === 'preview-pdf' || !kind) {
@@ -11122,6 +11136,186 @@ function AuthedFollowUps() {
   return <LeadFollowUpAlerts />
 }
 
+const PREVIEW_LEAD = {
+  name: 'Aarav Shah',
+  email: 'aarav.shah@example.com',
+  phone: '9876543210',
+  company: 'Shah Engineering',
+  verified: true
+}
+
+function LeadJourneyPreview({ onClose }) {
+  const [step, setStep] = React.useState('arrival')
+  const [enquiry, setEnquiry] = React.useState('')
+  const [columns, setColumns] = React.useState([])
+  const [loading, setLoading] = React.useState(false)
+  const [error, setError] = React.useState('')
+  const hour = new Date().getHours()
+  const greetingWord = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  const steps = [
+    ['arrival', 'After the code'],
+    ['demo', 'Demo'],
+    ['paid', 'Payment'],
+    ['password', 'Create account'],
+    ['home', 'Signed in']
+  ]
+  const emptyStats = [
+    { label: 'Drafts to finish', value: '0', sub: '0 of 0 total', go: () => {} },
+    { label: 'Completed', value: '0', sub: 'Converted to invoice', go: () => {} },
+    { label: 'This month', value: '0', sub: 'Quotations touched', go: () => {} },
+    { label: 'Total quoted', value: money(0), sub: 'Across 0 quotations', go: () => {} }
+  ]
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 220, display: 'flex', flexDirection: 'column', background: step === 'home' ? '#f5f7fa' : '#070B14' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: '#0D1117', color: '#fff', flex: '0 0 auto' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          {steps.map(([id, label]) => {
+            const on = step === id
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={on}
+                onClick={() => setStep(id)}
+                style={{
+                  minHeight: 34,
+                  padding: '0 12px',
+                  borderRadius: 999,
+                  border: on ? '1px solid #1A73E8' : '1px solid rgba(255,255,255,.16)',
+                  background: on ? '#1A73E8' : 'transparent',
+                  color: '#fff',
+                  fontSize: 13,
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                {label}
+              </button>
+            )
+          })}
+          <span style={{ fontSize: 12.5, color: 'rgba(255,255,255,.62)', marginLeft: 4 }}>Preview only. Nothing is charged or saved.</span>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{ minHeight: 34, padding: '0 14px', borderRadius: 999, border: '1px solid rgba(255,255,255,.22)', background: 'rgba(255,255,255,.1)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+        >
+          Close preview
+        </button>
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+        {step === 'arrival' && (
+          <MetaAdsLanding
+            celebrate
+            onSignIn={onClose}
+            onContinueTrial={() => setStep('demo')}
+          />
+        )}
+        {step === 'demo' && (
+          <MetaTrialGuide
+            enquiry={enquiry}
+            setEnquiry={setEnquiry}
+            columns={columns}
+            loading={loading}
+            error={error}
+            trialLead={PREVIEW_LEAD}
+            demoQuotesUsed={0}
+            demoQuoteCap={DEMO_QUOTE_CAP}
+            onPreviewPay={() => setStep('paid')}
+            onGenerate={async (nextColumns) => {
+              setColumns(nextColumns)
+              setLoading(true)
+              setError('')
+              try {
+                return await generateTrialQuote({ enquiry, columns: nextColumns })
+              } catch (err) {
+                const message = err.message || 'Could not create the quotation.'
+                setError(message)
+                throw new Error(message)
+              } finally {
+                setLoading(false)
+              }
+            }}
+            onTryAnother={() => {
+              setEnquiry('')
+              setError('')
+            }}
+          />
+        )}
+        {step === 'paid' && (
+          <PaymentStatus
+            previewCustomer={{
+              setupAccount: true,
+              amount: 399,
+              email: PREVIEW_LEAD.email,
+              name: PREVIEW_LEAD.name,
+              phone: PREVIEW_LEAD.phone,
+              company: PREVIEW_LEAD.company
+            }}
+            onAccountReady={() => setStep('password')}
+          />
+        )}
+        {step === 'password' && (
+          <AuthScreen
+            initialMode="create-password"
+            prefillEmail={PREVIEW_LEAD.email}
+            prefillPhone={PREVIEW_LEAD.phone}
+            leadName={PREVIEW_LEAD.name}
+            leadCompany={PREVIEW_LEAD.company}
+            accountReady
+            onCreatePassword={async () => { setStep('home') }}
+          />
+        )}
+        {step === 'home' && (
+          <div style={{ display: 'flex', minHeight: '100%', alignItems: 'stretch', background: '#f5f7fa', color: '#2d3748' }}>
+            <WsSidebar
+              view="home"
+              onNav={() => {}}
+              onNewQuote={() => {}}
+              onOpenEditor={() => {}}
+              recentCount={0}
+              authUserEmail={PREVIEW_LEAD.email}
+              isMobile={false}
+              mobileOpen={false}
+              hidden={false}
+              onClose={() => {}}
+              onHide={() => {}}
+            />
+            <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+              <WsHeader
+                title="Home"
+                hint="Everything starts here"
+                showBack={false}
+                onBack={() => {}}
+                isMobile={false}
+                showMenu={false}
+                onMenu={() => {}}
+              />
+              <div style={{ padding: '24px 30px 64px' }}>
+                <WsHome
+                  greetingWord={greetingWord}
+                  greetingName="Aarav"
+                  stats={emptyStats}
+                  recent={[]}
+                  topClients={[]}
+                  onOpen={() => {}}
+                  onClone={() => {}}
+                  onConverted={() => {}}
+                  onOpenCompany={() => {}}
+                  onNav={() => {}}
+                  onNewQuote={() => {}}
+                  onOpenEditor={() => {}}
+                />
+              </div>
+            </main>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function WsMetaAdsLeadsAdmin({ canDelete = false }) {
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState('')
@@ -11904,26 +12098,7 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
         document.body
       )}
       {arrivalPreview && canDelete && createPortal(
-        <div style={{ position: 'fixed', inset: 0, zIndex: 220, overflow: 'auto', background: '#070B14' }}>
-          <button
-            type="button"
-            onClick={() => setArrivalPreview(false)}
-            style={{ position: 'fixed', top: 16, right: 16, zIndex: 221, minHeight: 36, padding: '0 14px', borderRadius: 999, border: '1px solid rgba(255,255,255,.22)', background: 'rgba(255,255,255,.1)', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
-          >
-            Close preview
-          </button>
-          <MetaAdsLanding
-            celebrate
-            onContinueTrial={() => {
-              try {
-                sessionStorage.setItem('qg_admin_demo_preview', '1')
-                sessionStorage.setItem('qg_demo_from_intro', '1')
-              } catch { /* ignore */ }
-              window.location.assign('/demo')
-            }}
-            onSignIn={() => setArrivalPreview(false)}
-          />
-        </div>,
+        <LeadJourneyPreview onClose={() => setArrivalPreview(false)} />,
         document.body
       )}
       {removing && createPortal(
@@ -12330,6 +12505,14 @@ function WsComingSoon({ title, body }) {
   )
 }
 
+function ScreenFallback() {
+  return (
+    <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#f5f7fa', fontFamily: 'Outfit, Inter, system-ui, sans-serif' }}>
+      <div style={{ fontWeight: 700, fontSize: 18, color: '#1e293b' }}>Loading…</div>
+    </main>
+  )
+}
+
 class AppErrorBoundary extends React.Component {
   constructor(props) {
     super(props)
@@ -12367,9 +12550,11 @@ export function mountQuoteGenApp() {
   rootEl.__qgRoot = rootEl.__qgRoot || createRoot(rootEl)
   rootEl.__qgRoot.render(
     <AppErrorBoundary>
-      <PwaInstallHost />
-      <AuthedFollowUps />
-      <App />
+      <React.Suspense fallback={<ScreenFallback />}>
+        <PwaInstallHost />
+        <AuthedFollowUps />
+        <App />
+      </React.Suspense>
     </AppErrorBoundary>
   )
 }

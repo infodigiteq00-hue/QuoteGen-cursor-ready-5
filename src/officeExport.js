@@ -11,7 +11,12 @@ import {
 import { formatIndianAmount } from '../shared/templateMap.js'
 import { normalizeFooterFit } from '../shared/footerFit.js'
 import { normalizeHeaderMeta } from '../shared/headerMeta.js'
-import { quotationFileName, capturePreviewCanvases } from './pdfExport.js'
+import { quotationFileName } from './quoteAssets.js'
+
+async function captureCanvases(opts) {
+  const { capturePreviewCanvases } = await import('./pdfExport.js')
+  return capturePreviewCanvases(opts)
+}
 import { displayLogoWidth } from './QuoteStudio.jsx'
 
 function money(n) {
@@ -352,7 +357,7 @@ async function fetchRaster(url) {
 }
 
 export async function downloadPreviewAsWord(quote) {
-  const { canvases } = await capturePreviewCanvases()
+  const { canvases } = await captureCanvases()
   if (!canvases.length) throw new Error('nothing on screen to export')
   const zipMod = await import('jszip')
   const JSZip = zipMod.default || zipMod
@@ -462,7 +467,7 @@ export async function downloadPreviewAsExcel({ quote, profile, columns, totals, 
   let canvases = []
   try {
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
-    ;({ canvases } = await capturePreviewCanvases({ scale: 2 }))
+    ;({ canvases } = await captureCanvases({ scale: 2 }))
   } finally {
     document.documentElement.classList.remove('qg-a4-export')
   }

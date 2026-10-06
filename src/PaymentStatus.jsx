@@ -5,20 +5,21 @@ import './paymentStatus.css'
 const POLL_MS = 3000
 const MAX_POLLS = 40
 
-export default function PaymentStatus({ onContinue, onPaid, onAccountReady }) {
-  const orderId = new URLSearchParams(window.location.search).get('order') || ''
-  const [state, setState] = useState(orderId ? 'PENDING' : 'MISSING')
-  const [amount, setAmount] = useState(0)
+export default function PaymentStatus({ onContinue, onPaid, onAccountReady, previewCustomer = null }) {
+  const orderId = previewCustomer ? '' : (new URLSearchParams(window.location.search).get('order') || '')
+  const [state, setState] = useState(previewCustomer ? 'COMPLETED' : (orderId ? 'PENDING' : 'MISSING'))
+  const [amount, setAmount] = useState(previewCustomer?.amount || 0)
   const [error, setError] = useState('')
-  const [customer, setCustomer] = useState(null)
+  const [customer, setCustomer] = useState(previewCustomer)
 
   useEffect(() => {
+    if (previewCustomer) return undefined
     if (state !== 'COMPLETED' || !customer?.setupAccount) return undefined
     onAccountReady?.(customer)
-  }, [state, customer])
+  }, [state, customer, previewCustomer])
 
   useEffect(() => {
-    if (!orderId) return undefined
+    if (previewCustomer || !orderId) return undefined
     let cancelled = false
     let polls = 0
     let timer = null
@@ -90,6 +91,9 @@ export default function PaymentStatus({ onContinue, onPaid, onAccountReady }) {
         </p>
         {error && !done && !failed ? <p className="qg-pay-status-error">{error}</p> : null}
         {orderId ? <p className="qg-pay-status-ref">Reference: {orderId}</p> : null}
+        {previewCustomer && done && customer?.setupAccount ? (
+          <button type="button" onClick={() => onAccountReady?.(customer)}>Continue</button>
+        ) : null}
         {((done && !customer?.setupAccount) || failed) ? (
           <button type="button" onClick={() => onContinue?.(state)}>
             {done ? 'Go to QuoteGen' : 'Back to QuoteGen'}

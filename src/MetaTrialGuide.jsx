@@ -1496,7 +1496,8 @@ export default function MetaTrialGuide({
   trialLead = null,
   onSaveCompany,
   onPatchQuote,
-  onCompanyProfileSaved
+  onCompanyProfileSaved,
+  onPreviewPay
 }) {
   const initialSeed = companySeedFromLead(usefulLead(trialLead) || readMetaAdsLead(), companyProfile)
   const savedProgress = readMetaGuideProgress()
@@ -1631,6 +1632,10 @@ export default function MetaTrialGuide({
 
   const openPay = async () => {
     if (payBusy) return
+    if (onPreviewPay) {
+      onPreviewPay()
+      return
+    }
     setPayError('')
     setPayBusy(true)
     trackPixel('InitiateCheckout', { value: payPrice, currency: 'INR', num_items: 1, content_name: 'QuoteGen monthly' })

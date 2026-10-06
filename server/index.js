@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import express from 'express'
+import compression from 'compression'
 import cors from 'cors'
 import OpenAI from 'openai'
 import { registerAuthRoutes, requireAuth } from './auth.js'
@@ -31,6 +32,12 @@ import multer from 'multer'
 
 const app = express()
 if (process.env.VERCEL || process.env.RAILWAY_ENVIRONMENT) app.set('trust proxy', 1)
+app.use(compression({
+  filter: (req, res) => {
+    if (req.path.startsWith('/api')) return false
+    return compression.filter(req, res)
+  }
+}))
 app.use(cors())
 app.use(express.json({ limit: '30mb' }))
 app.use((err, req, res, next) => {

@@ -1,6 +1,6 @@
 /** Client helpers for quotation series + autosave (talks to Express only). */
 import { attachmentUrlKey, imagePathKey, isAttachmentColumn, isImageColumn, normalizeColumnList } from '../shared/quoteColumns.js'
-import { quoteAssetSrc, storagePathFromUrl } from './pdfExport.js'
+import { quoteAssetSrc, storagePathFromUrl } from './quoteAssets.js'
 import { normalizeHeaderMeta } from '../shared/headerMeta.js'
 
 export function formatSeriesPreview({ prefix = 'QG', padding = 4, nextNumber = 1, includeYear = true } = {}) {

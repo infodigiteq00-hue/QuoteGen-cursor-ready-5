@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { onQuoteAssetImgError } from './pdfExport.js'
+import { onQuoteAssetImgError } from './quoteAssets.js'
 import { resolvePaperTheme, PAPER_THEMES, tableColorSwatches, DEFAULT_ACCENT, normalizeAccentHex } from './quotePaperThemes.js'
 import { SuggestField } from './SuggestField.jsx'
 import { matchClients, shippingAddressesForCustomer } from './suggestCatalog.js'
