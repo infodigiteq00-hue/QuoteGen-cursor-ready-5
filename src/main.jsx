@@ -10964,6 +10964,22 @@ function outreachVideoView(value) {
   return { label: 'No status', color: '#6B7688' }
 }
 
+const LEAD_TAG_COLORS = ['#1A73E8', '#1F8A4C', '#C47B2B', '#C2410C', '#6D28D9', '#475569']
+
+function LeadStarIcon({ on }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M12 3.2l2.4 5.1 5.6.7-4.1 3.8 1.1 5.5L12 15.8 7 18.3l1.1-5.5L4 9l5.6-.7L12 3.2z"
+        fill={on ? '#E0A106' : 'none'}
+        stroke={on ? '#E0A106' : '#8A94A6'}
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 function mergeSavedLead(row, next) {
   return {
     ...row,
@@ -11135,6 +11151,7 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
   const [copiedLeadId, setCopiedLeadId] = React.useState('')
   const [payPreview, setPayPreview] = React.useState(null)
   const [payPreviewNote, setPayPreviewNote] = React.useState('')
+  const [tagDraft, setTagDraft] = React.useState(null)
 
   const load = React.useCallback(() => {
     setLoading(true)
@@ -11293,6 +11310,24 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
     setPayBusy(false)
   }
 
+  const saveLeadMarks = async (lead, body) => {
+    setError('')
+    setLeads((rows) => rows.map((row) => (row.id === lead.id ? { ...row, ...body } : row)))
+    try {
+      const response = await fetch(`/api/meta-ads-leads/${lead.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || data.message || 'Could not update this lead')
+      setLeads((rows) => rows.map((row) => (row.id === data.lead.id ? mergeSavedLead(row, data.lead) : row)))
+    } catch (err) {
+      setLeads((rows) => rows.map((row) => (row.id === lead.id ? lead : row)))
+      setError(err.message || 'Could not update this lead')
+    }
+  }
+
   const setLeadActive = async (lead, active) => {
     setRowBusy(lead.id)
     setError('')
@@ -11410,7 +11445,9 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
     { id: 'video', label: 'Video seen', value: videoSeenCount, color: '#1F8A4C' },
     { id: 'reminders', label: 'Reminders sent', value: remindersSentTotal, color: '#C47B2B' }
   ]
+  const starredCount = leads.filter((lead) => lead.starred).length
   const visibleLeads = leads.filter((lead) => {
+    if (leadFilter === 'starred' && !lead.starred) return false
     const query = leadQuery.trim()
     if (query) {
       return adminRecordMatches(query, [
@@ -11426,16 +11463,18 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
         lead.videoSeen,
         lead.lastReply,
         lead.demoCode ? `demo ${lead.demoCode}` : '',
-        lead.demoCode ? `demo/${lead.demoCode}` : ''
+        lead.demoCode ? `demo/${lead.demoCode}` : '',
+        ...(Array.isArray(lead.tags) ? lead.tags.map((tag) => tag.label) : [])
       ])
     }
+    if (leadFilter === 'starred') return true
     if (leadFilter === 'purchased') return !lead.deactivated && lead.status === 'purchased'
     if (leadFilter === 'demo') return !lead.deactivated && lead.status === 'demo'
     if (leadFilter === 'lead') return !lead.deactivated && lead.status !== 'purchased' && lead.status !== 'demo'
     if (leadFilter === 'video') return /^yes$/i.test(String(lead.videoSeen || ''))
     if (leadFilter === 'reminders') return remindedQuiet(lead)
     return true
-  })
+  }).slice().sort((a, b) => Number(Boolean(b.starred)) - Number(Boolean(a.starred)))
 
   return (
     <div style={{ maxWidth: 1080, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -11447,14 +11486,38 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
             <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4, maxWidth: 520 }}>
               Each person on their own card. Video seen and reminders sent come from the outreach sheet.
             </div>
-            <input
-              type="search"
-              value={leadQuery}
-              onChange={(e) => setLeadQuery(e.target.value)}
-              placeholder="Search name, email, mobile, or company"
-              aria-label="Search leads"
-              style={{ display: 'block', width: 'min(420px, 100%)', boxSizing: 'border-box', minHeight: 44, marginTop: 14, padding: '0 14px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, color: '#0D1117', background: '#fff' }}
-            />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 14 }}>
+              <input
+                type="search"
+                value={leadQuery}
+                onChange={(e) => setLeadQuery(e.target.value)}
+                placeholder="Search name, email, mobile, company, or tag"
+                aria-label="Search leads"
+                style={{ display: 'block', width: 'min(420px, 100%)', boxSizing: 'border-box', minHeight: 44, padding: '0 14px', border: '1.5px solid #D5DDE9', borderRadius: 12, fontSize: 15, color: '#0D1117', background: '#fff' }}
+              />
+              <button
+                type="button"
+                aria-pressed={leadFilter === 'starred'}
+                onClick={() => setLeadFilter((current) => (current === 'starred' ? 'lead' : 'starred'))}
+                style={{
+                  minHeight: 44,
+                  padding: '0 14px',
+                  borderRadius: 12,
+                  border: leadFilter === 'starred' ? '1.5px solid #E0A106' : '1.5px solid #D5DDE9',
+                  background: leadFilter === 'starred' ? '#FFF8E8' : '#fff',
+                  color: leadFilter === 'starred' ? '#8A6408' : '#3D4859',
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6
+                }}
+              >
+                <LeadStarIcon on={leadFilter === 'starred'} />
+                Starred{loading ? '' : ` ${starredCount}`}
+              </button>
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {canDelete && (
@@ -11538,21 +11601,93 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
               <div style={{ marginTop: 3, fontSize: 14.5, fontWeight: 650, color: muted, overflowWrap: 'anywhere' }}>{value}</div>
             </div>
           )
+          const tags = Array.isArray(lead.tags) ? lead.tags : []
+          const drafting = tagDraft?.leadId === lead.id
+          const addTag = (event) => {
+            event.preventDefault()
+            const label = String(tagDraft?.label || '').trim().replace(/\s+/g, ' ').slice(0, 24)
+            if (!label || tags.length >= 8) return
+            if (tags.some((tag) => tag.label.toLowerCase() === label.toLowerCase())) {
+              setTagDraft(null)
+              return
+            }
+            saveLeadMarks(lead, { tags: [...tags, { label, color: tagDraft.color || LEAD_TAG_COLORS[0] }] })
+            setTagDraft(null)
+          }
           return (
-            <article key={lead.id} style={{ background: lead.deactivated ? '#F8FAFC' : '#fff', border: '1px solid #e8edf3', borderRadius: 18, padding: 18 }}>
+            <article key={lead.id} style={{ background: lead.deactivated ? '#F8FAFC' : '#fff', border: lead.starred ? '1.5px solid #F3D48A' : '1px solid #e8edf3', borderRadius: 18, padding: 18 }}>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'flex-start', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', gap: 12, minWidth: 0, flex: '1 1 240px' }}>
                   <div style={{ width: 44, height: 44, flex: '0 0 44px', borderRadius: 12, background: '#F4F7FB', color: '#5B7C9A', fontSize: 18, fontWeight: 750, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     {(lead.name || '?').charAt(0).toUpperCase()}
                   </div>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 17, fontWeight: 800, color: muted, lineHeight: 1.25 }}>{lead.name || 'Unnamed lead'}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                      <button
+                        type="button"
+                        aria-label={lead.starred ? `Unstar ${lead.name || 'lead'}` : `Star ${lead.name || 'lead'}`}
+                        aria-pressed={Boolean(lead.starred)}
+                        onClick={() => saveLeadMarks(lead, { starred: !lead.starred })}
+                        style={{ width: 32, height: 32, flex: '0 0 32px', border: 0, borderRadius: 8, background: 'transparent', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+                      >
+                        <LeadStarIcon on={Boolean(lead.starred)} />
+                      </button>
+                      <div style={{ fontSize: 17, fontWeight: 800, color: muted, lineHeight: 1.25 }}>{lead.name || 'Unnamed lead'}</div>
+                    </div>
                     <div style={{ marginTop: 3, fontSize: 14, color: '#6B7688' }}>
                       {[lead.company, lead.industry].filter(Boolean).join(' · ') || 'No company yet'}
                     </div>
                     <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
                       <span style={{ display: 'inline-block', padding: '4px 10px', borderRadius: 999, background: status.bg, color: status.color, border: `1px solid ${status.border}`, fontSize: 12, fontWeight: 750 }}>{status.label}</span>
                       <span style={{ fontSize: 12.5, color: '#8A94A6' }}>{status.hint}</span>
+                    </div>
+                    <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                      {tags.map((tag) => (
+                        <span key={tag.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%', padding: '3px 6px 3px 10px', borderRadius: 999, background: `${tag.color}18`, color: tag.color, fontSize: 12, fontWeight: 750 }}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{tag.label}</span>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${tag.label}`}
+                            onClick={() => saveLeadMarks(lead, { tags: tags.filter((item) => item.label !== tag.label) })}
+                            style={{ border: 0, background: 'transparent', color: tag.color, cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px' }}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                      {drafting ? (
+                        <form onSubmit={addTag} style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                          {LEAD_TAG_COLORS.map((color) => (
+                            <button
+                              key={color}
+                              type="button"
+                              aria-label={`Tag color ${color}`}
+                              aria-pressed={tagDraft.color === color}
+                              onClick={() => setTagDraft((current) => ({ ...current, color }))}
+                              style={{ width: 16, height: 16, borderRadius: 999, border: tagDraft.color === color ? '2px solid #0D1117' : '2px solid #fff', boxShadow: '0 0 0 1px #D5DDE9', background: color, padding: 0, cursor: 'pointer' }}
+                            />
+                          ))}
+                          <input
+                            autoFocus
+                            value={tagDraft.label}
+                            maxLength={24}
+                            onChange={(e) => setTagDraft((current) => ({ ...current, label: e.target.value }))}
+                            placeholder="Tag"
+                            aria-label="Tag name"
+                            style={{ width: 120, minHeight: 30, padding: '0 8px', border: '1.5px solid #D5DDE9', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }}
+                          />
+                          <button type="submit" style={{ minHeight: 30, padding: '0 10px', border: 0, borderRadius: 8, background: '#1A73E8', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Add</button>
+                          <button type="button" onClick={() => setTagDraft(null)} style={{ minHeight: 30, padding: '0 8px', border: 0, background: 'transparent', color: '#6B7688', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+                        </form>
+                      ) : tags.length < 8 ? (
+                        <button
+                          type="button"
+                          onClick={() => setTagDraft({ leadId: lead.id, label: '', color: LEAD_TAG_COLORS[0] })}
+                          style={{ minHeight: 28, padding: '0 10px', border: '1.5px dashed #D5DDE9', borderRadius: 999, background: '#fff', color: '#6B7688', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                        >
+                          + tag
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 </div>

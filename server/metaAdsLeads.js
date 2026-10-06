@@ -94,6 +94,24 @@ function validateLead(lead) {
 
 const STAGE_RANK = { lead: 0, demo: 1, purchased: 2 }
 const REMINDER_MINUTES = [5, 10, 15, 30, 60, 1440]
+const LEAD_TAG_COLORS = ['#1A73E8', '#1F8A4C', '#C47B2B', '#C2410C', '#6D28D9', '#475569']
+
+function normalizeLeadTags(raw) {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set()
+  const tags = []
+  for (const item of raw) {
+    const label = String(item?.label || '').trim().replace(/\s+/g, ' ').slice(0, 24)
+    if (!label) continue
+    const key = label.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    const color = LEAD_TAG_COLORS.includes(item?.color) ? item.color : LEAD_TAG_COLORS[0]
+    tags.push({ label, color })
+    if (tags.length >= 8) break
+  }
+  return tags
+}
 
 function reminderMinutesOf(value) {
   const n = Number(value)
@@ -121,13 +139,15 @@ function serializeLead(row) {
     remarks: row.remarks || '',
     followUpAt: row.follow_up_at || null,
     reminderMinutes: reminderMinutesOf(row.reminder_minutes),
+    starred: row.starred === true,
+    tags: normalizeLeadTags(row.tags),
     deactivated: Boolean(row.deactivated_at),
     deactivatedAt: row.deactivated_at || null,
     createdAt: row.created_at
   }
 }
 
-const LEAD_COLUMNS = 'id, name, phone, email, company, monthly_quotes, industry, source, path, query, status, intent, demo_at, purchased_at, purchase_amount, purchase_order_id, remarks, follow_up_at, reminder_minutes, deactivated_at, created_at'
+const LEAD_COLUMNS = 'id, name, phone, email, company, monthly_quotes, industry, source, path, query, status, intent, demo_at, purchased_at, purchase_amount, purchase_order_id, remarks, follow_up_at, reminder_minutes, starred, tags, deactivated_at, created_at'
 
 async function findLatestLead(supabase, { email, phone }) {
   const em = String(email || '').trim().toLowerCase()
@@ -777,6 +797,8 @@ export function registerMetaAdsLeadRoutes(app) {
       }
       patch.reminder_minutes = minutes
     }
+    if (body.starred != null) patch.starred = Boolean(body.starred)
+    if (body.tags != null) patch.tags = normalizeLeadTags(body.tags)
     if (body.deactivated != null) {
       patch.deactivated_at = body.deactivated ? new Date().toISOString() : null
     }

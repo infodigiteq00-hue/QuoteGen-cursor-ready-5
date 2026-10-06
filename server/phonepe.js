@@ -76,6 +76,24 @@ async function resolveRequestCharge(body) {
   }
 }
 
+/** Demo checkout creates a login shell before payment, with no password yet. */
+async function accountStillNeedsPassword(email) {
+  try {
+    const user = await findAuthUserByEmail(getSupabase(), email)
+    if (!user?.id) return true
+    const { data, error } = await getSupabase()
+      .from('user_profiles')
+      .select('password_set_at')
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (error) return true
+    return !data?.password_set_at
+  } catch (error) {
+    console.error('[phonepe] password check failed', error?.message)
+    return true
+  }
+}
+
 const HOSTS = {
   sandbox: {
     token: 'https://api-preprod.phonepe.com/apis/pg-sandbox/v1/oauth/token',
@@ -380,14 +398,21 @@ export function registerPublicPhonePeRoutes(app) {
       }
 
       const meta = data?.metaInfo || {}
+      const email = String(meta.udf4 || '').trim().toLowerCase()
+      const label = String(meta.udf5 || '')
       let setupAccount = false
-      if (isSupabaseConfigured()) {
+      if (state === 'COMPLETED' && isSupabaseConfigured()) {
         const linked = await getSupabase()
           .from('payment_requests')
           .select('id, lead_id')
           .eq('phonepe_order_id', orderId)
           .maybeSingle()
-        setupAccount = Boolean(linked.data?.lead_id)
+        // A lead payment link already knows who they are. The demo ₹399 checkout
+        // has no payment-request row, so use the details PhonePe stored on the order.
+        if (linked.data?.lead_id) setupAccount = true
+        else if (!linked.data && email && label.startsWith('QuoteGen monthly')) {
+          setupAccount = await accountStillNeedsPassword(email)
+        }
       }
       return res.json({
         state,
@@ -395,7 +420,7 @@ export function registerPublicPhonePeRoutes(app) {
         name: meta.udf1 || '',
         company: meta.udf2 || '',
         phone: meta.udf3 || '',
-        email: meta.udf4 || '',
+        email,
         setupAccount
       })
     } catch (error) {
