@@ -364,8 +364,9 @@ async function readApiResponse(response) {
 
 const MANUAL_DISCOUNT_KEY = 'qg_show_manual_discount'
 
-function readShowManualDiscount() {
-  try { return localStorage.getItem(MANUAL_DISCOUNT_KEY) !== '0' } catch { return true }
+function manualDiscountVisible(bill) {
+  if (!bill || bill.showDiscount === false) return false
+  return bill.showDiscount === true || Boolean(String(bill.discountValue || '').trim())
 }
 
 function writeShowManualDiscount(show) {
@@ -413,6 +414,14 @@ function TotalsExtraLines({ lines, base, onAdd, onUpdate, onRemove }) {
             <div className="no-print mt-1.5 flex items-center gap-1">
               <button
                 type="button"
+                onClick={() => onRemove(i)}
+                title="Remove"
+                className="w-4 shrink-0 text-left text-slate-300 hover:text-rose-500"
+              >
+                ×
+              </button>
+              <button
+                type="button"
                 title={isLess ? 'Subtract from total' : 'Add to total'}
                 onClick={() => onUpdate(i, { kind: isLess ? 'add' : 'less' })}
                 className="w-5 shrink-0 text-sm text-slate-400 hover:text-slate-700"
@@ -440,14 +449,6 @@ function TotalsExtraLines({ lines, base, onAdd, onUpdate, onRemove }) {
                 className="w-5 shrink-0 text-xs text-slate-400 hover:text-slate-600"
               >
                 {isPercent ? '%' : '₹'}
-              </button>
-              <button
-                type="button"
-                onClick={() => onRemove(i)}
-                title="Remove"
-                className="w-4 shrink-0 text-slate-300 hover:text-rose-500"
-              >
-                ×
               </button>
             </div>
             <div className="mt-1 hidden justify-between text-sm text-slate-500 print:flex">
@@ -535,15 +536,15 @@ function DescriptionCell({ value, onChange, onBlurExtra, products, onPickProduct
   if (!editing) {
     return (
       <div className="description-cell min-w-0 w-full rounded p-2 leading-snug hover:bg-slate-50">
-        <div
-          role="button"
-          tabIndex={0}
+      <div
+        role="button"
+        tabIndex={0}
           onClick={() => startEdit('title')}
           onKeyDown={e => { if (e.key === 'Enter') startEdit('title') }}
           className="cursor-text"
-        >
-          {primary
-            ? <p className="font-semibold text-ink">{primary}</p>
+      >
+        {primary
+          ? <p className="font-semibold text-ink">{primary}</p>
             : <span className="text-slate-300">Product name</span>}
         </div>
         {secondary ? (
@@ -572,17 +573,17 @@ function DescriptionCell({ value, onChange, onBlurExtra, products, onPickProduct
   return (
     <>
       <div ref={wrapRef} className="description-cell qg-desc-edit min-w-0 w-full rounded p-1 leading-snug">
-        <SuggestField
+      <SuggestField
           bold
           autoFocus={focusPart === 'title'}
           value={title}
           onChange={(v) => push(stripMarkdownBold(v).replace(/\n/g, ' '), sub)}
-          suggestions={suggestions}
-          onPick={(item) => {
-            pickedRef.current = true
-            onPickProduct?.(item.product)
-            setEditing(false)
-          }}
+        suggestions={suggestions}
+        onPick={(item) => {
+          pickedRef.current = true
+          onPickProduct?.(item.product)
+          setEditing(false)
+        }}
           onEnter={() => subRef.current?.focus()}
           onBlur={leaveIfOutside}
           placeholder="Product name"
@@ -1642,8 +1643,8 @@ function App() {
       if (readMetaWelcome()) {
         setMetaWelcome(true)
         setMetaTrialDemo(false)
-        return
-      }
+      return
+    }
       const unpaid = isMetaTrialUnpaid(authUser.email)
       if (metaNextConsumedRef.current) {
         if (!unpaid) setMetaTrialDemo(false)
@@ -1651,8 +1652,8 @@ function App() {
       }
       const { next, pending } = readMetaTrialIntent()
       if (pending && (next === 'demo' || next === 'company') && unpaid) {
-        metaNextConsumedRef.current = true
-        startMetaTrialPath(next)
+    metaNextConsumedRef.current = true
+    startMetaTrialPath(next)
         return
       }
       setMetaTrialDemo(unpaid)
@@ -1828,8 +1829,8 @@ function App() {
     setColumns(storedCols?.length
       ? storedCols.map(c => ({ ...c }))
       : active?.columns?.length
-        ? active.columns.map(c => ({ ...c }))
-        : (companyProfile?.columnLayout?.length ? companyProfile.columnLayout : DEFAULT_DATA_COLUMNS))
+      ? active.columns.map(c => ({ ...c }))
+      : (companyProfile?.columnLayout?.length ? companyProfile.columnLayout : DEFAULT_DATA_COLUMNS))
     setSelectedTemplateId(companyProfile?.defaultUploadTemplateId || '')
     setNewQuoteStep(1)
     setNewQuoteSession(n => n + 1)
@@ -2246,7 +2247,7 @@ function App() {
         ? 'Cannot reach the API server. Run npm run dev in the project folder and keep that terminal open.'
         : timedOut
           ? 'That took too long. Please try Create quotation again.'
-          : e.message || 'Something went wrong. Please retry.')
+        : e.message || 'Something went wrong. Please retry.')
       return null
     }
     finally {
@@ -2338,11 +2339,7 @@ function App() {
 
   const quoteColumns = quote?.columns || columns
   const quoteBill = normalizeBillAdjustments(quote?.billAdjustments)
-  const quoteShowDiscount = quoteBill.showDiscount === false
-    ? false
-    : quoteBill.showDiscount === true || String(quoteBill.discountValue || '').trim()
-      ? true
-      : readShowManualDiscount()
+  const quoteShowDiscount = manualDiscountVisible(quoteBill)
   const totals = computeQuoteTotals(quote?.items || [], quoteColumns, quote?.extraLines, { ...quoteBill, showDiscount: quoteShowDiscount })
   const total = totals.grandTotal
 
@@ -3255,9 +3252,9 @@ function CompanyBankDetails({
               </div>
             ) : (
               <p key={row.key}>
-                <span className="text-slate-600">{row.label}:</span>
+              <span className="text-slate-600">{row.label}:</span>
                 {values[row.key] ? ` ${values[row.key]}` : ''}
-              </p>
+            </p>
             )
           ))}
         </div>
@@ -5120,13 +5117,13 @@ function ColumnBuilder({ columns, setColumns, compact = false }) {
 
       <div className="mt-3">
         {!showAdd ? (
-          <button
-            type="button"
+        <button
+          type="button"
             onClick={() => setShowAdd(true)}
             className="ws-add-column-toggle"
-          >
-            + Add column
-          </button>
+        >
+          + Add column
+        </button>
         ) : (
           <div className="ws-add-column-panel">
             <div className="ws-add-column-head">
@@ -5171,37 +5168,37 @@ function ColumnBuilder({ columns, setColumns, compact = false }) {
 
             {(customType === 'tax' || customType === 'discount') && (
               <div className="ws-add-column-chips" style={{ marginTop: 10 }}>
-                {[
-                  ['percent', '% wise'],
-                  ['amount', 'Amount wise']
-                ].map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setSpecialMode(value)}
+                  {[
+                    ['percent', '% wise'],
+                    ['amount', 'Amount wise']
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setSpecialMode(value)}
                     className={`ws-add-column-chip${specialMode === value ? ' is-on' : ''}`}
-                  >
-                    {label}
-                  </button>
-                ))}
+                    >
+                      {label}
+                    </button>
+                  ))}
               </div>
             )}
 
             {customType === 'hsn' && (
               <div className="ws-add-column-chips" style={{ marginTop: 10 }}>
-                {[
-                  ['4', '4 digit'],
-                  ['8', '8 digit']
-                ].map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setHsnDigits(value)}
+                  {[
+                    ['4', '4 digit'],
+                    ['8', '8 digit']
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setHsnDigits(value)}
                     className={`ws-add-column-chip${hsnDigits === value ? ' is-on' : ''}`}
-                  >
-                    {label}
-                  </button>
-                ))}
+                    >
+                      {label}
+                    </button>
+                  ))}
               </div>
             )}
 
@@ -5221,25 +5218,25 @@ function ColumnBuilder({ columns, setColumns, compact = false }) {
 
             <p className="ws-add-column-label">Amount formulas</p>
             <div className="ws-add-column-chips">
-              {NAMED_AMOUNT_COLUMN_PRESETS.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  title={preset.hint}
-                  onClick={() => {
-                    const col = buildNamedAmountColumn(preset, columns)
-                    if (!col || columnExists(col.label)) return
-                    let nextColumns = insertColumnsBeforeUnit(columns, [col])
-                    nextColumns = adaptAmountFormula(nextColumns).columns
-                    setColumns(nextColumns)
-                    setShowAdd(false)
-                    setCustomName('')
-                  }}
+                {NAMED_AMOUNT_COLUMN_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    title={preset.hint}
+                    onClick={() => {
+                      const col = buildNamedAmountColumn(preset, columns)
+                      if (!col || columnExists(col.label)) return
+                      let nextColumns = insertColumnsBeforeUnit(columns, [col])
+                      nextColumns = adaptAmountFormula(nextColumns).columns
+                      setColumns(nextColumns)
+                      setShowAdd(false)
+                      setCustomName('')
+                    }}
                   className="ws-add-column-chip"
-                >
+                  >
                   + {preset.label}
-                </button>
-              ))}
+                  </button>
+                ))}
             </div>
 
             <button
@@ -6554,11 +6551,7 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const removeExtraLine = (i) => setExtraLines(extraLines.filter((_, index) => index !== i))
   const bill = normalizeBillAdjustments(quote?.billAdjustments)
   const setBill = (patch) => update(['billAdjustments'], { ...bill, ...patch })
-  const showManualDiscount = bill.showDiscount === false
-    ? false
-    : bill.showDiscount === true || String(bill.discountValue || '').trim()
-      ? true
-      : readShowManualDiscount()
+  const showManualDiscount = manualDiscountVisible(bill)
   const hideManualDiscount = () => {
     writeShowManualDiscount(false)
     setBill({ showDiscount: false, discountValue: '' })
@@ -7616,18 +7609,18 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                     title="Drag to reorder this row"
                     className="qg-cell-compact qg-sr-col relative cursor-grab p-3 text-slate-400 active:cursor-grabbing"
                   >
-                    <span className="no-print mr-1 text-slate-300">⠿</span>
-                    {isEditorialPaper ? String(i + 1).padStart(2, '0') : i + 1}
                     <button
                       type="button"
                       draggable={false}
                       onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => { e.stopPropagation(); removeItem(i) }}
                       title="Remove this row"
-                      className="no-print absolute right-0 top-1 hidden h-5 w-5 items-center justify-center rounded-full bg-rose-50 text-[11px] font-bold text-rose-500 hover:bg-rose-100 group-hover/row:flex"
+                      className="no-print mr-1 hidden h-5 w-5 items-center justify-center rounded-full bg-rose-50 align-middle text-[11px] font-bold text-rose-500 hover:bg-rose-100 group-hover/row:inline-flex"
                     >
                       ×
                     </button>
+                    <span className="no-print mr-1 text-slate-300">⠿</span>
+                    {isEditorialPaper ? String(i + 1).padStart(2, '0') : i + 1}
                   </td>
                   {columns.map(col => isNestedColumn(col)
                     ? <NestedTableCells key={col.id} col={col} item={item} rowIndex={i} updateItem={updateItem} />
@@ -7679,6 +7672,14 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
             ) : (
               <div className="mt-1 flex justify-between text-sm text-rose-600">
                 <span className="flex min-w-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={hideManualDiscount}
+                    title="Remove discount"
+                    className="no-print w-4 shrink-0 text-left text-slate-300 hover:text-rose-500"
+                  >
+                    ×
+                  </button>
                   <span>
                     Less: Discount
                     {bill.discountUnit === 'percent' && String(bill.discountValue || '').trim() ? (
@@ -7700,14 +7701,6 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
                     className="no-print w-5 text-xs text-rose-400 hover:text-rose-600"
                   >
                     {bill.discountUnit === 'percent' ? '%' : '₹'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={hideManualDiscount}
-                    title="Remove discount"
-                    className="no-print w-4 shrink-0 text-slate-300 hover:text-rose-500"
-                  >
-                    ×
                   </button>
                 </span>
                 <span>− {money(quoteTotals.summaryDiscount?.amount)}</span>
@@ -7875,8 +7868,8 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
           </div>
         </section>
         <footer className="mt-8 qg-signatory-block">
-          <>
-            <hr className="qg-section-rule" />
+            <>
+              <hr className="qg-section-rule" />
             <CompanyBankDetails
               profile={paperProfile}
               className="mb-8"
@@ -9357,24 +9350,24 @@ function WsNew({ enquiry, setEnquiry, onGenerate, onManual, onUploadLayout, init
             Next →
           </button>
           <div className="ws-flow-actions-row">
-            <label
-              htmlFor={attachInputId}
+          <label
+            htmlFor={attachInputId}
               className="ws-flow-btn"
-              style={{
-                ...wsSecondaryBtn,
-                minHeight: 52,
-                opacity: ingestBusy ? 0.55 : 1,
-                cursor: ingestBusy ? 'wait' : 'pointer',
-                pointerEvents: ingestBusy ? 'none' : 'auto'
-              }}
-            >
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            style={{
+              ...wsSecondaryBtn,
+              minHeight: 52,
+              opacity: ingestBusy ? 0.55 : 1,
+              cursor: ingestBusy ? 'wait' : 'pointer',
+              pointerEvents: ingestBusy ? 'none' : 'auto'
+            }}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
               {ingestBusy ? 'Reading…' : 'Attach files'}
-            </label>
+          </label>
             <button type="button" onClick={toggleVoice} className="ws-flow-btn" style={{ ...wsSecondaryBtn, minHeight: 52, background: voiceState === 'listening' ? '#E7EEFB' : '#fff', borderColor: voiceState === 'listening' ? '#1A73E8' : '#D5DDE9' }}>
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
               {voiceState === 'listening' ? 'Listening…' : 'Speak it'}
-            </button>
+          </button>
           </div>
           <button type="button" onClick={() => setStep(2)} className="ws-flow-btn" style={{ ...wsSecondaryBtn, minHeight: 52 }}>
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -9549,16 +9542,16 @@ function WsList({ clients, quotes = [], loading, openClient, onOpenClient, refre
 
   const visibleClients = useMemo(() => {
     if (quotes.length) {
-      const groups = new Map()
-      for (const q of filtered) {
+  const groups = new Map()
+  for (const q of filtered) {
         const name = clientNameOf(q)
         const g = groups.get(name) || { name, count: 0, total: 0, latest: '' }
         g.count += 1
         g.total += q.total || 0
         const stamp = q.updatedAt || q.date || q.createdAt || ''
         if (stamp > g.latest) g.latest = stamp
-        groups.set(name, g)
-      }
+    groups.set(name, g)
+  }
       return [...groups.values()].sort((a, b) => (b.latest > a.latest ? 1 : b.latest < a.latest ? -1 : 0))
     }
     return clients.filter((client) => {
@@ -9724,10 +9717,10 @@ function WsList({ clients, quotes = [], loading, openClient, onOpenClient, refre
       </div>
 
       {openClient ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {cardsError ? (
             <div style={{ borderRadius: 12, background: '#FDF2F2', border: '1px solid #E7CFCF', padding: '12px 16px', fontSize: 14.5, color: '#B03A3A' }}>{cardsError}</div>
-          ) : null}
+        ) : null}
           {cardsLoading ? (
             <div style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 18, padding: '40px 24px', textAlign: 'center', color: '#6B7688', fontSize: 16 }}>Loading quotations…</div>
           ) : (
@@ -9750,7 +9743,7 @@ function WsList({ clients, quotes = [], loading, openClient, onOpenClient, refre
           {visibleClients.map(client => {
             const count = client.count || 0
             const total = client.total || 0
-            return (
+          return (
               <button
                 key={client.name}
                 type="button"
@@ -9771,12 +9764,12 @@ function WsList({ clients, quotes = [], loading, openClient, onOpenClient, refre
             )
           })}
           {!loading && visibleClients.length === 0 && (
-            <div style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 18, padding: '56px 24px', textAlign: 'center' }}>
-              <div style={{ fontSize: 18, fontWeight: 750 }}>Nothing here yet</div>
-              <div style={{ fontSize: 16, color: '#6B7688', marginTop: 6 }}>Make a draft and it is saved here on its own.</div>
-            </div>
-          )}
-        </div>
+          <div style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 18, padding: '56px 24px', textAlign: 'center' }}>
+            <div style={{ fontSize: 18, fontWeight: 750 }}>Nothing here yet</div>
+            <div style={{ fontSize: 16, color: '#6B7688', marginTop: 6 }}>Make a draft and it is saved here on its own.</div>
+          </div>
+        )}
+      </div>
       )}
     </div>
   )
@@ -11762,7 +11755,7 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
                 <LeadStarIcon on={leadFilter === 'starred'} />
                 Starred{loading ? '' : ` ${starredCount}`}
               </button>
-            </div>
+          </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {canDelete && (
@@ -11781,14 +11774,14 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
             >
               Preview payment
             </button>
-            <button
-              type="button"
-              onClick={load}
-              disabled={loading}
+        <button
+          type="button"
+          onClick={load}
+          disabled={loading}
               style={{ minHeight: 42, padding: '0 16px', border: '1.5px solid #D5DDE9', borderRadius: 10, background: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', color: '#3D4859', opacity: loading ? 0.6 : 1 }}
-            >
-              {loading ? 'Refreshing…' : 'Refresh'}
-            </button>
+        >
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
           </div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))', gap: 10, marginTop: 18 }}>
@@ -11821,7 +11814,7 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
         )}
       </section>
 
-      {!loading && leads.length === 0 && !error && (
+        {!loading && leads.length === 0 && !error && (
         <section style={{ background: '#fff', border: '1px solid #e8edf3', borderRadius: 20, padding: 28 }}>
           <p style={{ margin: 0, fontSize: 14.5, color: '#94a3b8' }}>No leads yet. Submit the form on /metaadslanding to test.</p>
         </section>
@@ -12595,19 +12588,19 @@ class AppErrorBoundary extends React.Component {
 }
 
 export function mountQuoteGenApp() {
-  initMetaPixel()
+initMetaPixel()
   registerPwa()
-  const rootEl = document.getElementById('root')
-  rootEl.__qgRoot = rootEl.__qgRoot || createRoot(rootEl)
-  rootEl.__qgRoot.render(
-    <AppErrorBoundary>
+const rootEl = document.getElementById('root')
+rootEl.__qgRoot = rootEl.__qgRoot || createRoot(rootEl)
+rootEl.__qgRoot.render(
+  <AppErrorBoundary>
       <React.Suspense fallback={<ScreenFallback />}>
         <PwaInstallHost />
         <AuthedFollowUps />
-        <App />
+    <App />
       </React.Suspense>
-    </AppErrorBoundary>
-  )
+  </AppErrorBoundary>
+)
 }
 
 if (window.__QG_BOOT_OWNER !== 'boot') mountQuoteGenApp()

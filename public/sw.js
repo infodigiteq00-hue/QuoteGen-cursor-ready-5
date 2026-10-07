@@ -1,5 +1,5 @@
 /* QuoteGen PWA — keeps the home-screen shortcut installable. API traffic is never cached. */
-const CACHE = 'qg-pwa-v1'
+const CACHE = 'qg-pwa-v2'
 const PRECACHE = ['/', '/index.html', '/manifest.webmanifest', '/icons/pwa-192.png', '/icons/apple-touch-icon.png']
 
 self.addEventListener('install', (event) => {

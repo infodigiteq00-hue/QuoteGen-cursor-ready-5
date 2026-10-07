@@ -111,21 +111,13 @@ function money(n) {
 
 const MANUAL_DISCOUNT_KEY = 'qg_show_manual_discount'
 
-function readShowManualDiscount() {
-  try { return localStorage.getItem(MANUAL_DISCOUNT_KEY) !== '0' } catch { return true }
-}
-
 function writeShowManualDiscount(show) {
   try { localStorage.setItem(MANUAL_DISCOUNT_KEY, show ? '1' : '0') } catch { /* ignore */ }
 }
 
 function resolvedBill(raw) {
   const bill = normalizeBillAdjustments(raw)
-  const showDiscount = bill.showDiscount === false
-    ? false
-    : bill.showDiscount === true || String(bill.discountValue || '').trim()
-      ? true
-      : readShowManualDiscount()
+  const showDiscount = bill.showDiscount === true || (bill.showDiscount !== false && Boolean(String(bill.discountValue || '').trim()))
   return { ...bill, showDiscount }
 }
 
@@ -886,6 +878,9 @@ function TrialBillTotals({ totals, bill, theme, editable, onChange }) {
       ) : (
         <div className="mt-1 flex justify-between text-sm text-rose-600">
           <span className="flex min-w-0 items-center gap-1">
+            {editable ? (
+              <button type="button" onClick={hideDiscount} title="Remove discount" className="no-print w-4 shrink-0 text-left text-slate-300 hover:text-rose-500">×</button>
+            ) : null}
             <span>
               Less: Discount
               {bill.discountUnit === 'percent' && String(bill.discountValue || '').trim() ? (
@@ -910,7 +905,6 @@ function TrialBillTotals({ totals, bill, theme, editable, onChange }) {
                 >
                   {bill.discountUnit === 'percent' ? '%' : '₹'}
                 </button>
-                <button type="button" onClick={hideDiscount} title="Remove discount" className="no-print w-4 text-slate-300 hover:text-rose-500">×</button>
               </>
             ) : null}
           </span>

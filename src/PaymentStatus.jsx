@@ -82,7 +82,7 @@ export default function PaymentStatus({ onContinue, onPaid, onAccountReady, prev
         </h1>
         <p>
           {done && customer?.setupAccount
-            ? 'Opening your account. Only a password is left.'
+            ? 'Your account is created, let\'s finish log in'
             : done
             ? `We received ₹${amount}. Your QuoteGen plan is active — our team will reach out shortly.`
             : failed
