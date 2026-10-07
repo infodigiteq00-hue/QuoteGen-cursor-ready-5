@@ -15,7 +15,7 @@ import { normalizeHeaderMeta } from '../shared/headerMeta.js'
 
 const PREVIEW_ORIGIN = String(process.env.PUBLIC_APP_URL || 'https://www.quotegen.ai').replace(/\/$/, '')
 const MAX_ATTACHMENTS = 4
-const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024
 
 const DEFAULT_COLUMNS = [
   { id: 'description', label: 'Description' },
@@ -481,7 +481,7 @@ export function registerWhatsappEnquiryRoutes(app, { generateQuotationDraft }) {
         failedFiles = read.failed
       }
       if (attachments.length && !filePieces.length && !text) {
-        return send(200, customerReply('I could not open that file. Please send it again as a PDF, Word, Excel, or photo.'))
+        return send(200, customerReply('I could not read that file. Please send it again as a PDF, Word, Excel, or photo.'))
       }
 
       const session = await loadSession(supabase, digits)
@@ -523,7 +523,7 @@ export function registerWhatsappEnquiryRoutes(app, { generateQuotationDraft }) {
 
       await saveSession(supabase, digits, turn)
       const replies = failedFiles.length
-        ? [{ text: 'I could not read one of those files. Please send it again.', delayMs: 0 }, ...turn.replies]
+        ? [{ text: 'I could not read that file. Please send it again as a PDF, Word, Excel, or photo.', delayMs: 0 }, ...turn.replies]
         : turn.replies
       console.info(`[${requestId}] reply`, { phone: maskPhone(digits), phase: turn.phase, replies: replies.length })
       return send(200, { ok: true, replies })

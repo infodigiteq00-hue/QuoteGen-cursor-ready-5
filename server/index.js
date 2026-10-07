@@ -40,8 +40,16 @@ app.use(compression({
   }
 }))
 app.use(cors())
-app.use(express.json({ limit: '30mb' }))
+app.use(express.json({ limit: '48mb' }))
 app.use((err, req, res, next) => {
+  const path = String(req.originalUrl || req.url || '')
+  const tooLarge = err?.type === 'entity.too.large' || err?.status === 413
+  if (tooLarge && path.includes('/whatsapp/enquiry')) {
+    return res.status(200).json({
+      ok: false,
+      replies: [{ text: 'That file is too large. Please send a PDF, Word, Excel, or photo under 15 MB.', delayMs: 0 }]
+    })
+  }
   if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
     return res.status(400).json({ error: 'Invalid request data. Try generating the quote again.' })
   }
