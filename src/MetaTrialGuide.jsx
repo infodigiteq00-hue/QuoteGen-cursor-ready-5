@@ -782,15 +782,37 @@ function trialExportColWidths(columns) {
   const minCol = 48
   const raw = (columns || []).map((col) => {
     if (isDescriptionColumn(col)) return 320
-    if (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) return 56
+    if (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) return 96
     if (col.id === 'quantity' || /qty|quantity/i.test(String(col.label || ''))) return 72
     if (col.id === 'rate' || /rate|price/i.test(String(col.label || ''))) return 96
     if (col.id === 'amount' || /amount|total/i.test(String(col.label || ''))) return 112
     return 72
   })
   const budget = Math.max(240, printable - sr)
-  const sum = raw.reduce((n, w) => n + w, 0) || 1
-  const widths = raw.map((w) => Math.max(minCol, Math.round(w * (budget / sum))))
+  const widths = raw.map((w, index) => {
+    const col = columns[index]
+    const floor = col && (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) ? 96 : minCol
+    return Math.max(floor, w)
+  })
+  let sum = widths.reduce((n, w) => n + w, 0) || 1
+  if (sum > budget) {
+    const flexible = widths.map((w, index) => {
+      const col = columns[index]
+      const floor = col && (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) ? 96 : minCol
+      return w > floor ? index : -1
+    }).filter((index) => index >= 0)
+    const locked = widths.reduce((n, w, index) => n + (flexible.includes(index) ? 0 : w), 0)
+    const flexSum = flexible.reduce((n, index) => n + widths[index], 0) || 1
+    const flexBudget = budget - locked
+    if (flexible.length && flexBudget > 0) {
+      const scale = flexBudget / flexSum
+      flexible.forEach((index) => {
+        const col = columns[index]
+        const floor = col && (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) ? 96 : minCol
+        widths[index] = Math.max(floor, Math.round(widths[index] * scale))
+      })
+    }
+  }
   const drift = budget - widths.reduce((n, w) => n + w, 0)
   if (widths.length) widths[widths.length - 1] += drift
   return { sr, widths }

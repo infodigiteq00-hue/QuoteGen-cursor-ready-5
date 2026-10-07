@@ -3430,6 +3430,12 @@ textarea.qg-inline-field {
   overflow-wrap: break-word;
   word-break: normal;
 }
+.qg-studio-table td.qg-cell-unit input,
+.qg-studio-table td.qg-cell-unit .print-only-cell {
+  white-space: nowrap !important;
+  overflow-wrap: normal !important;
+  word-break: keep-all !important;
+}
 .qg-studio-table .description-cell,
 .qg-studio-table td.description-cell {
   white-space: normal !important;

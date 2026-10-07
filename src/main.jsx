@@ -86,6 +86,7 @@ import {
 import { defaultValidUntil, resolvePaperTheme, DEFAULT_ACCENT, PAPER_THEMES, extractImagePalette, accentForTableColor, normalizeAccentHex, peekPreferredPaperStyle, readPreferredPaperStyle, writePreferredPaperStyle, isPaperStyleId, normalizePaperStyle } from './quotePaperThemes.js'
 import { peekPreferredColumns, readPreferredColumns, writePreferredColumns } from './quoteLayoutPrefs.js'
 const QuoteGenerateCeremony = React.lazy(() => import('./QuoteGenerateCeremony.jsx'))
+const WelcomeIntro = React.lazy(() => import('./WelcomeIntro.jsx'))
 import { companySeedFromLead, readMetaAdsLead, readMetaTrialIntent, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaTrialLock, clearMetaWelcome, readMetaWelcome, writeMetaWelcome, saveVerifiedMetaLead, recordMetaLeadProgress, markMetaTrialUnpaid, markMetaTrialPaid, isMetaTrialUnpaid, isMetaGuideActive } from './metaTrialLead.js'
 import { DEMO_QUOTE_CAP, generateTrialQuote, readDemoQuoteCount, recordDemoQuote } from './demoQuotes.js'
 import { trackPixel } from './metaPixel.js'
@@ -371,6 +372,33 @@ function manualDiscountVisible(bill) {
 
 function writeShowManualDiscount(show) {
   try { localStorage.setItem(MANUAL_DISCOUNT_KEY, show ? '1' : '0') } catch { /* ignore */ }
+}
+
+function quoteIdInUrl() {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get('quote') || ''
+    return /^[0-9a-f-]{36}$/i.test(fromUrl) ? fromUrl : ''
+  } catch {
+    return ''
+  }
+}
+
+function pendingQuoteIdFromLocation() {
+  const fromUrl = quoteIdInUrl()
+  if (fromUrl) return fromUrl
+  try {
+    const stored = sessionStorage.getItem('qg_pending_quote') || ''
+    if (/^[0-9a-f-]{36}$/i.test(stored)) return stored
+  } catch { /* private mode */ }
+  return ''
+}
+
+function enquiryPreviewFromQuote(editorQuote) {
+  const lines = (editorQuote?.items || [])
+    .map((item) => String(item?.description || item?.name || '').split('\n')[0].trim())
+    .filter(Boolean)
+    .slice(0, 8)
+  return lines.join('\n') || String(editorQuote?.title || '').trim() || 'Your enquiry'
 }
 
 function money(n) {
@@ -934,7 +962,8 @@ function shouldWrapTableCell(col) {
   if (isSuggestedColumn(col)) return true
   if (isImageColumn(col) || isAttachmentColumn(col) || isNestedColumn(col)) return false
   const id = String(col?.id || '').toLowerCase()
-  if (['rate', 'amount', 'quantity', 'qty'].includes(id)) return false
+  if (['rate', 'amount', 'quantity', 'qty', 'unit'].includes(id)) return false
+  if (/unit|uom/i.test(String(col?.label || ''))) return false
   if (columnType(col) === 'hsn') return false
   if (id === 'description' || /^(description|enquiry|inquiry)$/i.test(String(col.label || '').trim())) return false
   return true
@@ -1018,6 +1047,7 @@ function QuoteTextTableCell({ col, columns, item, rowIndex, updateItem, onRevert
   const highlighted = isHighlightColumn(col)
   const highlightClass = highlighted ? 'qg-highlight' : ''
   const compactClass = isCompactColumn(col) ? 'qg-cell-compact' : ''
+  const unitClass = isUnitColumn(col) ? 'qg-cell-unit' : ''
   const tint = derived?.overridden ? 'bg-amber-50/60' : (filledHere || hsnHere) ? 'bg-blue-50/40' : ''
   const isCurrency = col.id === 'rate' || col.id === 'amount' || Boolean(derived) || ((columnType(col) === 'tax' || columnType(col) === 'discount') && columnMode(col) === 'amount')
   const displayValue = (isCurrency && !focused && draft !== '' && Number.isFinite(Number(draft)))
@@ -1036,7 +1066,7 @@ function QuoteTextTableCell({ col, columns, item, rowIndex, updateItem, onRevert
   }
   return (
     <td
-      className={`p-1 align-top ${highlightClass} ${compactClass} ${!highlighted ? tint : ''}`}
+      className={`p-1 align-top ${highlightClass} ${compactClass} ${unitClass} ${!highlighted ? tint : ''}`}
     >
       <div ref={suggestWrapRef} className={`qg-suggest min-w-0 w-full ${wrapText ? '' : 'flex items-center gap-1'} ${focused && suggestions.length ? 'qg-suggest--open' : ''}`}>
         {wrapText ? (
@@ -1273,6 +1303,12 @@ function App() {
   const quoteIdRef = useRef(null)
   const lastSavedJsonRef = useRef('')
   const quoteLinkOpenedRef = useRef(false)
+  const quoteLinkReadyRef = useRef(null)
+  const quoteLinkPhaseRef = useRef('')
+  const [quoteLinkPhase, setQuoteLinkPhase] = useState(() => (quoteIdInUrl() ? 'welcome' : ''))
+  const [quoteLinkEnquiry, setQuoteLinkEnquiry] = useState('')
+  const [quoteLinkColumns, setQuoteLinkColumns] = useState([])
+  quoteLinkPhaseRef.current = quoteLinkPhase
   const lastSeriesSyncedNumberRef = useRef('')
   const selectedTemplateIdRef = useRef(selectedTemplateId)
   const autosaveGenRef = useRef(0)
@@ -1385,15 +1421,7 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quote])
 
-  const readPendingQuoteId = () => {
-    try {
-      const fromUrl = new URLSearchParams(window.location.search).get('quote') || ''
-      if (/^[0-9a-f-]{36}$/i.test(fromUrl)) return fromUrl
-      const stored = sessionStorage.getItem('qg_pending_quote') || ''
-      if (/^[0-9a-f-]{36}$/i.test(stored)) return stored
-    } catch { /* private mode */ }
-    return ''
-  }
+  const readPendingQuoteId = () => pendingQuoteIdFromLocation()
 
   const clearPendingQuoteId = () => {
     try { sessionStorage.removeItem('qg_pending_quote') } catch { /* private mode */ }
@@ -1413,8 +1441,14 @@ function App() {
     try {
       const result = await getQuotation(id)
       if (result.unavailable || !result.quotation) {
-        quoteLinkOpenedRef.current = false
-        if (!result.unavailable) setHistoryError('Could not open the quotation from this link.')
+        const message = result.unavailable
+          ? 'Could not open the quotation from this link.'
+          : 'Could not open the quotation from this link.'
+        quoteLinkReadyRef.current = { error: message }
+        if (!quoteLinkPhaseRef.current) {
+          quoteLinkOpenedRef.current = false
+          if (!result.unavailable) setHistoryError(message)
+        }
         return
       }
       const editorQuote = {
@@ -1422,11 +1456,19 @@ function App() {
         companyProfile: profile || companyProfile || undefined
       }
       const template = await loadUploadTemplateIfNeeded(editorQuote)
-      await openQuoteInEditor(editorQuote, { id: result.quotation.id, template })
-      clearPendingQuoteId()
+      quoteLinkReadyRef.current = { editorQuote, template, id: result.quotation.id }
+      setQuoteLinkEnquiry(enquiryPreviewFromQuote(editorQuote))
+      setQuoteLinkColumns(editorQuote.columns || [])
+      if (!quoteLinkPhaseRef.current) {
+        await openQuoteInEditor(editorQuote, { id: result.quotation.id, template })
+        clearPendingQuoteId()
+      }
     } catch (e) {
-      quoteLinkOpenedRef.current = false
-      setHistoryError(e.message || 'Could not open the quotation from this link.')
+      quoteLinkReadyRef.current = { error: e.message || 'Could not open the quotation from this link.' }
+      if (!quoteLinkPhaseRef.current) {
+        quoteLinkOpenedRef.current = false
+        setHistoryError(e.message || 'Could not open the quotation from this link.')
+      }
     }
   }
 
@@ -1503,6 +1545,41 @@ function App() {
     }
     await openLinkedQuotation(linkedProfile)
   }
+
+  useEffect(() => {
+    if (quoteLinkPhase !== 'ceremony') return undefined
+    const alreadyFailed = quoteLinkReadyRef.current && !quoteLinkReadyRef.current.editorQuote
+    if (alreadyFailed) {
+      setHistoryError(quoteLinkReadyRef.current.error || 'Could not open the quotation from this link.')
+      quoteLinkOpenedRef.current = false
+      setQuoteLinkPhase('')
+      return undefined
+    }
+    let cancelled = false
+    const started = Date.now()
+    ;(async () => {
+      const { CEREMONY_MIN_MS } = await import('./QuoteGenerateCeremony.jsx')
+      const deadline = started + CEREMONY_MIN_MS
+      while (!cancelled && !quoteLinkReadyRef.current) {
+        await new Promise((resolve) => setTimeout(resolve, 80))
+      }
+      if (cancelled) return
+      const remain = deadline - Date.now()
+      if (remain > 0) await new Promise((resolve) => setTimeout(resolve, remain))
+      if (cancelled) return
+      const ready = quoteLinkReadyRef.current
+      if (!ready?.editorQuote) {
+        setHistoryError(ready?.error || 'Could not open the quotation from this link.')
+        quoteLinkOpenedRef.current = false
+        setQuoteLinkPhase('')
+        return
+      }
+      await openQuoteInEditor(ready.editorQuote, { id: ready.id, template: ready.template })
+      clearPendingQuoteId()
+      setQuoteLinkPhase('')
+    })()
+    return () => { cancelled = true }
+  }, [quoteLinkPhase])
 
   useEffect(() => {
     let cancelled = false
@@ -1998,6 +2075,21 @@ function App() {
           setGuestAuthMode('login')
         }}
       />
+    )
+  }
+
+  if (quoteLinkPhase === 'welcome' || quoteLinkPhase === 'ceremony') {
+    if (quoteLinkPhase === 'welcome') {
+      return (
+        <React.Suspense fallback={<div style={{ position: 'fixed', inset: 0, background: '#000' }} />}>
+          <WelcomeIntro onDone={() => setQuoteLinkPhase('ceremony')} />
+        </React.Suspense>
+      )
+    }
+    return (
+      <React.Suspense fallback={<div style={{ position: 'fixed', inset: 0, background: '#070b14' }} />}>
+        <QuoteGenerateCeremony enquiry={quoteLinkEnquiry} columns={quoteLinkColumns} />
+      </React.Suspense>
     )
   }
 
@@ -5925,6 +6017,10 @@ function minWidthForHeaderLabel(label, chromePx = 54) {
   return Math.ceil(text.length * perChar + tracking + chromePx)
 }
 
+/** Wide enough for a short unit such as Nos on one line, including cell padding. */
+const UNIT_COL_FLOOR = 96
+const UNIT_COL_CAP = 168
+
 /** Column and paper geometry stay on this size so preview font changes do not stretch the page. */
 const LAYOUT_FONT_PX = 14
 
@@ -5935,7 +6031,7 @@ function defaultWidthForColumn(col, fontPx = LAYOUT_FONT_PX) {
   else if (isImageColumn(col)) content = Math.round(88 * s)
   else if (isAttachmentColumn(col)) content = Math.round(124 * s)
   else if (columnType(col) === 'hsn') content = Math.round(88 * s)
-  else if (col?.id === 'unit') content = Math.round(72 * s)
+  else if (col?.id === 'unit' || /unit|uom/i.test(String(col?.label || ''))) content = Math.round(UNIT_COL_FLOOR * s)
   else if (col?.id === 'quantity') content = Math.round(120 * s)
   else if (col?.id === 'rate' || col?.id === 'amount') content = Math.round(148 * s)
   else if (isNestedColumn(col)) content = Math.round(86 * s)
@@ -5946,7 +6042,7 @@ function defaultWidthForColumn(col, fontPx = LAYOUT_FONT_PX) {
 /** Same compact proportions as the Meta trial unlock / final-preview table. */
 function formalWidthForColumn(col) {
   if (col?.id === 'description' || /desc|particular|item/i.test(String(col?.label || ''))) return 320
-  if (col?.id === 'unit' || /unit|uom/i.test(String(col?.label || ''))) return 56
+  if (col?.id === 'unit' || /unit|uom/i.test(String(col?.label || ''))) return UNIT_COL_FLOOR
   if (col?.id === 'quantity' || /qty|quantity/i.test(String(col?.label || ''))) return 78
   if (col?.id === 'rate' || /rate|price/i.test(String(col?.label || ''))) return 108
   if (col?.id === 'amount' || /amount|total/i.test(String(col?.label || ''))) return 124
@@ -5978,6 +6074,27 @@ function formattedNumericCell(raw, asMoney) {
   if (!asMoney) return String(raw)
   const n = Number(String(raw).replace(/,/g, ''))
   return Number.isFinite(n) ? formatIndianAmount(n) : String(raw)
+}
+
+function isUnitColumn(col) {
+  if (!col) return false
+  return col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))
+}
+
+function widthForUnitText(text, fontPx = LAYOUT_FONT_PX) {
+  const chars = Math.max(String(text || '').trim().length, 4)
+  return Math.ceil(chars * fontPx * 0.68 + 44)
+}
+
+function contentWidthForUnitColumn(col, items, fontPx = LAYOUT_FONT_PX) {
+  if (!isUnitColumn(col)) return 0
+  const samples = [String(col.label || 'Unit')]
+  for (const item of items || []) {
+    const shown = String(item?.[col.id] || '').split('\n')[0].trim()
+    if (shown) samples.push(shown)
+  }
+  const longest = samples.reduce((best, next) => (next.length > best.length ? next : best), '')
+  return Math.min(UNIT_COL_CAP, Math.max(UNIT_COL_FLOOR, widthForUnitText(longest, fontPx)))
 }
 
 function widthForNumericText(text, fontPx = LAYOUT_FONT_PX) {
@@ -6925,18 +7042,40 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const weightForKey = (key) => {
     const col = columns.find(c => c.id === key || `${c.id}__rate` === key)
     const base = defaultColWidthForKey(key)
-    const content = contentWidthForNumericColumn(col, items, LAYOUT_FONT_PX)
+    const content = Math.max(
+      contentWidthForNumericColumn(col, items, LAYOUT_FONT_PX),
+      contentWidthForUnitColumn(col, items, LAYOUT_FONT_PX)
+    )
     return Math.max(minColPx, columnWidths[key] || Math.max(base, content))
+  }
+  const floorForKey = (key) => {
+    if (columnWidths[key]) return minColPx
+    const col = columns.find(c => c.id === key || `${c.id}__rate` === key)
+    return isUnitColumn(col) ? contentWidthForUnitColumn(col, items, LAYOUT_FONT_PX) : minColPx
   }
   const scaleToBudget = (map, keys, budget) => {
     const next = { ...map }
-    const sum = keys.reduce((n, key) => n + next[key], 0)
+    const floors = Object.fromEntries(keys.map((key) => [key, floorForKey(key)]))
+    keys.forEach((key) => { next[key] = Math.max(floors[key], next[key]) })
+    let sum = keys.reduce((n, key) => n + next[key], 0)
     if (sum <= 0) return next
-    const scale = budget / sum
-    keys.forEach((key) => { next[key] = Math.max(minColPx, Math.round(next[key] * scale)) })
-    const lastKey = keys[keys.length - 1]
-    const drift = budget - keys.reduce((n, key) => n + next[key], 0)
-    if (lastKey) next[lastKey] = Math.max(minColPx, next[lastKey] + drift)
+    if (sum > budget) {
+      const flexible = keys.filter((key) => next[key] > floors[key])
+      const locked = sum - flexible.reduce((n, key) => n + next[key], 0)
+      const flexBudget = budget - locked
+      const flexSum = flexible.reduce((n, key) => n + next[key], 0) || 1
+      if (flexible.length && flexBudget > 0) {
+        const scale = flexBudget / flexSum
+        flexible.forEach((key) => {
+          next[key] = Math.max(floors[key], Math.round(next[key] * scale))
+        })
+      }
+    }
+    const absorbKey = [...keys].reverse().find((key) => floors[key] <= minColPx) || keys[keys.length - 1]
+    if (absorbKey) {
+      const drift = budget - keys.reduce((n, key) => n + next[key], 0)
+      next[absorbKey] = Math.max(floors[absorbKey], next[absorbKey] + drift)
+    }
     return next
   }
   const fittedWidths = scaleToBudget(
