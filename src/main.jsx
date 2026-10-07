@@ -1271,6 +1271,7 @@ function App() {
 
   const quoteIdRef = useRef(null)
   const lastSavedJsonRef = useRef('')
+  const quoteLinkOpenedRef = useRef(false)
   const lastSeriesSyncedNumberRef = useRef('')
   const selectedTemplateIdRef = useRef(selectedTemplateId)
   const autosaveGenRef = useRef(0)
@@ -1383,7 +1384,53 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quote])
 
+  const readPendingQuoteId = () => {
+    try {
+      const fromUrl = new URLSearchParams(window.location.search).get('quote') || ''
+      if (/^[0-9a-f-]{36}$/i.test(fromUrl)) return fromUrl
+      const stored = sessionStorage.getItem('qg_pending_quote') || ''
+      if (/^[0-9a-f-]{36}$/i.test(stored)) return stored
+    } catch { /* private mode */ }
+    return ''
+  }
+
+  const clearPendingQuoteId = () => {
+    try { sessionStorage.removeItem('qg_pending_quote') } catch { /* private mode */ }
+    try {
+      const url = new URL(window.location.href)
+      if (!url.searchParams.has('quote')) return
+      url.searchParams.delete('quote')
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+    } catch { /* ignore */ }
+  }
+
+  const openLinkedQuotation = async (profile) => {
+    if (quoteLinkOpenedRef.current) return
+    const id = readPendingQuoteId()
+    if (!id) return
+    quoteLinkOpenedRef.current = true
+    try {
+      const result = await getQuotation(id)
+      if (result.unavailable || !result.quotation) {
+        quoteLinkOpenedRef.current = false
+        if (!result.unavailable) setHistoryError('Could not open the quotation from this link.')
+        return
+      }
+      const editorQuote = {
+        ...quotationToEditorState(result.quotation),
+        companyProfile: profile || companyProfile || undefined
+      }
+      const template = await loadUploadTemplateIfNeeded(editorQuote)
+      await openQuoteInEditor(editorQuote, { id: result.quotation.id, template })
+      clearPendingQuoteId()
+    } catch (e) {
+      quoteLinkOpenedRef.current = false
+      setHistoryError(e.message || 'Could not open the quotation from this link.')
+    }
+  }
+
   const refreshLandingData = async () => {
+    let linkedProfile = null
     const health = await checkPersistenceHealth()
     setPersistenceConfigured(health.configured)
     if (!health.configured) {
@@ -1391,6 +1438,7 @@ function App() {
       setCompanyDraft({})
       setRecentQuotations([])
       setQuoteOverview(null)
+      await openLinkedQuotation(null)
       return
     }
     try {
@@ -1399,10 +1447,12 @@ function App() {
         setPersistenceConfigured(false)
         setCompanyProfile(null)
         setCompanyDraft({})
+        await openLinkedQuotation(null)
         return
       }
       if (profileRes.profile) {
         const profile = profileRes.profile
+        linkedProfile = profile
         setCompanyProfile(profile)
         const stored = peekPreferredPaperStyle()
         if (stored) {
@@ -1450,6 +1500,7 @@ function App() {
     } finally {
       setHistoryLoading(false)
     }
+    await openLinkedQuotation(linkedProfile)
   }
 
   useEffect(() => {

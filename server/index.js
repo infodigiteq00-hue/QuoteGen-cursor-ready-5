@@ -20,6 +20,7 @@ import { registerUserProfileRoutes } from './userProfile.js'
 import { registerAdminUserRoutes } from './adminUsers.js'
 import { registerPublicMetaAdsLeadRoutes, registerMetaAdsLeadRoutes } from './metaAdsLeads.js'
 import { registerPublicPhonePeRoutes } from './phonepe.js'
+import { registerWhatsappEnquiryRoutes } from './whatsappEnquiry.js'
 import { getSupabase, isSupabaseConfigured } from './db.js'
 import { aiFillableColumns, blankItemFor, normalizeColumnList } from '../shared/quoteColumns.js'
 import { suggestFormulaFromAsk, validateFormulaDraft } from '../shared/formulaAssistant.js'
@@ -482,12 +483,25 @@ async function knowledgePromptAddon(enquiry, requestId, userId) {
   }
 }
 
-app.post('/api/generate-quotation', async (req, res) => {
-  const { customer = {}, columns: rawColumns, layoutRoles: rawLayoutRoles } = req.body || {}
-  const enquiry = sanitizeWhatsAppEnquiry(req.body?.enquiry)
+/**
+ * Same quotation draft the in-app Generate button builds.
+ * Returns the JSON body. Throws if even the local draft cannot be built.
+ */
+export async function generateQuotationDraft({
+  enquiry: rawEnquiry,
+  customer = {},
+  columns: rawColumns,
+  layoutRoles: rawLayoutRoles,
+  userId,
+  requestId = `quote-${Date.now()}`
+}) {
+  const enquiry = sanitizeWhatsAppEnquiry(rawEnquiry)
   const layoutRoles = Array.isArray(rawLayoutRoles) ? rawLayoutRoles.filter(Boolean) : []
-  const requestId = `quote-${Date.now()}`
-  if (!enquiry?.trim()) return res.status(400).json({ error: 'Please paste the customer enquiry.' })
+  if (!enquiry?.trim()) {
+    const err = new Error('Please paste the customer enquiry.')
+    err.status = 400
+    throw err
+  }
   const emptyCustomer = { name: '', company: '', gst: '', location: '', ...customer }
   const columns = ensureSuggestedColumn(normalizeColumns(rawColumns))
   const hasApiKey = Boolean(process.env.OPENAI_API_KEY)
@@ -507,18 +521,18 @@ app.post('/api/generate-quotation', async (req, res) => {
       draft.items = catalogItemsToQuoteRows(catalog, columns, blankItemFor(columns))
     }
     draft.referenceNo = normalizeReferenceNo(draft.referenceNo) || extractEnquiryReference(enquiry) || ''
-    const enriched = await enrichWithKnowledge(draft, columns, enquiry, requestId, req.userId)
-    return res.json({
+    const enriched = await enrichWithKnowledge(draft, columns, enquiry, requestId, userId)
+    return {
       ...enriched,
       referenceNo: draft.referenceNo,
       columns,
       mode: 'demo',
       extraction: catalog.length >= 3 ? 'catalog' : 'demo'
-    })
+    }
   }
 
   try {
-    const knowledgeBlock = await knowledgePromptAddon(enquiry, requestId, req.userId)
+    const knowledgeBlock = await knowledgePromptAddon(enquiry, requestId, userId)
     const catalog = extractCatalogLineItems(enquiry)
     const hintedCount = catalogItemCountHint(enquiry)
     console.info(`[${requestId}] enquiry item scan`, {
@@ -570,15 +584,15 @@ app.post('/api/generate-quotation', async (req, res) => {
     draft.customer = { ...emptyCustomer, ...(draft.customer || {}) }
     if (!draft.items.length) draft.items = fallback(enquiry, emptyCustomer, columns).items
     draft.referenceNo = normalizeReferenceNo(draft.referenceNo) || extractEnquiryReference(enquiry) || ''
-    const enriched = await enrichWithKnowledge(draft, columns, enquiry, requestId, req.userId)
-    res.json({
+    const enriched = await enrichWithKnowledge(draft, columns, enquiry, requestId, userId)
+    return {
       ...enriched,
       referenceNo: draft.referenceNo,
       columns,
       mode: 'ai',
       extraction,
       extractionMeta: { catalogExtracted: catalog.length, lineRefHint: hintedCount, itemCount: (enriched.items || []).length }
-    })
+    }
   } catch (error) {
     console.error(`[${requestId}] AI request failed; returning local draft`, {
       name: error?.name,
@@ -593,21 +607,42 @@ app.post('/api/generate-quotation', async (req, res) => {
     }
     draft.referenceNo = normalizeReferenceNo(draft.referenceNo) || extractEnquiryReference(enquiry) || ''
     try {
-      const enriched = await enrichWithKnowledge(draft, columns, enquiry, requestId, req.userId)
-      return res.json({
+      const enriched = await enrichWithKnowledge(draft, columns, enquiry, requestId, userId)
+      return {
         ...enriched,
         referenceNo: draft.referenceNo,
         columns,
         mode: 'fallback',
         extraction: catalog.length >= 3 ? 'catalog' : 'demo',
         extractionMeta: { catalogExtracted: catalog.length, itemCount: (enriched.items || []).length }
-      })
+      }
     } catch (fallbackError) {
       console.error(`[${requestId}] local draft failed`, fallbackError?.message || fallbackError)
-      return aiError(error, requestId, res)
+      throw error
     }
   }
+}
+
+app.post('/api/generate-quotation', async (req, res) => {
+  const requestId = `quote-${Date.now()}`
+  const enquiry = sanitizeWhatsAppEnquiry(req.body?.enquiry)
+  if (!enquiry?.trim()) return res.status(400).json({ error: 'Please paste the customer enquiry.' })
+  try {
+    const draft = await generateQuotationDraft({
+      enquiry,
+      customer: req.body?.customer,
+      columns: req.body?.columns,
+      layoutRoles: req.body?.layoutRoles,
+      userId: req.userId,
+      requestId
+    })
+    return res.json(draft)
+  } catch (error) {
+    return aiError(error, requestId, res)
+  }
 })
+
+registerWhatsappEnquiryRoutes(app, { generateQuotationDraft })
 
 app.post('/api/suggest-formula', async (req, res) => {
   const { ask = '', column = null, columns: existing = [] } = req.body || {}

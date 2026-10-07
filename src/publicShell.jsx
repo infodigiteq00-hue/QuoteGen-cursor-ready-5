@@ -28,6 +28,32 @@ function legalPageId(path) {
   return ''
 }
 
+const PENDING_QUOTE_KEY = 'qg_pending_quote'
+
+function quoteIdFromLocation() {
+  try {
+    const id = new URLSearchParams(window.location.search).get('quote') || ''
+    return /^[0-9a-f-]{36}$/i.test(id) ? id : ''
+  } catch {
+    return ''
+  }
+}
+
+function rememberPendingQuote() {
+  const id = quoteIdFromLocation()
+  if (!id) return
+  try { sessionStorage.setItem(PENDING_QUOTE_KEY, id) } catch { /* private mode */ }
+}
+
+function homeAfterLogin() {
+  let id = quoteIdFromLocation()
+  if (!id) {
+    try { id = sessionStorage.getItem(PENDING_QUOTE_KEY) || '' } catch { id = '' }
+  }
+  if (/^[0-9a-f-]{36}$/i.test(id)) return `/?quote=${encodeURIComponent(id)}`
+  return '/'
+}
+
 function ScreenFallback() {
   return (
     <main style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: '#f5f7fa', fontFamily: 'Outfit, Inter, system-ui, sans-serif' }}>
@@ -37,6 +63,7 @@ function ScreenFallback() {
 }
 
 function PublicApp() {
+  rememberPendingQuote()
   const [mode, setMode] = useState(() => (isSignInPath(pathName()) || hasAuthHash() ? 'login' : ''))
   const [email, setEmail] = useState('')
   const [stylesReady, setStylesReady] = useState(false)
@@ -57,10 +84,10 @@ function PublicApp() {
       if (cancelled) return
       installAuthFetch()
       getCurrentSession().then((session) => {
-        if (!cancelled && session) window.location.assign('/')
+        if (!cancelled && session) window.location.assign(homeAfterLogin())
       })
       stop = onAuthChange((session) => {
-        if (session) window.location.assign('/')
+        if (session) window.location.assign(homeAfterLogin())
       })
     })
     return () => { cancelled = true; stop() }
@@ -81,7 +108,7 @@ function PublicApp() {
         <AuthScreen
           initialMode={mode}
           prefillEmail={email}
-          onLoggedIn={() => { window.location.assign('/') }}
+          onLoggedIn={() => { window.location.assign(homeAfterLogin()) }}
         />
       </React.Suspense>
     )

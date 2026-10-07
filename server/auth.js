@@ -33,6 +33,7 @@ function isPublicApiRequest(req) {
     || p.startsWith('/api/pay/phonepe/')
     || p.startsWith('/pay/phonepe/')
     || ((p === '/api/pay/request' || p === '/pay/request' || p.startsWith('/api/pay/request/') || p.startsWith('/pay/request/') || p.startsWith('/api/pay/quotation/') || p.startsWith('/pay/quotation/')) && method === 'GET')
+    || ((p === '/api/whatsapp/enquiry' || p === '/whatsapp/enquiry') && method === 'POST')
   ))
 }
 
