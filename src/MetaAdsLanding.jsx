@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
-import WelcomeIntro, { startWelcomeMusic } from './WelcomeIntro.jsx'
 import logoUrl from './assets/landing/quotegen-logo.png'
 import { META_ADS_LEAD_KEY as LEAD_KEY, readMetaAdsLead, writeMetaAdsLead, writeMetaTrialIntent, clearMetaTrialIntent, clearMetaWelcome, recordMetaLeadProgress } from './metaTrialLead.js'
 import { trackPixel } from './metaPixel.js'
 import { whatsappChatsLink } from './whatsappEnquiry.js'
 import { indiaMobileInputValue, isValidIndiaMobile, normalizeIndiaMobileDigits } from '../shared/phone.js'
+import { trialWhatsappHref } from '../shared/trialWhatsapp.js'
 import './metaAdsLanding.css'
 
 const CTA_STYLE = { fontFamily: 'Archivo, Inter, system-ui, sans-serif', fontWeight: 400 }
@@ -225,13 +225,7 @@ function NextChoices({ lead, onNextStep }) {
   )
 }
 
-function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn, onTryDemo }) {
-  const [intro, setIntro] = useState(false)
-  const stopMusic = useRef(null)
-  useEffect(() => () => { stopMusic.current?.() }, [])
-  if (intro) {
-    return <WelcomeIntro onDone={() => { stopMusic.current?.(); onTryDemo?.() }} />
-  }
+function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn }) {
   let body = null
   if (saving) {
     body = (
@@ -273,13 +267,9 @@ function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn, onTryDemo }
           type="button"
           className="meta-btn meta-btn-primary meta-btn-lg"
           style={CTA_STYLE}
-          onClick={() => {
-            stopMusic.current?.()
-            stopMusic.current = startWelcomeMusic()
-            setIntro(true)
-          }}
+          onClick={() => { window.location.assign(trialWhatsappHref()) }}
         >
-          Try QuoteGen
+          Start trial
         </button>
         <a
           className="meta-success-signin"
@@ -584,7 +574,6 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial, onStartVerif
         saveError={saveError}
         onRetrySave={onRetrySave}
         onSignIn={onSignIn}
-        onTryDemo={onContinueTrial}
       />
     )
   }
