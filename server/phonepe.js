@@ -19,6 +19,18 @@ const PLAN_PRICES = {
   enterprise: { name: 'Enterprise', monthly: 4999, yearly: 49990 },
   scale: { name: 'Scale', monthly: 8999, yearly: 89990 }
 }
+const DEMO_PACK_PRICES = {
+  demo_lite_year: { price: 999, label: 'QuoteGen Starter yearly ₹999' },
+  demo_lite_month: { price: 99, label: 'QuoteGen Starter monthly ₹99' },
+  demo_growth_year: { price: 2499, label: 'QuoteGen Growth yearly ₹2499' },
+  demo_growth_month: { price: 249, label: 'QuoteGen Growth monthly ₹249' },
+  demo_pro_year: { price: 3999, label: 'QuoteGen Pro yearly ₹3999' },
+  demo_pro_month: { price: 399, label: 'QuoteGen Pro monthly ₹399' },
+  demo_business_year: { price: 5999, label: 'QuoteGen Business yearly ₹5999' },
+  demo_business_month: { price: 599, label: 'QuoteGen Business monthly ₹599' },
+  demo_scale_year: { price: 9999, label: 'QuoteGen Scale yearly ₹9999' },
+  demo_scale_month: { price: 999, label: 'QuoteGen Scale monthly ₹999' }
+}
 const TOPUP_PRICES = {
   25: { label: '+25 Quotations', price: 199 },
   100: { label: '+100 Quotations', price: 499 },
@@ -34,6 +46,10 @@ function resolveCharge(body) {
       && Date.now() - offerStartedAt < OFFER_MS + OFFER_GRACE_MS
     const price = offerLive ? OFFER_PRICE : REGULAR_PRICE
     return { price, label: `QuoteGen monthly ₹${price}`, message: `QuoteGen monthly plan ₹${price}` }
+  }
+  const demoPack = DEMO_PACK_PRICES[product]
+  if (demoPack) {
+    return { price: demoPack.price, label: demoPack.label, message: demoPack.label }
   }
   if (product === 'plan') {
     const plan = PLAN_PRICES[String(body?.plan || '').trim().toLowerCase()]

@@ -1,6 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ingestEnquiryFiles, uploadCompanyLogo } from './quotePersistence.js'
-import { downloadQuotationPdf, quotationFileName } from './pdfExport.js'
+import { ingestEnquiryFiles, uploadCompanyLogo, uploadCompanyBankQr, uploadCompanySignatory } from './quotePersistence.js'
 import { QuotePaperHeader, QuoteStudioCanvas } from './QuoteStudio.jsx'
 import { PAPER_THEMES, normalizePaperStyle, readPreferredPaperStyle, resolvePaperTheme, writePreferredPaperStyle, extractImagePalette, accentForTableColor, normalizeAccentHex, tableColorSwatches } from './quotePaperThemes.js'
 import { peekPreferredColumns, writePreferredColumns } from './quoteLayoutPrefs.js'
@@ -19,11 +18,14 @@ import {
   rateKey,
   recalcRow,
   toNumber,
-  normalizeBillAdjustments
+  normalizeBillAdjustments,
+  moveColumnInList,
+  blankExtraLine,
+  extraLineResolvedAmount,
+  extraLineUnit
 } from '../shared/quoteColumns.js'
 import { formatIndianAmount } from '../shared/templateMap.js'
 import { companySeedFromLead, readMetaAdsLead, usefulLead, readMetaGuideProgress, writeMetaGuideProgress } from './metaTrialLead.js'
-import { recordDemoPdfExport } from './demoQuotes.js'
 import { whatsAppPasteReplacement } from '../shared/enquiryText.js'
 import { trackPixel } from './metaPixel.js'
 import DemoHowToVideo from './DemoHowToVideo.jsx'
@@ -148,6 +150,33 @@ function splitDescription(value) {
   }
 
   return { primary: text, secondary: '' }
+}
+
+function autoGrowAddress(el) {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${Math.max(el.scrollHeight, 24)}px`
+}
+
+function AutoGrowAddress({ value = '', onChange, placeholder, 'aria-label': ariaLabel, className = '' }) {
+  const ref = useRef(null)
+  useLayoutEffect(() => {
+    autoGrowAddress(ref.current)
+  }, [value])
+  return (
+    <textarea
+      ref={ref}
+      className={`meta-guide-draft-input meta-guide-draft-address ${className}`.trim()}
+      rows={1}
+      value={value}
+      placeholder={placeholder}
+      aria-label={ariaLabel}
+      onChange={(e) => {
+        onChange?.(e.target.value)
+        autoGrowAddress(e.target)
+      }}
+    />
+  )
 }
 
 function isDescriptionColumn(col) {
@@ -679,10 +708,6 @@ function GuideModal({ title, onClose, children, className = '' }) {
 }
 
 const PHONEPE_QR_SRC = '/phonepe-qr.png'
-const JOIN_PRICE = 399
-const REGULAR_PRICE = 799
-const JOIN_SAVE = REGULAR_PRICE - JOIN_PRICE
-const JOIN_QUOTES = 50
 const OFFER_MS = 10 * 60 * 1000
 const OFFER_STARTED_KEY = 'qg_join_offer_started_v2'
 const SEAT_CAP = 100
@@ -693,6 +718,112 @@ const SEATS_KEY = 'qg_trial_seats_left_v3'
 const SEATS_INTRO_KEY = 'qg_trial_seats_intro_v3'
 const SUPPORT_PHONE_E164 = '+919067610118'
 const SUPPORT_PHONE_LABEL = '+91 90676 10118'
+
+/** Best-fit demo checkout packs — annual-first; monthly ≈ 1/10 of yearly. */
+const DEMO_CHECKOUT_PACKS = {
+  lite: {
+    key: 'lite',
+    name: 'Starter',
+    yearly: 999,
+    monthly: 99,
+    quotations: 100,
+    grace: 10,
+    productYear: 'demo_lite_year',
+    productMonth: 'demo_lite_month'
+  },
+  growth: {
+    key: 'growth',
+    name: 'Growth',
+    yearly: 2499,
+    monthly: 249,
+    quotations: 500,
+    grace: 25,
+    productYear: 'demo_growth_year',
+    productMonth: 'demo_growth_month'
+  },
+  pro: {
+    key: 'pro',
+    name: 'Pro',
+    yearly: 3999,
+    monthly: 399,
+    quotations: 1000,
+    grace: 100,
+    productYear: 'demo_pro_year',
+    productMonth: 'demo_pro_month'
+  },
+  business: {
+    key: 'business',
+    name: 'Business',
+    yearly: 5999,
+    monthly: 599,
+    quotations: 2000,
+    grace: 100,
+    productYear: 'demo_business_year',
+    productMonth: 'demo_business_month'
+  },
+  scale: {
+    key: 'scale',
+    name: 'Scale',
+    yearly: 9999,
+    monthly: 999,
+    quotations: 5000,
+    grace: 200,
+    productYear: 'demo_scale_year',
+    productMonth: 'demo_scale_month'
+  }
+}
+
+const DEMO_COMMERCIAL_KEYS = ['validity', 'delivery', 'payment', 'taxes', 'freight']
+
+function parseMonthlyQuotes(raw) {
+  const n = parseInt(String(raw || '').replace(/[^\d]/g, ''), 10)
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+function pickDemoCheckoutPack(monthlyQuotesRaw) {
+  const n = parseMonthlyQuotes(monthlyQuotesRaw)
+  if (n >= 501) return { kind: 'enterprise' }
+  if (n >= 201) return { kind: 'pack', pack: DEMO_CHECKOUT_PACKS.scale }
+  if (n >= 101) return { kind: 'pack', pack: DEMO_CHECKOUT_PACKS.business }
+  if (n >= 51) return { kind: 'pack', pack: DEMO_CHECKOUT_PACKS.pro }
+  if (n >= 26) return { kind: 'pack', pack: DEMO_CHECKOUT_PACKS.growth }
+  return { kind: 'pack', pack: DEMO_CHECKOUT_PACKS.lite }
+}
+
+function resolveDemoCheckoutOffer(monthlyQuotesRaw, period = 'year') {
+  const picked = pickDemoCheckoutPack(monthlyQuotesRaw)
+  if (picked.kind === 'enterprise') {
+    return {
+      kind: 'enterprise',
+      name: 'Enterprise',
+      amount: null,
+      period,
+      periodSuffix: '',
+      quotesLabel: 'Custom volume · 100+ quotations / month',
+      graceLabel: '',
+      cta: `Call ${SUPPORT_PHONE_LABEL}`,
+      saveAnnual: null,
+      payBody: null
+    }
+  }
+  const pack = picked.pack
+  const annual = period === 'year'
+  const amount = annual ? pack.yearly : pack.monthly
+  const saveAnnual = Math.max(0, pack.monthly * 12 - pack.yearly)
+  return {
+    kind: 'pack',
+    packKey: pack.key,
+    name: pack.name,
+    amount,
+    period: annual ? 'year' : 'month',
+    periodSuffix: annual ? '/year' : '/month',
+    quotesLabel: `${pack.quotations.toLocaleString('en-IN')}+ quotations / year`,
+    graceLabel: `+${pack.grace} grace`,
+    cta: annual ? 'Join annually' : 'Join monthly',
+    saveAnnual,
+    payBody: { product: annual ? pack.productYear : pack.productMonth }
+  }
+}
 
 function writeSeatsLeft(n) {
   try { sessionStorage.setItem(SEATS_KEY, String(n)) } catch { /* private mode */ }
@@ -779,45 +910,53 @@ function formatCountdown(ms) {
 }
 
 function trialExportColWidths(columns) {
-  const sr = 36
+  const cols = columns || []
+  const colCount = cols.length
+  const dense = colCount >= 6
+  const tight = colCount >= 8
+  const sr = tight ? 28 : dense ? 32 : 36
   const printable = 718
-  const minCol = 48
-  const raw = (columns || []).map((col) => {
-    if (isDescriptionColumn(col)) return 320
-    if (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) return 96
-    if (col.id === 'quantity' || /qty|quantity/i.test(String(col.label || ''))) return 72
-    if (col.id === 'rate' || /rate|price/i.test(String(col.label || ''))) return 96
-    if (col.id === 'amount' || /amount|total/i.test(String(col.label || ''))) return 112
-    return 72
+  const minCol = tight ? 36 : dense ? 42 : 48
+  const unitFloor = tight ? 44 : dense ? 56 : 72
+  const raw = cols.map((col) => {
+    if (isDescriptionColumn(col)) return tight ? 140 : dense ? 180 : 280
+    if (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) return unitFloor
+    if (col.id === 'quantity' || /qty|quantity/i.test(String(col.label || ''))) return dense ? 52 : 72
+    if (col.id === 'rate' || /rate|price/i.test(String(col.label || ''))) return dense ? 56 : 80
+    if (col.id === 'amount' || /amount|total/i.test(String(col.label || ''))) return dense ? 64 : 96
+    if (isImageColumn(col) || isAttachmentColumn(col)) return dense ? 44 : 64
+    return dense ? 56 : 72
   })
   const budget = Math.max(240, printable - sr)
-  const widths = raw.map((w, index) => {
-    const col = columns[index]
-    const floor = col && (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) ? 96 : minCol
-    return Math.max(floor, w)
-  })
+  const floorFor = (col) => {
+    if (col && (col.id === 'unit' || /unit|uom/i.test(String(col.label || '')))) return unitFloor
+    if (col && isDescriptionColumn(col)) return tight ? 96 : dense ? 120 : 160
+    return minCol
+  }
+  const widths = raw.map((w, index) => Math.max(floorFor(cols[index]), w))
   let sum = widths.reduce((n, w) => n + w, 0) || 1
   if (sum > budget) {
-    const flexible = widths.map((w, index) => {
-      const col = columns[index]
-      const floor = col && (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) ? 96 : minCol
-      return w > floor ? index : -1
-    }).filter((index) => index >= 0)
-    const locked = widths.reduce((n, w, index) => n + (flexible.includes(index) ? 0 : w), 0)
-    const flexSum = flexible.reduce((n, index) => n + widths[index], 0) || 1
-    const flexBudget = budget - locked
-    if (flexible.length && flexBudget > 0) {
-      const scale = flexBudget / flexSum
-      flexible.forEach((index) => {
-        const col = columns[index]
-        const floor = col && (col.id === 'unit' || /unit|uom/i.test(String(col.label || ''))) ? 96 : minCol
-        widths[index] = Math.max(floor, Math.round(widths[index] * scale))
-      })
+    // Scale everything proportionally so all columns stay on the A4 page.
+    const scale = budget / sum
+    for (let i = 0; i < widths.length; i += 1) {
+      widths[i] = Math.max(floorFor(cols[i]), Math.floor(widths[i] * scale))
+    }
+    sum = widths.reduce((n, w) => n + w, 0) || 1
+    if (sum > budget) {
+      // Still over: drop floors and force-fit.
+      const force = budget / sum
+      for (let i = 0; i < widths.length; i += 1) {
+        widths[i] = Math.max(28, Math.floor(widths[i] * force))
+      }
     }
   }
   const drift = budget - widths.reduce((n, w) => n + w, 0)
-  if (widths.length) widths[widths.length - 1] += drift
-  return { sr, widths }
+  if (widths.length) {
+    const descIdx = cols.findIndex((c) => isDescriptionColumn(c))
+    const padIdx = descIdx >= 0 ? descIdx : widths.length - 1
+    widths[padIdx] += drift
+  }
+  return { sr, widths, dense, tight }
 }
 
 const DEMO_PAPER_IDS = ['formal', 'concise', 'executive', 'modern', 'atelier', 'brief', 'corporate']
@@ -871,7 +1010,7 @@ function visibleCarouselThemeId(fallback) {
   return DEMO_PAPER_IDS[best] || fallback
 }
 
-function TrialBillTotals({ totals, bill, theme, editable, onChange }) {
+function TrialBillTotals({ totals, bill, theme, editable, onChange, extraLines = [], onExtraLinesChange = null }) {
   const muted = theme?.muted || '#667085'
   const set = (patch) => onChange?.({ ...bill, ...patch })
   const hideDiscount = () => {
@@ -882,6 +1021,12 @@ function TrialBillTotals({ totals, bill, theme, editable, onChange }) {
     writeShowManualDiscount(true)
     set({ showDiscount: true })
   }
+  const lines = Array.isArray(extraLines) ? extraLines : []
+  const setLines = (next) => onExtraLinesChange?.(next)
+  const addLine = () => setLines([...lines, { ...blankExtraLine(), label: '', amount: '' }])
+  const updateLine = (i, patch) => setLines(lines.map((row, index) => (index === i ? { ...row, ...patch } : row)))
+  const removeLine = (i) => setLines(lines.filter((_, index) => index !== i))
+  const extraBase = totals.extraBase ?? ((totals.taxableTotal || 0) + (totals.taxTotal || 0))
   return (
     <div className="qg-totals-card" data-qg-block="totals" style={{ marginLeft: 'auto', marginTop: 16, maxWidth: 320 }}>
       <div className="flex justify-between text-sm" style={{ color: muted }}>
@@ -973,6 +1118,32 @@ function TrialBillTotals({ totals, bill, theme, editable, onChange }) {
           <span>{money(totals.summaryTax?.amount)}</span>
         </div>
       )}
+      {editable && onExtraLinesChange ? (
+        <>
+          {lines.map((line, i) => {
+            const resolved = extraLineResolvedAmount(line, extraBase)
+            const isLess = line.kind !== 'add'
+            const isPercent = extraLineUnit(line) === 'percent'
+            return (
+              <div key={line.id || i} className="no-print mt-1.5 flex items-center gap-1" data-qg-ignore="1">
+                <button type="button" onClick={() => removeLine(i)} title="Remove" className="w-4 shrink-0 text-left text-slate-300 hover:text-rose-500">×</button>
+                <button type="button" title={isLess ? 'Subtract' : 'Add'} onClick={() => updateLine(i, { kind: isLess ? 'add' : 'less' })} className="w-5 shrink-0 text-sm text-slate-400">
+                  {isLess ? '−' : '+'}
+                </button>
+                <input value={line.label || ''} onChange={(e) => updateLine(i, { label: e.target.value })} placeholder="Name" className="min-w-0 flex-1 bg-transparent py-0.5 text-[13px] outline-none" style={{ color: muted }} />
+                <input value={line.amount ?? ''} onChange={(e) => updateLine(i, { amount: e.target.value })} placeholder="0" inputMode="decimal" className="w-14 bg-transparent py-0.5 text-right text-[13px] outline-none" style={{ color: muted }} />
+                <button type="button" title={isPercent ? 'Percent' : 'Amount'} onClick={() => updateLine(i, { unit: isPercent ? 'amount' : 'percent' })} className="w-5 shrink-0 text-xs text-slate-400">
+                  {isPercent ? '%' : '₹'}
+                </button>
+                <span className="w-14 shrink-0 text-right text-[12px]" style={{ color: muted }}>{isLess ? '− ' : ''}{money(resolved)}</span>
+              </div>
+            )
+          })}
+          <button type="button" onClick={addLine} className="no-print mt-1.5 text-[12px] font-normal text-slate-400 hover:text-[#1A73E8]" data-qg-ignore="1">
+            + add line
+          </button>
+        </>
+      ) : null}
       <div className="qg-totals-grand flex justify-between text-sm" style={{ borderColor: theme?.accent }}>
         <span>Total</span>
         <span>{money(totals.grandTotal)}</span>
@@ -981,11 +1152,57 @@ function TrialBillTotals({ totals, bill, theme, editable, onChange }) {
   )
 }
 
-function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', captureReady = false, onUploadLogo = null, logoBusy = false, onLogoSizeChange = null, onRateChange = null, onCustomerChange = null, onBillChange = null }) {
+function blankRevealItem(columns) {
+  const item = {}
+  for (const col of columns || []) {
+    if (isNestedColumn(col)) item[rateKey(col)] = ''
+    else item[col.id] = ''
+  }
+  return item
+}
+
+function columnsLayoutSig(cols) {
+  return JSON.stringify((cols || []).map((c) => ({ id: c.id, label: c.label, type: c.type || 'text' })))
+}
+
+function TrialThemedExport({
+  quote,
+  companyProfile = null,
+  themeId = 'formal',
+  captureReady = false,
+  onUploadLogo = null,
+  logoBusy = false,
+  onLogoSizeChange = null,
+  onRateChange = null,
+  onCustomerChange = null,
+  onBillChange = null,
+  onCellChange = null,
+  onAddRow = null,
+  onRemoveRow = null,
+  onRemoveColumn = null,
+  onOpenAddColumn = null,
+  onExtraLinesChange = null,
+  onFieldsChange = null,
+  onTermsChange = null,
+  onNotesChange = null,
+  onClarificationsChange = null,
+  onBankChange = null,
+  onColumnsChange = null,
+  onUploadQr = null,
+  qrBusy = false,
+  onUploadSignatory = null,
+  signatoryBusy = false,
+  onRegenerate = null,
+  canRegenerate = false,
+  regenBusy = false,
+  studioMode = false
+}) {
   const columns = Array.isArray(quote?.columns) && quote.columns.length ? quote.columns : CORE_COLUMNS.map(({ locked, ...c }) => c)
   const items = Array.isArray(quote?.items) ? quote.items : []
   const bill = resolvedBill(quote?.billAdjustments)
   const totals = computeQuoteTotals(items, columns, quote?.extraLines, bill)
+  const lockedColIds = new Set(CORE_COLUMNS.filter((c) => c.locked).map((c) => c.id))
+  const [tableColOpen, setTableColOpen] = useState(false)
   const profile = companyProfile || quote?.companyProfile || null
   const companyName = String(profile?.companyName || '').trim() || 'Your Company Name'
   const headerText = String(profile?.headerText || '').trim()
@@ -997,12 +1214,92 @@ function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', c
   const clientGst = String(quote?.customer?.gst || '').trim()
   const clientLocation = String(quote?.customer?.location || '').trim()
   const hasClient = Boolean(clientName || clientCompany || clientGst || clientLocation)
-  const draftable = !captureReady && Boolean(onRateChange || onCustomerChange)
+  const draftable = !captureReady && Boolean(onRateChange || onCustomerChange || onCellChange)
+  const studio = studioMode && draftable && Boolean(onCellChange)
   const rateCol = findFieldColumn(columns, 'rate')
   const resolvedId = normalizePaperStyle(themeId)
   const chosenAccent = accentForTableColor(quote?.tableColorId, quote?.logoPalette, quote?.customAccent || quote?.tableAccent)
   const theme = resolvePaperTheme(resolvedId, chosenAccent)
-  const colWidths = trialExportColWidths(columns)
+  const baseColWidths = trialExportColWidths(columns)
+  const [userColWidths, setUserColWidths] = useState({})
+  const [dragColId, setDragColId] = useState(null)
+  const [dropColId, setDropColId] = useState(null)
+  const resizeStateRef = useRef(null)
+  const columnsIdSig = columns.map((c) => c.id).join('|')
+  useEffect(() => {
+    setUserColWidths({})
+  }, [columnsIdSig])
+
+  const moveStudioColumns = (fromId, toId) => {
+    if (!fromId || !toId || fromId === toId || !onColumnsChange) return
+    const from = columns.findIndex((c) => c.id === fromId)
+    const to = columns.findIndex((c) => c.id === toId)
+    if (from < 0 || to < 0) return
+    onColumnsChange(moveColumnInList(columns, from, to))
+  }
+
+  const PRINTABLE_TABLE = 718
+  const minColPx = 36
+  const resolvedColWidths = (() => {
+    const ids = columns.map((c) => c.id)
+    const start = ids.map((id, i) => {
+      const override = userColWidths[id]
+      return Number.isFinite(override) ? override : baseColWidths.widths[i]
+    })
+    const budget = Math.max(240, PRINTABLE_TABLE - baseColWidths.sr)
+    let sum = start.reduce((n, w) => n + w, 0) || 1
+    const next = [...start]
+    if (sum > budget) {
+      const scale = budget / sum
+      for (let i = 0; i < next.length; i += 1) next[i] = Math.max(minColPx, Math.floor(next[i] * scale))
+      sum = next.reduce((n, w) => n + w, 0) || 1
+    }
+    const drift = budget - next.reduce((n, w) => n + w, 0)
+    if (next.length) next[next.length - 1] = Math.max(minColPx, next[next.length - 1] + drift)
+    return { sr: baseColWidths.sr, widths: next, dense: baseColWidths.dense, tight: baseColWidths.tight }
+  })()
+
+  const beginColumnResize = (e, colId) => {
+    if (!studio) return
+    e.preventDefault()
+    e.stopPropagation()
+    const ids = columns.map((c) => c.id)
+    const index = ids.indexOf(colId)
+    if (index < 0) return
+    const budget = Math.max(240, PRINTABLE_TABLE - resolvedColWidths.sr)
+    const startWidths = Object.fromEntries(ids.map((id, i) => [id, resolvedColWidths.widths[i]]))
+    const rightKeys = ids.slice(index + 1)
+    resizeStateRef.current = { key: colId, index, startX: e.clientX, startWidths, rightKeys, budget, ids }
+    const onMove = (ev) => {
+      const state = resizeStateRef.current
+      if (!state) return
+      const leftKeys = state.ids.slice(0, state.index)
+      const leftSum = leftKeys.reduce((n, k) => n + state.startWidths[k], 0)
+      const rightMin = state.rightKeys.length * minColPx
+      const maxThis = Math.max(minColPx, state.budget - leftSum - rightMin)
+      const nextThis = Math.min(maxThis, Math.max(minColPx, state.startWidths[state.key] + (ev.clientX - state.startX)))
+      const remaining = Math.max(rightMin, state.budget - leftSum - nextThis)
+      const rightStart = state.rightKeys.reduce((n, k) => n + state.startWidths[k], 0) || 1
+      const next = {}
+      state.ids.forEach((k) => { next[k] = state.startWidths[k] })
+      next[state.key] = nextThis
+      state.rightKeys.forEach((k) => {
+        next[k] = Math.max(minColPx, Math.round(state.startWidths[k] * (remaining / rightStart)))
+      })
+      const absorb = state.rightKeys[state.rightKeys.length - 1] || state.key
+      next[absorb] = Math.max(minColPx, next[absorb] + (state.budget - state.ids.reduce((n, k) => n + next[k], 0)))
+      setUserColWidths(next)
+    }
+    const onUp = () => {
+      resizeStateRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const colWidths = resolvedColWidths
   const rootRef = useRef(null)
   const [pages, setPages] = useState(() => defaultA4Pages(items.length))
 
@@ -1011,7 +1308,7 @@ function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', c
     const next = packA4Pages({ rowCount: items.length, ...measured })
     setPages((prev) => (pagesEqual(prev, next) ? prev : next))
     return undefined
-  }, [items, columns, companyName, headerText, logoUrl, title, terms, clientName, clientCompany, resolvedId, chosenAccent, profile?.logoWidth, profile?.logoHeight])
+  }, [items, columns, companyName, headerText, logoUrl, title, terms, clientName, clientCompany, resolvedId, chosenAccent, profile?.logoWidth, profile?.logoHeight, quote?.notes, quote?.clarifications, quote?.terms, profile?.bankName, profile?.bankAccountNo, profile?.bankIfsc, userColWidths])
 
   const letterhead = (
     <div data-qg-block="header">
@@ -1029,116 +1326,319 @@ function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', c
     </div>
   )
 
+  const customer = quote?.customer || {}
+  const shippingSame = customer.shippingSame !== false
+  const subjectField = studio ? (
+    <input
+      className="meta-guide-draft-input"
+      value={quote?.title || quote?.subject || ''}
+      placeholder="Quotation subject — describe what this covers"
+      aria-label="Subject"
+      onChange={(e) => onFieldsChange?.({ title: e.target.value })}
+    />
+  ) : (
+    <p>{title || 'Quotation'}</p>
+  )
+  const shipSameCheck = studio ? (
+    <label className="no-print qg-ship-same-check meta-guide-ship-same" style={{ color: theme.muted }} data-qg-ignore="1">
+      <input
+        type="checkbox"
+        checked={shippingSame}
+        onChange={(e) => {
+          const same = e.target.checked
+          onCustomerChange?.({ shippingSame: same, ...(same ? { shippingLocation: '' } : {}) })
+        }}
+      />
+      Shipping same as billing
+    </label>
+  ) : null
   const parties = (
     <div className="qg-to-subject-wrap qg-to-subject-wrap--formal" data-qg-block="meta">
-      {title ? <h3 className="qg-formal-subject" style={{ color: theme.text }}>{title}</h3> : null}
+      {shippingSame && (studio || title) ? (
+        <h3 className="qg-formal-subject" style={{ color: theme.text }}>{subjectField}</h3>
+      ) : null}
       <div className="qg-to-subject-section qg-formal-parties">
         <div className="qg-to-col">
           <p className="qg-section-chip" style={{ color: theme.accent }}>Quoted to</p>
-          {draftable ? (
+          {studio || draftable ? (
             <div className="meta-guide-draft-client">
-              {[
-                ['name', 'Contact name'],
-                ['company', 'Company'],
-                ['gst', 'GSTIN'],
-                ['location', 'Location']
-              ].map(([key, placeholder]) => (
-                <input
-                  key={key}
-                  className="meta-guide-draft-input"
-                  value={quote?.customer?.[key] || ''}
-                  placeholder={placeholder}
-                  aria-label={placeholder}
-                  onChange={(e) => onCustomerChange?.({ [key]: e.target.value })}
+              {!shippingSame ? <p className="qg-address-sublabel" style={{ color: theme.muted }}>Billing address</p> : null}
+              <input className="meta-guide-draft-input" value={customer.company || ''} placeholder="Customer company name" aria-label="Company" onChange={(e) => onCustomerChange?.({ company: e.target.value })} />
+              <input className="meta-guide-draft-input" value={customer.name || ''} placeholder="Kind Attn — contact name" aria-label="Contact name" onChange={(e) => onCustomerChange?.({ name: e.target.value })} />
+              {!shippingSame ? (
+                <AutoGrowAddress
+                  value={customer.location || ''}
+                  placeholder="Billing address · City · State"
+                  aria-label="Billing address"
+                  onChange={(v) => onCustomerChange?.({ location: v })}
                 />
-              ))}
+              ) : null}
+              {shipSameCheck}
             </div>
           ) : hasClient ? (
             <>
-              {clientName ? <p className="font-semibold">{clientName}</p> : null}
-              {clientCompany ? <p style={{ color: theme.muted }}>{clientCompany}</p> : null}
-              {clientGst ? <p style={{ color: theme.muted }}>GST {clientGst}</p> : null}
-              {clientLocation ? <p style={{ color: theme.muted }}>{clientLocation}</p> : null}
+              {clientCompany ? <p className="font-semibold">{clientCompany}</p> : null}
+              {clientName ? <p style={{ color: theme.muted }}>{clientName}</p> : null}
+              {!shippingSame && clientLocation ? <p style={{ color: theme.muted, whiteSpace: 'pre-line' }}>{clientLocation}</p> : null}
+              {shippingSame && clientGst ? <p style={{ color: theme.muted }}>GST {clientGst}</p> : null}
+              {shippingSame && clientLocation ? <p style={{ color: theme.muted, whiteSpace: 'pre-line' }}>{clientLocation}</p> : null}
             </>
           ) : (
             <p style={{ color: theme.muted }}>—</p>
           )}
         </div>
         <div className="qg-subject-col">
-          <p className="qg-section-chip" style={{ color: theme.accent }}>Subject</p>
-          <p>{title || 'Quotation'}</p>
+          {studio && !shippingSame ? (
+            <div className="meta-guide-draft-client">
+              <p className="qg-section-chip" style={{ color: theme.accent }}>Ship to</p>
+              <p className="qg-address-sublabel" style={{ color: theme.muted }}>Shipping address</p>
+              <AutoGrowAddress
+                value={customer.shippingLocation || ''}
+                placeholder="Shipping address · City · State"
+                aria-label="Shipping address"
+                onChange={(v) => onCustomerChange?.({ shippingLocation: v, shippingSame: false })}
+              />
+              <input
+                className="meta-guide-draft-input"
+                value={customer.gst || ''}
+                placeholder="GSTIN / Tax ID"
+                aria-label="GSTIN"
+                onChange={(e) => onCustomerChange?.({ gst: e.target.value })}
+              />
+            </div>
+          ) : studio || draftable ? (
+            <>
+              <p className="qg-section-chip" style={{ color: theme.accent }}>Customer details</p>
+              <input className="meta-guide-draft-input" value={customer.gst || ''} placeholder="GSTIN / Tax ID" aria-label="GSTIN" onChange={(e) => onCustomerChange?.({ gst: e.target.value })} />
+              <AutoGrowAddress
+                value={customer.location || ''}
+                placeholder="Location · City, State"
+                aria-label="Location"
+                onChange={(v) => onCustomerChange?.({ location: v })}
+              />
+            </>
+          ) : (
+            <>
+              <p className="qg-section-chip" style={{ color: theme.accent }}>Subject</p>
+              <p>{title || 'Quotation'}</p>
+            </>
+          )}
         </div>
       </div>
+      {studio && !shippingSame ? (
+        <div className="qg-subject-below qg-formal-subject-below">
+          <p className="qg-section-chip" style={{ color: theme.accent }}>Subject</p>
+          {subjectField}
+        </div>
+      ) : null}
     </div>
   )
 
   const tableFor = (rowIndexes) => (
-    <table className="quote-items-table qg-studio-table text-left" style={{ tableLayout: 'fixed', width: '100%' }}>
-      <colgroup>
-        <col style={{ width: `${colWidths.sr}px` }} />
-        {columns.map((col, i) => (
-          <col key={col.id} style={{ width: `${colWidths.widths[i]}px` }} />
-        ))}
-      </colgroup>
-      <thead data-qg-block="thead">
-        <tr>
-          <th className="qg-cell-compact">Sr.</th>
-          {columns.map((col) => (
-            <th key={col.id} className={previewColAlignRight(col, columns) ? 'is-right' : ''}>
-              {isNestedColumn(col) ? `${col.label} %` : col.label}
-            </th>
+    <div className="meta-guide-studio-items">
+      {studio ? (
+        <div className="meta-guide-table-toolbar no-print" data-qg-ignore="1">
+          <div className="meta-guide-table-toolbar-spacer" />
+          <div className="relative">
+            <button
+              type="button"
+              className={`meta-guide-table-addcol${tableColOpen ? ' is-on' : ''}`}
+              aria-expanded={tableColOpen}
+              onClick={() => {
+                setTableColOpen((v) => !v)
+                onOpenAddColumn?.()
+              }}
+            >
+              <IconPlus /> Add column
+            </button>
+            {tableColOpen ? (
+              <div className="meta-guide-table-addcol-panel">
+                {OPTIONAL_PRESETS.map((p) => {
+                  const on = columns.some((c) => c.id === p.id)
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`meta-guide-chip${on ? ' is-on' : ''}`}
+                      onClick={() => {
+                        if (on) onRemoveColumn?.(p.id)
+                        else onColumnsChange?.([...columns, { id: p.id, label: p.label, type: p.type || 'text' }])
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  )
+                })}
+                {NAMED_AMOUNT_COLUMN_PRESETS.map((p) => {
+                  const on = columns.some((c) => c.id === p.id || c.id.startsWith(`${p.id}_`))
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`meta-guide-chip${on ? ' is-on' : ''}`}
+                      onClick={() => {
+                        if (on) {
+                          onColumnsChange?.(columns.filter((c) => c.id !== p.id && !c.id.startsWith(`${p.id}_`)))
+                        } else {
+                          const col = buildNamedAmountColumn(p, columns)
+                          if (col) onColumnsChange?.([...columns, col])
+                        }
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      <table
+        className={`quote-items-table qg-studio-table text-left meta-guide-studio-table${colWidths.dense ? ' is-dense' : ''}${colWidths.tight ? ' is-tight' : ''}`}
+        style={{ tableLayout: 'fixed', width: '100%', maxWidth: '100%', minWidth: 0 }}
+      >
+        <colgroup>
+          <col style={{ width: `${colWidths.sr}px` }} />
+          {columns.map((col, i) => (
+            <col key={col.id} style={{ width: `${colWidths.widths[i]}px` }} />
           ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rowIndexes.map((index) => {
-          const item = items[index]
-          return (
-            <tr key={index} data-qg-row={index}>
-              <td className="qg-cell-compact">{index + 1}</td>
-              {columns.map((col) => {
-                if (isNestedColumn(col)) {
-                  const rate = item?.[rateKey(col)]
-                  return <td key={col.id} className="is-right">{rate ? `${rate}%` : '—'}</td>
-                }
-                const right = previewColAlignRight(col, columns)
-                const desc = isDescriptionColumn(col)
-                const isRate = Boolean(rateCol && col.id === rateCol.id)
-                return (
-                  <td key={col.id} className={`${right ? 'is-right qg-cell-compact' : ''}${desc ? ' description-cell' : ''}`}>
-                    {draftable && isRate ? (
-                      <input
-                        className="meta-guide-draft-input is-rate"
-                        inputMode="decimal"
-                        value={item?.[col.id] ?? ''}
-                        placeholder="Rate"
-                        aria-label={`Rate for row ${index + 1}`}
-                        onChange={(e) => onRateChange?.(index, e.target.value)}
-                      />
-                    ) : isImageColumn(col) || isAttachmentColumn(col)
-                      ? ''
-                      : formatPreviewCell(item, col, columns)}
-                  </td>
-                )
-              })}
-            </tr>
-          )
-        })}
-      </tbody>
-    </table>
+        </colgroup>
+        <thead data-qg-block="thead">
+          <tr>
+            <th className="qg-cell-compact">Sr.</th>
+            {columns.map((col) => (
+              <th
+                key={col.id}
+                draggable={studio && Boolean(onColumnsChange)}
+                onDragStart={(e) => {
+                  if (e.target.closest?.('[data-resize-handle]') || e.target.closest?.('[data-col-remove]')) {
+                    e.preventDefault()
+                    return
+                  }
+                  setDragColId(col.id)
+                }}
+                onDragOver={(e) => { e.preventDefault(); setDropColId(col.id) }}
+                onDragLeave={() => setDropColId((prev) => (prev === col.id ? null : prev))}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  moveStudioColumns(dragColId, col.id)
+                  setDragColId(null)
+                  setDropColId(null)
+                }}
+                onDragEnd={() => { setDragColId(null); setDropColId(null) }}
+                title={studio ? `${col.label} — drag to move` : col.label}
+                className={`meta-guide-th${previewColAlignRight(col, columns) ? ' is-right' : ''}${dragColId === col.id ? ' is-dragging' : ''}${dropColId === col.id && dragColId !== col.id ? ' is-drop' : ''}`}
+              >
+                <span className="meta-guide-th-inner">
+                  <span className="meta-guide-th-label">{isNestedColumn(col) ? `${col.label} %` : col.label}</span>
+                  {studio && onRemoveColumn && !lockedColIds.has(col.id) ? (
+                    <button
+                      type="button"
+                      data-col-remove="true"
+                      className="meta-guide-col-remove no-print"
+                      title={`Remove ${col.label}`}
+                      aria-label={`Remove ${col.label}`}
+                      onClick={(e) => { e.stopPropagation(); onRemoveColumn(col.id) }}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </span>
+                {studio ? (
+                  <span
+                    data-resize-handle="true"
+                    draggable={false}
+                    onMouseDown={(e) => beginColumnResize(e, col.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    title="Drag to resize this column"
+                    aria-label={`Resize ${col.label || 'column'}`}
+                    className="qg-col-resizer no-print"
+                  />
+                ) : null}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rowIndexes.map((index) => {
+            const item = items[index]
+            return (
+              <tr key={index} data-qg-row={index} className="meta-guide-studio-row">
+                <td className="qg-cell-compact meta-guide-sr-cell">
+                  {studio && onRemoveRow ? (
+                    <button
+                      type="button"
+                      className="meta-guide-row-remove no-print"
+                      title="Remove this row"
+                      aria-label={`Delete row ${index + 1}`}
+                      onClick={() => onRemoveRow(index)}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                  <span>{index + 1}</span>
+                </td>
+                {columns.map((col) => {
+                  if (isNestedColumn(col)) {
+                    const rate = item?.[rateKey(col)]
+                    return <td key={col.id} className="is-right">{rate ? `${rate}%` : '—'}</td>
+                  }
+                  const right = previewColAlignRight(col, columns)
+                  const desc = isDescriptionColumn(col)
+                  const isRate = Boolean(rateCol && col.id === rateCol.id)
+                  return (
+                    <td key={col.id} className={`${right ? 'is-right qg-cell-compact' : ''}${desc ? ' description-cell' : ''}`}>
+                      {studio && !isImageColumn(col) && !isAttachmentColumn(col) ? (
+                        <input
+                          className={`meta-guide-draft-input${isRate || right ? ' is-rate' : ''}`}
+                          inputMode={isRate || right ? 'decimal' : 'text'}
+                          value={item?.[col.id] ?? ''}
+                          placeholder={col.label || '—'}
+                          aria-label={`${col.label || 'Cell'} row ${index + 1}`}
+                          onChange={(e) => onCellChange?.(index, col.id, e.target.value)}
+                        />
+                      ) : draftable && isRate ? (
+                        <input
+                          className="meta-guide-draft-input is-rate"
+                          inputMode="decimal"
+                          value={item?.[col.id] ?? ''}
+                          placeholder="Rate"
+                          aria-label={`Rate for row ${index + 1}`}
+                          onChange={(e) => onRateChange?.(index, e.target.value)}
+                        />
+                      ) : isImageColumn(col) || isAttachmentColumn(col)
+                        ? ''
+                        : formatPreviewCell(item, col, columns)}
+                    </td>
+                  )
+                })}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
   )
 
-  const notes = (Array.isArray(quote?.notes) ? quote.notes : []).map((n) => String(n || '').trim()).filter(Boolean)
-  const clarifications = (Array.isArray(quote?.clarifications) ? quote.clarifications : []).map((n) => String(n || '').trim()).filter(Boolean)
-  const commercial = ['validity', 'delivery', 'payment', 'taxes', 'freight']
-    .map((key) => ({ key, val: String(quote?.terms?.[key] || '').trim() }))
-    .filter((row) => row.val)
-  const bankRows = [
-    ['Bank Name', profile?.bankName],
-    ['Account Name', profile?.bankAccountName || companyName],
-    ['Account No', profile?.bankAccountNo],
-    ['IFSC / SWIFT', profile?.bankIfsc]
-  ].filter(([, value]) => String(value || '').trim())
+  const notesLines = Array.isArray(quote?.notes) ? quote.notes : []
+  const notes = notesLines.map((n) => String(n || '').trim()).filter(Boolean)
+  const clarificationLines = Array.isArray(quote?.clarifications) ? quote.clarifications : []
+  const clarifications = clarificationLines.map((n) => String(n || '').trim()).filter(Boolean)
+  const commercial = DEMO_COMMERCIAL_KEYS.map((key) => ({
+    key,
+    val: String(quote?.terms?.[key] || '').trim()
+  }))
+  const commercialVisible = studio ? commercial : commercial.filter((row) => row.val)
+  const bankFields = [
+    ['bankName', 'Bank Name', profile?.bankName],
+    ['bankAccountName', 'Account Name', profile?.bankAccountName || (studio ? '' : companyName)],
+    ['bankAccountNo', 'Account No', profile?.bankAccountNo],
+    ['bankIfsc', 'IFSC / SWIFT', profile?.bankIfsc]
+  ]
+  const bankRows = bankFields
+    .map(([key, label, value]) => [key, label, value])
+    .filter(([, , value]) => studio || String(value || '').trim())
 
   const totalsBlock = (
     <TrialBillTotals
@@ -1147,65 +1647,137 @@ function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', c
       theme={theme}
       editable={!captureReady && Boolean(onBillChange)}
       onChange={onBillChange}
+      extraLines={quote?.extraLines}
+      onExtraLinesChange={studio ? onExtraLinesChange : null}
     />
   )
 
   const closing = (
     <div data-qg-block="closing">
       <div className="qg-paper-body">
-        <div className={`qg-closing-stack${notes.length ? ' qg-closing-stack--side' : ''}`}>
+        <div className={`qg-closing-stack${(studio || notes.length) ? ' qg-closing-stack--side' : ''}`}>
           <section className="qg-closing-optional">
             <p className="qg-section-heading qg-rich-heading" style={{ color: 'var(--qg-accent)' }}>Standard terms</p>
-            <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--qg-muted)', whiteSpace: 'pre-line' }}>
-              {terms || '—'}
-            </p>
+            {studio ? (
+              <textarea
+                className="meta-guide-draft-area"
+                rows={4}
+                value={quote?.fields?.standardTerms ?? profile?.standardTerms ?? ''}
+                placeholder="Standard terms for this quotation"
+                aria-label="Standard terms"
+                onChange={(e) => onFieldsChange?.({ standardTerms: e.target.value })}
+              />
+            ) : (
+              <p className="mt-1 text-sm leading-relaxed" style={{ color: 'var(--qg-muted)', whiteSpace: 'pre-line' }}>
+                {terms || '—'}
+              </p>
+            )}
           </section>
-          {notes.length ? (
+          {(studio || notes.length) ? (
             <section className="qg-closing-optional qg-closing-notes">
               <p className="qg-section-heading qg-rich-heading" style={{ color: 'var(--qg-accent)' }}>Notes</p>
-              <div className="mt-1 text-sm leading-6" style={{ color: 'var(--qg-text)' }}>
-                {notes.map((line, i) => <p key={i}>{line}</p>)}
-              </div>
+              {studio ? (
+                <textarea
+                  className="meta-guide-draft-area"
+                  rows={4}
+                  value={notesLines.join('\n')}
+                  placeholder="Add notes, one per line"
+                  aria-label="Notes"
+                  onChange={(e) => onNotesChange?.(e.target.value)}
+                />
+              ) : (
+                <div className="mt-1 text-sm leading-6" style={{ color: 'var(--qg-text)' }}>
+                  {notes.map((line, i) => <p key={i}>{line}</p>)}
+                </div>
+              )}
             </section>
           ) : null}
         </div>
-        {clarifications.length ? (
+        {(studio || clarifications.length) ? (
           <section className="qg-closing-optional" style={{ marginTop: 14 }}>
             <p className="qg-section-heading qg-rich-heading" style={{ color: 'var(--qg-accent)' }}>Clarifications</p>
-            <div className="mt-1 text-sm leading-6" style={{ color: 'var(--qg-muted)' }}>
-              {clarifications.map((line, i) => <p key={i}>{line}</p>)}
-            </div>
+            {studio ? (
+              <textarea
+                className="meta-guide-draft-area"
+                rows={3}
+                value={clarificationLines.join('\n')}
+                placeholder="Clarifications, one per line"
+                aria-label="Clarifications"
+                onChange={(e) => onClarificationsChange?.(e.target.value)}
+              />
+            ) : (
+              <div className="mt-1 text-sm leading-6" style={{ color: 'var(--qg-muted)' }}>
+                {clarifications.map((line, i) => <p key={i}>{line}</p>)}
+              </div>
+            )}
           </section>
         ) : null}
-        {commercial.length ? (
+        {(studio || commercialVisible.length) ? (
           <section style={{ marginTop: 16 }}>
             <p className="qg-section-heading qg-rich-heading" style={{ color: 'var(--qg-accent)' }}>Commercial terms</p>
             <div className="grid grid-cols-1 gap-x-8 sm:grid-cols-2">
-              {commercial.map((row) => (
+              {commercialVisible.map((row) => (
                 <div key={row.key} className="flex gap-2 border-b border-dashed py-2 text-sm" style={{ borderColor: 'var(--qg-table-border)' }}>
                   <span className="w-28 shrink-0 capitalize" style={{ color: 'var(--qg-muted)' }}>{row.key}</span>
-                  <span>{row.val}</span>
+                  {studio ? (
+                    <input
+                      className="meta-guide-draft-input"
+                      value={row.val}
+                      placeholder="—"
+                      aria-label={`Commercial ${row.key}`}
+                      onChange={(e) => onTermsChange?.({ [row.key]: e.target.value })}
+                    />
+                  ) : (
+                    <span>{row.val}</span>
+                  )}
                 </div>
               ))}
             </div>
           </section>
         ) : null}
         <footer className="mt-8 qg-signatory-block">
-          {bankRows.length || profile?.bankQrUrl ? (
+          {(studio || bankRows.length || profile?.bankQrUrl) ? (
             <>
               <hr className="qg-section-rule" />
               <section className="mb-8">
                 <h3 className="qg-section-heading mb-2 border-b pb-1.5 text-[11px]" style={{ borderColor: 'var(--qg-table-border, #e8edf3)' }}>Bank details</h3>
+                {studio && onUploadQr && !profile?.bankQrUrl ? (
+                  <button type="button" className="qg-paper-add-btn no-print mb-3" data-qg-ignore="1" onClick={onUploadQr} disabled={qrBusy}>
+                    <span aria-hidden="true">+</span>
+                    {qrBusy ? 'Adding…' : 'Add QR'}
+                  </button>
+                ) : null}
                 <div className={`qg-bank-block${profile?.bankQrUrl ? ' qg-bank-block--with-qr' : ''}`}>
                   {profile?.bankQrUrl ? (
                     <div className="qg-bank-qr-col">
                       <img src={profile.bankQrUrl} alt="Payment QR" className="qg-bank-qr" />
+                      <p className="qg-bank-qr-hint">Scan with any UPI payment app</p>
+                      {studio && onUploadQr ? (
+                        <button type="button" className="qg-paper-remove no-print" data-qg-ignore="1" onClick={onUploadQr} disabled={qrBusy}>
+                          {qrBusy ? 'Uploading…' : 'Replace QR'}
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                   <div className="text-sm leading-7 text-slate-700">
-                    {bankRows.map(([label, value]) => (
-                      <p key={label}><span className="text-slate-600">{label}:</span> {value}</p>
-                    ))}
+                    {studio ? (
+                      bankFields.map(([key, label, value]) => (
+                        <div key={key} className="meta-guide-bank-edit-row">
+                          <span className="meta-guide-bank-edit-label">{label}</span>
+                          <input
+                            className="meta-guide-draft-input"
+                            value={value || ''}
+                            placeholder={label}
+                            aria-label={label}
+                            onChange={(e) => onBankChange?.({ [key]: e.target.value })}
+                          />
+                        </div>
+                      ))
+                    ) : (
+                      bankRows.map(([, label, value]) => (
+                        <p key={label}><span className="text-slate-600">{label}:</span> {value}</p>
+                      ))
+                    )}
                   </div>
                 </div>
               </section>
@@ -1214,10 +1786,25 @@ function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', c
           <hr className="qg-section-rule" />
           <div className="flex justify-end pb-1">
             <div className="w-52 text-center">
-              <div className="h-14" />
+              <div className="qg-signatory-slot">
+                {profile?.signatoryUrl ? (
+                  <img src={profile.signatoryUrl} alt="Authorized signatory" className="meta-guide-signatory-img" />
+                ) : studio && onUploadSignatory ? (
+                  <button type="button" className="qg-paper-add-btn no-print" data-qg-ignore="1" disabled={signatoryBusy} onClick={onUploadSignatory}>
+                    {signatoryBusy ? 'Adding…' : '+ Signature'}
+                  </button>
+                ) : (
+                  <div className="h-14" />
+                )}
+              </div>
               <div className="pt-2" style={{ borderTop: '1.5px solid var(--qg-muted, #5c6879)' }}>
                 <p className="text-xs font-semibold" style={{ color: 'var(--qg-text)' }}>Authorized Signatory</p>
                 <p className="mt-0.5 text-[11px]" style={{ color: 'var(--qg-muted)' }}>For {companyName}</p>
+                {studio && profile?.signatoryUrl && onUploadSignatory ? (
+                  <button type="button" className="qg-paper-remove no-print" data-qg-ignore="1" disabled={signatoryBusy} onClick={onUploadSignatory}>
+                    Replace signature
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>
@@ -1257,6 +1844,26 @@ function TrialThemedExport({ quote, companyProfile = null, themeId = 'formal', c
             {(page.rows.length > 0 || page.showTotals) ? (
               <div className="qg-paper-body">
                 {page.rows.length > 0 ? tableFor(page.rows) : null}
+                {studio && (onAddRow || onRegenerate) && page.rows.length > 0 && (page.showTotals || pageIndex === pagesToPaint.length - 1) ? (
+                  <div className="meta-guide-studio-add-row" data-qg-ignore="1">
+                    {onAddRow ? (
+                      <button type="button" className="meta-guide-studio-add-row-btn" onClick={onAddRow}>
+                        <IconPlus /> Add line item
+                      </button>
+                    ) : null}
+                    {onRegenerate ? (
+                      <button
+                        type="button"
+                        className={`meta-guide-studio-regen-btn${canRegenerate ? ' is-ready' : ''}`}
+                        disabled={!canRegenerate || regenBusy}
+                        title={canRegenerate ? 'Fill new columns from the same enquiry' : 'Change columns first, then regenerate'}
+                        onClick={onRegenerate}
+                      >
+                        {regenBusy ? 'Regenerating…' : 'Regenerate'}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
                 {page.showTotals ? totalsBlock : null}
               </div>
             ) : null}
@@ -1316,7 +1923,40 @@ function ScaledQuotePaper({ children }) {
   )
 }
 
-function TrialFormatCarousel({ quote, companyProfile, themeId, onThemeChange, ready, onAddLogo, logoBusy, onReadingChange, onLogoSizeChange, onRateChange = null, onCustomerChange = null, onBillChange = null }) {
+function TrialFormatCarousel({
+  quote,
+  companyProfile,
+  themeId,
+  onThemeChange,
+  ready,
+  onAddLogo,
+  logoBusy,
+  onReadingChange,
+  onLogoSizeChange,
+  onRateChange = null,
+  onCustomerChange = null,
+  onBillChange = null,
+  onCellChange = null,
+  onAddRow = null,
+  onRemoveRow = null,
+  onRemoveColumn = null,
+  onOpenAddColumn = null,
+  onExtraLinesChange = null,
+  onFieldsChange = null,
+  onTermsChange = null,
+  onNotesChange = null,
+  onClarificationsChange = null,
+  onBankChange = null,
+  onColumnsChange = null,
+  onUploadQr = null,
+  qrBusy = false,
+  onUploadSignatory = null,
+  signatoryBusy = false,
+  onRegenerate = null,
+  canRegenerate = false,
+  regenBusy = false,
+  studioMode = false
+}) {
   const scrollerRef = useRef(null)
   const hintingRef = useRef(false)
   const [hinting, setHinting] = useState(false)
@@ -1445,6 +2085,26 @@ function TrialFormatCarousel({ quote, companyProfile, themeId, onThemeChange, re
                       onRateChange={id === active ? onRateChange : null}
                       onCustomerChange={id === active ? onCustomerChange : null}
                       onBillChange={id === active ? onBillChange : null}
+                      onCellChange={id === active ? onCellChange : null}
+                      onAddRow={id === active ? onAddRow : null}
+                      onRemoveRow={id === active ? onRemoveRow : null}
+                      onRemoveColumn={id === active ? onRemoveColumn : null}
+                      onOpenAddColumn={id === active ? onOpenAddColumn : null}
+                      onExtraLinesChange={id === active ? onExtraLinesChange : null}
+                      onFieldsChange={id === active ? onFieldsChange : null}
+                      onTermsChange={id === active ? onTermsChange : null}
+                      onNotesChange={id === active ? onNotesChange : null}
+                      onClarificationsChange={id === active ? onClarificationsChange : null}
+                      onBankChange={id === active ? onBankChange : null}
+                      onColumnsChange={id === active ? onColumnsChange : null}
+                      onUploadQr={id === active ? onUploadQr : null}
+                      qrBusy={qrBusy}
+                      onUploadSignatory={id === active ? onUploadSignatory : null}
+                      signatoryBusy={signatoryBusy}
+                      onRegenerate={id === active ? onRegenerate : null}
+                      canRegenerate={canRegenerate}
+                      regenBusy={regenBusy}
+                      studioMode={studioMode && id === active}
                     />
                   </ScaledQuotePaper>
                 ) : (
@@ -1524,6 +2184,12 @@ export default function MetaTrialGuide({
   const [revealQuote, setRevealQuote] = useState(null)
   const [revealReady, setRevealReady] = useState(false)
   const [previewReading, setPreviewReading] = useState(false)
+  const [studioOpen, setStudioOpen] = useState(false)
+  const [studioColsOpen, setStudioColsOpen] = useState(false)
+  const [studioCustomLabel, setStudioCustomLabel] = useState('')
+  const [tableTipOpen, setTableTipOpen] = useState(false)
+  const [columnsBaseline, setColumnsBaseline] = useState('')
+  const [regenBusy, setRegenBusy] = useState(false)
   const [paperStyle, setPaperStyle] = useState(() => readPreferredPaperStyle())
   const [guideProfile, setGuideProfile] = useState(() => initialSeed.profile)
   const [clientDone, setClientDone] = useState(false)
@@ -1534,6 +2200,8 @@ export default function MetaTrialGuide({
   const [companyDraft, setCompanyDraft] = useState(() => initialSeed.draft)
   const [logoPreviewUrl, setLogoPreviewUrl] = useState(() => companyProfile?.logoUrl || null)
   const [logoBusy, setLogoBusy] = useState(false)
+  const [qrBusy, setQrBusy] = useState(false)
+  const [signatoryBusy, setSignatoryBusy] = useState(false)
   const [logoDragOver, setLogoDragOver] = useState(false)
   const [setupBusy, setSetupBusy] = useState(false)
   const [localError, setLocalError] = useState('')
@@ -1543,9 +2211,12 @@ export default function MetaTrialGuide({
   const [offerStartedAt, setOfferStartedAt] = useState(readOfferStart)
   const [offerNow, setOfferNow] = useState(() => Date.now())
   const [seatsLeft, setSeatsLeft] = useState(() => readSeatsLeft() ?? SEAT_START)
+  const [billPeriod, setBillPeriod] = useState('year')
   const offerLeftMs = offerStartedAt ? offerStartedAt + OFFER_MS - offerNow : OFFER_MS
   const offerLive = offerLeftMs > 0
-  const payPrice = offerLive ? JOIN_PRICE : REGULAR_PRICE
+  const leadForOffer = usefulLead(trialLead) || readMetaAdsLead() || {}
+  const checkoutOffer = resolveDemoCheckoutOffer(leadForOffer.monthlyQuotes, billPeriod)
+  const payPrice = checkoutOffer.amount
 
   useEffect(() => {
     writeMetaGuideProgress({ phase, step })
@@ -1650,20 +2321,30 @@ export default function MetaTrialGuide({
 
   const openPay = async () => {
     if (payBusy) return
+    const lead = usefulLead(trialLead) || readMetaAdsLead() || {}
+    const offer = resolveDemoCheckoutOffer(lead.monthlyQuotes, billPeriod)
+    if (offer.kind === 'enterprise') {
+      window.location.assign(`tel:${SUPPORT_PHONE_E164}`)
+      return
+    }
     if (onPreviewPay) {
       onPreviewPay()
       return
     }
     setPayError('')
     setPayBusy(true)
-    trackPixel('InitiateCheckout', { value: payPrice, currency: 'INR', num_items: 1, content_name: 'QuoteGen monthly' })
-    const lead = usefulLead(trialLead) || readMetaAdsLead() || {}
+    trackPixel('InitiateCheckout', {
+      value: offer.amount,
+      currency: 'INR',
+      num_items: 1,
+      content_name: `QuoteGen ${offer.name} ${offer.period}`
+    })
     try {
       const response = await fetch('/api/pay/phonepe/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          offerStartedAt,
+          ...offer.payBody,
           name: lead.name || '',
           company: lead.company || '',
           phone: lead.phone || '',
@@ -1686,7 +2367,6 @@ export default function MetaTrialGuide({
     }
     setPayBusy(false)
   }
-  const [pdfBusy, setPdfBusy] = useState(false)
   const [ingestBusy, setIngestBusy] = useState(false)
   const [ingestNote, setIngestNote] = useState('')
   const [attached, setAttached] = useState([])
@@ -1703,6 +2383,8 @@ export default function MetaTrialGuide({
   }, [draftColumns])
   const fileRef = useRef(null)
   const logoFileRef = useRef(null)
+  const qrFileRef = useRef(null)
+  const signatoryFileRef = useRef(null)
   const generateGenRef = useRef(0)
   const logoSizeTimerRef = useRef(0)
   const guideProfileRef = useRef(guideProfile)
@@ -1815,11 +2497,257 @@ export default function MetaTrialGuide({
     if (nextItems) onPatchQuote?.({ items: nextItems })
   }
 
+  const patchRevealCell = (rowIndex, colId, value) => {
+    let nextItems = null
+    setRevealQuote((q) => {
+      if (!q) return q
+      const cols = Array.isArray(q.columns) && q.columns.length
+        ? q.columns
+        : CORE_COLUMNS.map(({ locked, ...c }) => c)
+      const items = (Array.isArray(q.items) ? q.items : []).map((item, index) => {
+        if (index !== rowIndex) return item
+        const next = { ...item, [colId]: value }
+        Object.assign(next, amountEditPatch(next, cols, colId, value) || {})
+        Object.assign(next, formulaEditPatch(next, cols, colId, value) || {})
+        return recalcRow(next, cols, { editingKey: colId })
+      })
+      nextItems = items
+      return { ...q, items }
+    })
+    if (nextItems) onPatchQuote?.({ items: nextItems })
+  }
+
+  const addRevealRow = () => {
+    let nextItems = null
+    setRevealQuote((q) => {
+      if (!q) return q
+      const cols = Array.isArray(q.columns) && q.columns.length
+        ? q.columns
+        : CORE_COLUMNS.map(({ locked, ...c }) => c)
+      nextItems = [...(Array.isArray(q.items) ? q.items : []), blankRevealItem(cols)]
+      return { ...q, items: nextItems }
+    })
+    if (nextItems) onPatchQuote?.({ items: nextItems })
+  }
+
+  const removeRevealRow = (rowIndex) => {
+    let nextItems = null
+    setRevealQuote((q) => {
+      if (!q) return q
+      nextItems = (Array.isArray(q.items) ? q.items : []).filter((_, i) => i !== rowIndex)
+      if (!nextItems.length) {
+        const cols = Array.isArray(q.columns) && q.columns.length ? q.columns : CORE_COLUMNS.map(({ locked, ...c }) => c)
+        nextItems = [blankRevealItem(cols)]
+      }
+      return { ...q, items: nextItems }
+    })
+    if (nextItems) onPatchQuote?.({ items: nextItems })
+  }
+
+  const removeRevealColumn = (colId) => {
+    if (CORE_COLUMNS.some((c) => c.id === colId && c.locked)) return
+    const cols = studioRevealCols().filter((c) => c.id !== colId)
+    patchRevealColumns(cols)
+  }
+
+  const patchRevealExtraLines = (extraLines) => {
+    setRevealQuote((q) => (q ? { ...q, extraLines } : q))
+    onPatchQuote?.({ extraLines })
+  }
+
+  const uploadQrFile = async (file) => {
+    if (!file || !String(file.type || '').startsWith('image/')) {
+      setLocalError('Use a PNG, JPG, WebP, GIF, or SVG for the QR.')
+      return
+    }
+    setLocalError('')
+    setQrBusy(true)
+    const localUrl = URL.createObjectURL(file)
+    try {
+      const result = await uploadCompanyBankQr(file)
+      if (result?.unavailable || !result?.profile) {
+        applyGuideProfile({ ...(guideProfileRef.current || {}), bankQrUrl: localUrl })
+        return
+      }
+      applyGuideProfile(result.profile)
+    } catch (err) {
+      applyGuideProfile({ ...(guideProfileRef.current || {}), bankQrUrl: localUrl })
+      setLocalError(err?.message || 'Could not upload QR.')
+    } finally {
+      setQrBusy(false)
+    }
+  }
+
+  const uploadSignatoryFile = async (file) => {
+    if (!file || !String(file.type || '').startsWith('image/')) {
+      setLocalError('Use a PNG, JPG, WebP, GIF, or SVG for the signature.')
+      return
+    }
+    setLocalError('')
+    setSignatoryBusy(true)
+    const localUrl = URL.createObjectURL(file)
+    try {
+      const result = await uploadCompanySignatory(file)
+      if (result?.unavailable || !result?.profile) {
+        applyGuideProfile({ ...(guideProfileRef.current || {}), signatoryUrl: localUrl })
+        return
+      }
+      applyGuideProfile(result.profile)
+    } catch (err) {
+      applyGuideProfile({ ...(guideProfileRef.current || {}), signatoryUrl: localUrl })
+      setLocalError(err?.message || 'Could not upload signature.')
+    } finally {
+      setSignatoryBusy(false)
+    }
+  }
+
+  const patchRevealColumns = (nextCols) => {
+    const cols = Array.isArray(nextCols) && nextCols.length
+      ? nextCols
+      : CORE_COLUMNS.map(({ locked, ...c }) => c)
+    let nextItems = null
+    setRevealQuote((q) => {
+      if (!q) return q
+      nextItems = (Array.isArray(q.items) ? q.items : []).map((item) => {
+        const next = { ...item }
+        for (const col of cols) {
+          if (next[col.id] === undefined) next[col.id] = ''
+        }
+        return next
+      })
+      return { ...q, columns: cols, items: nextItems }
+    })
+    setDraftColumns(cols)
+    writePreferredColumns(cols)
+    if (nextItems) onPatchQuote?.({ columns: cols, items: nextItems })
+    else onPatchQuote?.({ columns: cols })
+  }
+
+  const studioRevealCols = () => (
+    Array.isArray(revealQuote?.columns) && revealQuote.columns.length
+      ? revealQuote.columns
+      : draftColumns
+  )
+
+  const studioHasOptional = (id) => studioRevealCols().some((c) => c.id === id)
+  const studioHasNamedAmount = (presetId) => studioRevealCols().some((c) => c.id === presetId || c.id.startsWith(`${presetId}_`))
+
+  const studioToggleOptional = (preset) => {
+    const cols = studioRevealCols()
+    if (studioHasOptional(preset.id)) {
+      patchRevealColumns(cols.filter((c) => c.id !== preset.id))
+    } else {
+      patchRevealColumns([...cols, { id: preset.id, label: preset.label, type: preset.type || 'text' }])
+    }
+  }
+
+  const studioToggleNamedAmount = (preset) => {
+    const cols = studioRevealCols()
+    if (studioHasNamedAmount(preset.id)) {
+      patchRevealColumns(cols.filter((c) => c.id !== preset.id && !c.id.startsWith(`${preset.id}_`)))
+    } else {
+      const col = buildNamedAmountColumn(preset, cols)
+      if (col) patchRevealColumns([...cols, col])
+    }
+  }
+
+  const studioAddCustom = () => {
+    const label = studioCustomLabel.trim()
+    if (!label) return
+    const id = `custom_${label.toLowerCase().replace(/[^a-z0-9]+/g, '_').slice(0, 24)}_${Date.now().toString(36).slice(-4)}`
+    patchRevealColumns([...studioRevealCols(), { id, label, type: 'text' }])
+    setStudioCustomLabel('')
+  }
+
+  const canRegenerateReveal = Boolean(revealQuote) && columnsLayoutSig(studioRevealCols()) !== columnsBaseline
+
+  const dismissTableTip = (openAddColumn = false) => {
+    try { sessionStorage.setItem('qg_table_tip_seen', '1') } catch { /* private mode */ }
+    setTableTipOpen(false)
+    if (openAddColumn) setStudioColsOpen(true)
+  }
+
   const patchRevealBill = (nextBill) => {
     const bill = normalizeBillAdjustments(nextBill)
     setRevealQuote((q) => (q ? { ...q, billAdjustments: bill } : q))
     onPatchQuote?.({ billAdjustments: bill })
   }
+
+  const patchRevealFields = (partial) => {
+    let nextFields = null
+    const title = partial.title != null ? partial.title : null
+    setRevealQuote((q) => {
+      if (!q) return q
+      const { title: _t, ...fieldPartial } = partial
+      nextFields = { ...(q.fields || {}), ...fieldPartial }
+      const next = { ...q, fields: nextFields }
+      if (title != null) {
+        next.title = title
+        next.subject = title
+      }
+      return next
+    })
+    if (partial.standardTerms != null) {
+      applyGuideProfile({ ...(guideProfileRef.current || {}), standardTerms: partial.standardTerms })
+    }
+    const patch = {}
+    if (nextFields) patch.fields = nextFields
+    if (title != null) {
+      patch.title = title
+      patch.subject = title
+    }
+    if (Object.keys(patch).length) onPatchQuote?.(patch)
+  }
+
+  const patchRevealTerms = (partial) => {
+    let nextTerms = null
+    setRevealQuote((q) => {
+      if (!q) return q
+      nextTerms = { ...(q.terms || {}), ...partial }
+      return { ...q, terms: nextTerms }
+    })
+    if (nextTerms) onPatchQuote?.({ terms: nextTerms })
+  }
+
+  const linesFromText = (text) => String(text || '').split('\n').map((l) => l.trimEnd())
+
+  const patchRevealNotes = (text) => {
+    const notes = linesFromText(text)
+    setRevealQuote((q) => (q ? { ...q, notes } : q))
+    onPatchQuote?.({ notes })
+  }
+
+  const patchRevealClarifications = (text) => {
+    const clarifications = linesFromText(text)
+    setRevealQuote((q) => (q ? { ...q, clarifications } : q))
+    onPatchQuote?.({ clarifications })
+  }
+
+  const patchRevealBank = (partial) => {
+    applyGuideProfile({ ...(guideProfileRef.current || {}), ...partial })
+  }
+
+  useEffect(() => {
+    if (previewReading) setStudioOpen(true)
+  }, [previewReading])
+
+  useEffect(() => {
+    if (!studioOpen || phase !== 'reveal' || !revealQuote) return undefined
+    try {
+      if (sessionStorage.getItem('qg_table_tip_seen') === '1') return undefined
+    } catch { /* private mode */ }
+    const timer = window.setTimeout(() => setTableTipOpen(true), 7000)
+    return () => window.clearTimeout(timer)
+  }, [studioOpen, phase, revealQuote?.number, revealQuote?.id])
+
+  useEffect(() => {
+    if (!tableTipOpen) return undefined
+    const onKey = (e) => {
+      if (e.key === 'Escape') dismissTableTip(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [tableTipOpen])
 
   const applyPaperStyle = (id) => {
     const next = normalizePaperStyle(id)
@@ -1836,33 +2764,12 @@ export default function MetaTrialGuide({
     return next
   }
 
-  const downloadFormalPdf = async () => {
-    if (!revealQuote || pdfBusy) return
+  const goToCheckout = () => {
+    if (!revealQuote) return
     setLocalError('')
-    setPdfBusy(true)
     const visibleId = normalizePaperStyle(visibleCarouselThemeId(paperStyle))
     commitPreferredPaperStyle(visibleId)
-    try {
-      const need = (Array.isArray(revealQuote?.items) && revealQuote.items.length > 10) ? 2 : 1
-      for (let i = 0; i < 60; i += 1) {
-        const root = document.querySelector('.meta-guide-format-slide.is-active [data-qg-preview="1"]')
-          || document.querySelector('[data-qg-trial-ready="1"]')
-        const themeOk = root?.getAttribute('data-qg-theme') === visibleId
-        const papers = root?.querySelectorAll('.qg-studio-paper') || []
-        if (themeOk && papers.length >= need) break
-        await new Promise((resolve) => requestAnimationFrame(resolve))
-      }
-      await sleep(80)
-      await downloadQuotationPdf(quotationFileName(revealQuote, 'pdf'))
-      try {
-        await recordDemoPdfExport(usefulLead(trialLead) || readMetaAdsLead())
-      } catch { /* download already succeeded */ }
-      setPhase('convert')
-    } catch (err) {
-      setLocalError(err?.message || 'Could not download the PDF. Try again.')
-    } finally {
-      setPdfBusy(false)
-    }
+    setPhase('convert')
   }
 
   const uploadLogoFile = async (file) => {
@@ -2064,11 +2971,52 @@ export default function MetaTrialGuide({
     if (atDemoCap) return
     setLocalError('')
     setPreviewReading(false)
+    setStudioOpen(false)
+    setStudioColsOpen(false)
+    setTableTipOpen(false)
+    setColumnsBaseline('')
     setRevealQuote(null)
     setPhase('flow')
     setStep(1)
     setEnquiry?.('')
     onTryAnother?.()
+  }
+
+  const applyBuiltReveal = (built, { keepStudio = false } = {}) => {
+    const lead = usefulLead(trialLead) || readMetaAdsLead()
+    const seeded = companySeedFromLead(lead, {
+      ...(built?.companyProfile || {}),
+      ...(guideProfile || {})
+    })
+    setRevealQuote({ ...built, companyProfile: seeded.profile })
+    setColumnsBaseline(columnsLayoutSig(built?.columns))
+    setStudioColsOpen(false)
+    if (!keepStudio) {
+      setStudioOpen(false)
+      setPreviewReading(false)
+      setTableTipOpen(false)
+    } else {
+      setStudioOpen(true)
+      setPreviewReading(true)
+    }
+    const cust = built?.customer || {}
+    if (String(cust.name || '').trim() || String(cust.company || '').trim()) {
+      setClientDone(true)
+      setClientDraft({
+        name: cust.name || '',
+        company: cust.company || '',
+        gst: cust.gst || '',
+        location: cust.location || ''
+      })
+    }
+    if (seeded.profile) setGuideProfile(seeded.profile)
+    setCompanyDraft((prev) => ({
+      companyName: prev.companyName || seeded.draft.companyName,
+      headerText: prev.headerText || seeded.draft.headerText,
+      phone: prev.phone || seeded.draft.phone,
+      email: prev.email || seeded.draft.email,
+      standardTerms: prev.standardTerms || seeded.draft.standardTerms
+    }))
   }
 
   const goGenerate = async () => {
@@ -2084,6 +3032,9 @@ export default function MetaTrialGuide({
     setPhase('ceremony')
     setRevealReady(false)
     setPreviewReading(false)
+    setStudioOpen(false)
+    setStudioColsOpen(false)
+    setTableTipOpen(false)
     setRevealQuote(null)
     const gen = ++generateGenRef.current
     const started = Date.now()
@@ -2102,30 +3053,7 @@ export default function MetaTrialGuide({
           : raw)
         return
       }
-      const lead = usefulLead(trialLead) || readMetaAdsLead()
-      const seeded = companySeedFromLead(lead, {
-        ...(built?.companyProfile || {}),
-        ...(guideProfile || {})
-      })
-      setRevealQuote({ ...built, companyProfile: seeded.profile })
-      const cust = built?.customer || {}
-      if (String(cust.name || '').trim() || String(cust.company || '').trim()) {
-        setClientDone(true)
-        setClientDraft({
-          name: cust.name || '',
-          company: cust.company || '',
-          gst: cust.gst || '',
-          location: cust.location || ''
-        })
-      }
-      if (seeded.profile) setGuideProfile(seeded.profile)
-      setCompanyDraft((prev) => ({
-        companyName: prev.companyName || seeded.draft.companyName,
-        headerText: prev.headerText || seeded.draft.headerText,
-        phone: prev.phone || seeded.draft.phone,
-        email: prev.email || seeded.draft.email,
-        standardTerms: prev.standardTerms || seeded.draft.standardTerms
-      }))
+      applyBuiltReveal(built)
       if (gen !== generateGenRef.current) return
       setPhase('reveal')
       requestAnimationFrame(() => {
@@ -2139,8 +3067,53 @@ export default function MetaTrialGuide({
     }
   }
 
+  const regenerateReveal = async () => {
+    if (!canRegenerateReveal || regenBusy || atDemoCap) return
+    const cols = studioRevealCols()
+    if (!cols.length) {
+      setLocalError('Keep at least one column.')
+      return
+    }
+    setLocalError('')
+    setDraftColumns(cols)
+    setRegenBusy(true)
+    setPhase('ceremony')
+    setRevealReady(false)
+    const gen = ++generateGenRef.current
+    const started = Date.now()
+    try {
+      const built = await onGenerate?.(cols)
+      if (gen !== generateGenRef.current) return
+      const elapsed = Date.now() - started
+      if (elapsed < CEREMONY_MIN_MS) await sleep(CEREMONY_MIN_MS - elapsed)
+      if (gen !== generateGenRef.current) return
+      if (!built) {
+        setPhase('reveal')
+        setRevealReady(true)
+        setLocalError(error || 'Could not regenerate. Try again.')
+        return
+      }
+      applyBuiltReveal(built, { keepStudio: true })
+      if (gen !== generateGenRef.current) return
+      setPhase('reveal')
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => setRevealReady(true))
+      })
+    } catch (err) {
+      if (gen !== generateGenRef.current) return
+      setPhase('reveal')
+      setRevealReady(true)
+      setLocalError(err?.message || 'Could not regenerate. Try again.')
+    } finally {
+      setRegenBusy(false)
+    }
+  }
+
   const backFromReveal = () => {
     setPreviewReading(false)
+    setStudioOpen(false)
+    setStudioColsOpen(false)
+    setTableTipOpen(false)
     setLocalError('')
     setPhase('flow')
     setStep(2)
@@ -2152,7 +3125,7 @@ export default function MetaTrialGuide({
 
   if (phase === 'reveal' && revealQuote) {
     return (
-      <main className={`meta-guide meta-guide-reveal-page${revealReady ? ' is-ready' : ''}${previewReading ? ' is-reading' : ''}`}>
+      <main className={`meta-guide meta-guide-reveal-page${revealReady ? ' is-ready' : ''}${previewReading || studioOpen ? ' is-reading' : ''}${studioOpen ? ' is-studio' : ''}`}>
         <DemoHowToVideo placement="top-right" appearAfterMs={6000} />
         <div className="meta-guide-reveal-shell">
           <p className="meta-guide-step">Ta-da</p>
@@ -2204,7 +3177,89 @@ export default function MetaTrialGuide({
             </div>
           ) : null}
 
-          <div className={`meta-guide-reveal-frame${revealReady ? ' is-expand' : ''}`}>
+          {studioOpen ? (
+            <div className="meta-guide-studio-bar" data-qg-ignore="1">
+              <button
+                type="button"
+                className={`meta-guide-studio-chip${studioColsOpen ? ' is-on' : ''}`}
+                aria-expanded={studioColsOpen}
+                onClick={() => setStudioColsOpen((v) => !v)}
+              >
+                <IconPlus /> Add column
+              </button>
+              <button
+                type="button"
+                className="meta-guide-studio-chip"
+                onClick={addRevealRow}
+              >
+                <IconPlus /> Add line item
+              </button>
+              <button
+                type="button"
+                className={`meta-guide-studio-chip is-regen${canRegenerateReveal ? ' is-ready' : ''}`}
+                disabled={!canRegenerateReveal || regenBusy || atDemoCap}
+                title={canRegenerateReveal ? 'Fill new columns from the same enquiry' : 'Change columns first, then regenerate'}
+                onClick={() => { void regenerateReveal() }}
+              >
+                {regenBusy ? 'Regenerating…' : 'Regenerate'}
+              </button>
+            </div>
+          ) : null}
+
+          {studioOpen && studioColsOpen ? (
+            <div className="meta-guide-studio-cols" data-qg-ignore="1">
+              <p className="meta-guide-studio-cols-label">Optional columns</p>
+              <div className="meta-guide-studio-cols-row">
+                {OPTIONAL_PRESETS.map((p) => {
+                  const on = studioHasOptional(p.id)
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`meta-guide-chip${on ? ' is-on' : ''}`}
+                      aria-pressed={on}
+                      onClick={() => studioToggleOptional(p)}
+                    >
+                      {p.label}
+                    </button>
+                  )
+                })}
+                {NAMED_AMOUNT_COLUMN_PRESETS.map((p) => {
+                  const on = studioHasNamedAmount(p.id)
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`meta-guide-chip${on ? ' is-on' : ''}`}
+                      aria-pressed={on}
+                      onClick={() => studioToggleNamedAmount(p)}
+                    >
+                      {p.label}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="meta-guide-studio-custom">
+                <input
+                  type="text"
+                  value={studioCustomLabel}
+                  onChange={(e) => setStudioCustomLabel(e.target.value)}
+                  placeholder="Custom column name"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      studioAddCustom()
+                    }
+                  }}
+                />
+                <button type="button" className="meta-guide-secondary" onClick={studioAddCustom} disabled={!studioCustomLabel.trim()}>
+                  Add
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          <div className={`meta-guide-reveal-frame${revealReady ? ' is-expand' : ''}${studioOpen ? ' is-studio' : ''}`}>
             <TrialFormatCarousel
               quote={revealQuote}
               companyProfile={guideProfile}
@@ -2218,6 +3273,26 @@ export default function MetaTrialGuide({
               onRateChange={patchRevealRate}
               onCustomerChange={patchRevealCustomer}
               onBillChange={patchRevealBill}
+              onCellChange={studioOpen ? patchRevealCell : null}
+              onAddRow={studioOpen ? addRevealRow : null}
+              onRemoveRow={studioOpen ? removeRevealRow : null}
+              onRemoveColumn={studioOpen ? removeRevealColumn : null}
+              onOpenAddColumn={studioOpen ? () => setStudioColsOpen(true) : null}
+              onExtraLinesChange={studioOpen ? patchRevealExtraLines : null}
+              onFieldsChange={studioOpen ? patchRevealFields : null}
+              onTermsChange={studioOpen ? patchRevealTerms : null}
+              onNotesChange={studioOpen ? patchRevealNotes : null}
+              onClarificationsChange={studioOpen ? patchRevealClarifications : null}
+              onBankChange={studioOpen ? patchRevealBank : null}
+              onColumnsChange={studioOpen ? patchRevealColumns : null}
+              onUploadQr={studioOpen ? () => { if (!qrBusy) qrFileRef.current?.click() } : null}
+              qrBusy={qrBusy}
+              onUploadSignatory={studioOpen ? () => { if (!signatoryBusy) signatoryFileRef.current?.click() } : null}
+              signatoryBusy={signatoryBusy}
+              onRegenerate={studioOpen ? () => { void regenerateReveal() } : null}
+              canRegenerate={canRegenerateReveal && !atDemoCap}
+              regenBusy={regenBusy}
+              studioMode={studioOpen}
             />
           </div>
           <input
@@ -2231,6 +3306,28 @@ export default function MetaTrialGuide({
               if (file) uploadLogoFile(file)
             }}
           />
+          <input
+            ref={qrFileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+            className="meta-guide-file-input"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (file) uploadQrFile(file)
+            }}
+          />
+          <input
+            ref={signatoryFileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+            className="meta-guide-file-input"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (file) uploadSignatoryFile(file)
+            }}
+          />
 
           {showError ? <p className="meta-guide-error">{showError}</p> : null}
 
@@ -2241,10 +3338,10 @@ export default function MetaTrialGuide({
             <button
               type="button"
               className="meta-guide-primary meta-guide-pdf-cta"
-              disabled={pdfBusy || logoBusy}
-              onClick={() => { void downloadFormalPdf() }}
+              disabled={logoBusy}
+              onClick={goToCheckout}
             >
-              {pdfBusy ? 'Preparing PDF…' : 'Download PDF'}
+              Download PDF
             </button>
           </div>
         </div>
@@ -2252,6 +3349,35 @@ export default function MetaTrialGuide({
         {revealQuote ? (
           <div className="meta-guide-pdf-offscreen" aria-hidden="true">
             <TrialThemedExport key={paperStyle} quote={revealQuote} companyProfile={guideProfile} themeId={paperStyle} captureReady />
+          </div>
+        ) : null}
+
+        {tableTipOpen ? (
+          <div
+            className="meta-guide-modal-backdrop"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="meta-guide-table-tip-title"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) dismissTableTip(false)
+            }}
+          >
+            <div className="meta-guide-modal" onMouseDown={(e) => e.stopPropagation()}>
+              <p className="meta-guide-modal-kicker">Quick tip</p>
+              <h2 id="meta-guide-table-tip-title">Is the table up to your liking?</h2>
+              <p className="meta-guide-modal-lead">
+                Use <strong>Add column</strong> and <strong>Add line item</strong> above the quotation.
+                After you change the layout, tap <strong>Regenerate</strong> to fill those columns from the same enquiry.
+              </p>
+              <div className="meta-guide-modal-actions">
+                <button type="button" className="meta-guide-secondary" onClick={() => dismissTableTip(false)}>
+                  Got it
+                </button>
+                <button type="button" className="meta-guide-primary meta-guide-primary-inline" onClick={() => dismissTableTip(true)}>
+                  Add a column
+                </button>
+              </div>
+            </div>
           </div>
         ) : null}
 
@@ -2319,6 +3445,8 @@ export default function MetaTrialGuide({
   }
 
   if (phase === 'convert') {
+    const offer = checkoutOffer
+    const isEnterprise = offer.kind === 'enterprise'
     return (
       <main className="meta-guide meta-guide-convert-page">
         <div className="meta-guide-convert-burst" aria-hidden="true">
@@ -2336,45 +3464,79 @@ export default function MetaTrialGuide({
             </div>
             <p className="meta-guide-step">Welcome to QuoteGen</p>
             <h1 className="meta-guide-title">
-              Downloaded <span>successfully</span>
+              Subscribe to <span>download</span>
             </h1>
-            <p className="meta-guide-convert-file">Your quotation PDF is in Downloads.</p>
+            <p className="meta-guide-convert-file">Pay once to unlock your PDF and keep creating quotations.</p>
           </div>
 
           <div className="meta-guide-convert-offer">
-            <p className="meta-guide-convert-hook">Liked what you see?</p>
-            <p className="meta-guide-convert-promise">
-              Join QuoteGen.
-            </p>
-            <p className="meta-guide-convert-meta">Just paste, verify and send.</p>
-            {offerLive ? (
-              <>
-                <div className="meta-guide-offer is-live" role="timer" aria-live="off">
-                  <p className="meta-guide-offer-row">
-                    Special price <s>₹{REGULAR_PRICE}</s> ₹{JOIN_PRICE}/month
-                  </p>
-                  <p className="meta-guide-offer-row is-end">
-                    <em className="meta-guide-offer-save">Save ₹{JOIN_SAVE}/month</em>
-                    <span className="meta-guide-offer-ends">ends in</span>
-                    <span className="meta-guide-offer-clock">{formatCountdown(offerLeftMs)}</span>
-                  </p>
-                </div>
-                <p className="meta-guide-seats" aria-live="polite">
-                  Only <strong><SeatOdometer value={seatsLeft} /></strong> / {SEAT_CAP} seats left at this price
-                </p>
-              </>
-            ) : (
-              <div className="meta-guide-offer is-ended">
-                <span className="meta-guide-offer-label">The ₹{JOIN_PRICE} offer has ended</span>
+            {!isEnterprise ? (
+              <div className="meta-guide-period-toggle" role="group" aria-label="Billing period">
+                <button
+                  type="button"
+                  className={`meta-guide-period-btn${billPeriod === 'month' ? ' is-on' : ''}`}
+                  aria-pressed={billPeriod === 'month'}
+                  onClick={() => setBillPeriod('month')}
+                >
+                  Monthly
+                </button>
+                <button
+                  type="button"
+                  className={`meta-guide-period-btn${billPeriod === 'year' ? ' is-on' : ''}`}
+                  aria-pressed={billPeriod === 'year'}
+                  onClick={() => setBillPeriod('year')}
+                >
+                  Annually
+                  {offer.saveAnnual > 0 ? <em>Save ₹{offer.saveAnnual.toLocaleString('en-IN')}</em> : null}
+                </button>
               </div>
+            ) : null}
+
+            <div className="meta-guide-offer is-live is-stacked" role="region" aria-label="Your package">
+              <p className="meta-guide-offer-kicker">
+                {isEnterprise ? 'Enterprise' : 'Special price'}
+              </p>
+              <p className="meta-guide-offer-price">
+                {isEnterprise ? (
+                  'Custom plan'
+                ) : (
+                  <>
+                    ₹{offer.amount.toLocaleString('en-IN')}
+                    <small>{offer.periodSuffix}</small>
+                  </>
+                )}
+              </p>
+              <p className="meta-guide-offer-foot">
+                {isEnterprise ? (
+                  <span className="meta-guide-offer-quotes">{offer.quotesLabel}</span>
+                ) : (
+                  <>
+                    {billPeriod === 'year' && offer.saveAnnual > 0 ? (
+                      <em className="meta-guide-offer-save">Save ₹{offer.saveAnnual.toLocaleString('en-IN')}/year</em>
+                    ) : null}
+                    <span className="meta-guide-offer-quotes">{offer.quotesLabel} · {offer.graceLabel}</span>
+                  </>
+                )}
+              </p>
+            </div>
+
+            {!isEnterprise ? (
+              <p className="meta-guide-seats" aria-live="polite">
+                Only <strong><SeatOdometer value={seatsLeft} /></strong> / {SEAT_CAP} seats left at this price
+              </p>
+            ) : (
+              <p className="meta-guide-seats">
+                High volume? We’ll tailor seats, branding, and onboarding for your team.
+              </p>
             )}
+
             <button
               type="button"
               className="meta-guide-primary meta-guide-convert-cta"
               onClick={openPay}
               disabled={payBusy}
             >
-              {payBusy ? 'Opening PhonePe…' : 'Join QuoteGen Now'}
+              {payBusy ? 'Opening PhonePe…' : offer.cta}
             </button>
             {atDemoCap ? (
               <p className="meta-guide-convert-error">You’ve used all {demoQuoteCap} demo quotations. Join QuoteGen to continue.</p>
@@ -2392,25 +3554,23 @@ export default function MetaTrialGuide({
           </div>
         </div>
 
-        {payOpen ? (
+        {payOpen && !isEnterprise ? (
           <GuideModal
             className="is-pay"
             title="You’re in"
             onClose={() => setPayOpen(false)}
           >
             <p className="meta-guide-pay-lead">
-              {offerLive
-                ? <>Join now and pay just <strong>₹{JOIN_PRICE}/month</strong> — save <strong>₹{JOIN_SAVE}/month</strong> vs ₹{REGULAR_PRICE}. When the timer hits zero, the price goes up. Only {seatsLeft} of {SEAT_CAP} seats left.</>
-                : <>QuoteGen is ₹{REGULAR_PRICE}/month for {JOIN_QUOTES} quotations. Pay as you go for more.</>}
+              Join <strong>{offer.name}</strong> at <strong>₹{offer.amount.toLocaleString('en-IN')}{offer.periodSuffix}</strong>
+              {' · '}{offer.quotesLabel} ({offer.graceLabel}).
             </p>
             <div className="meta-guide-pay-card">
               <p className="meta-guide-pay-kicker">Scan QR to pay</p>
               <p className="meta-guide-pay-amount">
-                {offerLive && <s className="meta-guide-pay-was">₹{REGULAR_PRICE}</s>}
-                ₹{payPrice}
-                <small> /month</small>
+                ₹{payPrice.toLocaleString('en-IN')}
+                <small> {offer.periodSuffix}</small>
               </p>
-              <p className="meta-guide-pay-note">{JOIN_QUOTES} quotations / month · pay as you go for more</p>
+              <p className="meta-guide-pay-note">{offer.quotesLabel} · {offer.graceLabel}</p>
               <p className="meta-guide-pay-note">
                 <a href="/refund">Refund policy</a>
                 {' · '}
@@ -2672,10 +3832,9 @@ export default function MetaTrialGuide({
             <button
               type="button"
               className="meta-guide-primary meta-guide-primary-inline meta-guide-pdf-cta"
-              onClick={() => { void downloadFormalPdf() }}
-              disabled={pdfBusy}
+              onClick={goToCheckout}
             >
-              {pdfBusy ? 'Downloading…' : 'Download PDF'}
+              Download PDF
             </button>
           </div>
         </div>

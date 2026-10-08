@@ -265,11 +265,11 @@ function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn }) {
         <p className="meta-form-lead">Let’s start with your first trial now.</p>
         <button
           type="button"
-          className="meta-btn meta-btn-primary meta-btn-lg"
+          className="meta-btn meta-btn-primary meta-btn-lg meta-success-cta"
           style={CTA_STYLE}
           onClick={() => { window.location.assign(trialWhatsappHref()) }}
         >
-          Start trial
+          Start Free Trial
         </button>
         <a
           className="meta-success-signin"

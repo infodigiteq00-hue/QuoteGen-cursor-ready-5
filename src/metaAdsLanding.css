@@ -1737,6 +1737,10 @@
   text-decoration: underline;
 }
 
+.meta-ads button.meta-btn.meta-btn-primary.meta-success-cta {
+  font-weight: 700 !important;
+}
+
 .meta-success-signin {
   display: inline-flex;
   align-items: center;
