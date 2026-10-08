@@ -6,3 +6,6 @@ data/upload-templates.json
 dist/
 
 
+
+# Local Supabase CLI cache
+supabase/.temp/
