@@ -290,10 +290,22 @@ export async function skipMetaTrialEmailOtp({ email, phoneDigits, name, company 
 
 export async function requestPasswordReset(email) {
   assertConfigured()
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: emailRedirectTo()
+  const em = String(email || '').trim().toLowerCase()
+  if (!em) throw new Error('Enter a valid email address.')
+  // Send via our Resend path (same as trial OTP). Supabase's built-in
+  // resetPasswordForEmail often never delivers for non-team inboxes.
+  const response = await fetch('/api/auth/request-password-reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: em,
+      redirectTo: emailRedirectTo()
+    })
   })
-  if (error) throw new Error(authErrorMessage(error))
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(payload.error || payload.message || 'Could not send a reset email')
+  }
 }
 
 export async function updatePassword(password) {

@@ -11,6 +11,7 @@
  */
 import { getSupabase, isSupabaseConfigured, supabaseError } from './db.js'
 import { readDemoLeadByCode } from './googleSheetLead.js'
+import { sendUserEmail } from './mail.js'
 
 function authUnavailable(res, requestId) {
   const err = new Error('Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env')
@@ -34,6 +35,7 @@ function isPublicApiRequest(req) {
     || p.startsWith('/pay/phonepe/')
     || ((p === '/api/pay/request' || p === '/pay/request' || p.startsWith('/api/pay/request/') || p.startsWith('/pay/request/') || p.startsWith('/api/pay/quotation/') || p.startsWith('/pay/quotation/')) && method === 'GET')
     || ((p === '/api/whatsapp/enquiry' || p === '/whatsapp/enquiry') && method === 'POST')
+    || ((p === '/api/auth/request-password-reset' || p === '/auth/request-password-reset') && method === 'POST')
   ))
 }
 
@@ -85,5 +87,93 @@ export function registerAuthRoutes(app) {
   // Echoing the verified token back is useful for debugging the gate.
   app.get('/api/auth/me', requireAuth, (req, res) => {
     res.json({ user: { id: req.userId, email: req.userEmail } })
+  })
+
+  /**
+   * Password reset via Resend — same delivery path as trial OTP.
+   * Supabase's built-in resetPasswordForEmail often never arrives (default
+   * mailer / unverified SMTP). We generate a recovery link with the service
+   * role and send it ourselves. Always return a generic ok to avoid email enumeration.
+   */
+  app.post('/api/auth/request-password-reset', async (req, res) => {
+    const requestId = `pwd-reset-${Date.now()}`
+    const email = String(req.body?.email || '').trim().toLowerCase()
+    const redirectTo = String(req.body?.redirectTo || '').trim() || undefined
+    const genericOk = () => res.json({
+      ok: true,
+      email,
+      message: 'If that email has an account, a reset link is on its way.',
+      requestId
+    })
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Enter a valid email address.', code: 'VALIDATION', requestId })
+    }
+    if (!isSupabaseConfigured()) return authUnavailable(res, requestId)
+    if (!process.env.RESEND_API_KEY?.trim()) {
+      console.error(`[${requestId}] RESEND_API_KEY missing — cannot email password reset`)
+      return res.status(503).json({
+        error: 'Reset email isn’t available right now. Please try again in a minute.',
+        requestId
+      })
+    }
+
+    try {
+      const supabase = getSupabase()
+      const { data, error } = await supabase.auth.admin.generateLink({
+        type: 'recovery',
+        email,
+        options: redirectTo ? { redirectTo } : undefined
+      })
+      if (error) {
+        // Unknown / unconfirmed accounts: pretend success so callers can't probe.
+        console.warn(`[${requestId}] recovery link skipped for ${email}:`, error.message)
+        return genericOk()
+      }
+
+      const actionLink = String(data?.properties?.action_link || '').trim()
+      const otp = String(data?.properties?.email_otp || '').trim()
+      if (!actionLink && !otp) {
+        console.error(`[${requestId}] recovery generateLink returned no link/otp for ${email}`)
+        return genericOk()
+      }
+
+      const lines = [
+        'Reset your QuoteGen password',
+        '',
+        actionLink ? `Open this link to choose a new password:` : null,
+        actionLink || null,
+        actionLink && otp ? '' : null,
+        otp ? `Or enter this code on the QuoteGen reset screen: ${otp}` : null,
+        '',
+        'If you did not ask for a reset, you can ignore this email.',
+        '',
+        '— QuoteGen'
+      ].filter((line) => line != null)
+
+      const mailed = await sendUserEmail({
+        to: email,
+        subject: 'Reset your QuoteGen password',
+        text: lines.join('\n')
+      })
+      if (!mailed.ok) {
+        console.error(`[${requestId}] password reset email failed`, mailed.error)
+        const unverified = /not verified|verify your domain/i.test(mailed.error || '')
+        return res.status(502).json({
+          error: unverified
+            ? 'Email sending isn’t set up yet — the sender domain is not verified in Resend.'
+            : 'Could not email the reset link. Try again in a minute.',
+          code: 'MAIL_FAILED',
+          requestId
+        })
+      }
+      if (process.env.NODE_ENV !== 'production' || process.env.LOG_PASSWORD_RESET === '1') {
+        console.log(`[${requestId}] password reset emailed to ${email}`)
+      }
+      return genericOk()
+    } catch (error) {
+      console.error(`[${requestId}] password reset failed`, error?.message)
+      return supabaseError(error, res, requestId)
+    }
   })
 }
