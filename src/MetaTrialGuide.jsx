@@ -23,6 +23,7 @@ import {
 } from '../shared/quoteColumns.js'
 import { formatIndianAmount } from '../shared/templateMap.js'
 import { companySeedFromLead, readMetaAdsLead, usefulLead, readMetaGuideProgress, writeMetaGuideProgress } from './metaTrialLead.js'
+import { recordDemoPdfExport } from './demoQuotes.js'
 import { whatsAppPasteReplacement } from '../shared/enquiryText.js'
 import { trackPixel } from './metaPixel.js'
 import DemoHowToVideo from './DemoHowToVideo.jsx'
@@ -1853,6 +1854,9 @@ export default function MetaTrialGuide({
       }
       await sleep(80)
       await downloadQuotationPdf(quotationFileName(revealQuote, 'pdf'))
+      try {
+        await recordDemoPdfExport(usefulLead(trialLead) || readMetaAdsLead())
+      } catch { /* download already succeeded */ }
       setPhase('convert')
     } catch (err) {
       setLocalError(err?.message || 'Could not download the PDF. Try again.')

@@ -11333,6 +11333,8 @@ function mergeSavedLead(row, next) {
     remindersSent: row.remindersSent,
     lastReply: row.lastReply,
     quotationCount: next.quotationCount ?? row.quotationCount,
+    enquiriesRan: next.enquiriesRan ?? row.enquiriesRan,
+    pdfsExported: next.pdfsExported ?? row.pdfsExported,
     accountStatus: next.accountStatus || row.accountStatus,
     joinedAt: next.joinedAt || row.joinedAt
   }
@@ -11960,12 +11962,17 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
   }
   const videoSeenCount = seenPeople.size
   const remindedQuiet = (lead) => Number(lead.remindersSent) > 0
+    && !(Number(lead.enquiriesRan) > 0)
     && !(Number(lead.quotationCount) > 0)
     && !/^yes$/i.test(String(lead.lastReply || '').trim())
   const remindersSentTotal = leads.filter(remindedQuiet).length
+  const enquiriesRanTotal = leads.reduce((n, lead) => n + (Number(lead.enquiriesRan) || 0), 0)
+  const pdfsExportedTotal = leads.reduce((n, lead) => n + (Number(lead.pdfsExported) || 0), 0)
   const statCards = [
     { id: 'lead', label: 'Total leads', value: counts.lead, color: '#4C5768' },
     { id: 'demo', label: 'Started trial', value: counts.demo, color: '#1A73E8' },
+    { id: 'enquiries', label: 'Enquiries ran', value: enquiriesRanTotal, color: '#1A73E8' },
+    { id: 'exports', label: 'PDFs exported', value: pdfsExportedTotal, color: '#1F8A4C' },
     { id: 'purchased', label: 'Purchased', value: counts.purchased, color: '#1F8A4C' },
     { id: 'video', label: 'Video seen', value: videoSeenCount, color: '#1F8A4C' },
     { id: 'reminders', label: 'Reminders sent', value: remindersSentTotal, color: '#C47B2B' }
@@ -12008,8 +12015,8 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
           <div>
             <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#1A73E8' }}>Meta ads landing</div>
             <div style={{ fontSize: 22, fontWeight: 800, marginTop: 6, color: '#1a202c' }}>Trial form leads</div>
-            <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4, maxWidth: 520 }}>
-              Each person on their own card. Video seen and reminders sent come from the outreach sheet.
+            <div style={{ fontSize: 14.5, color: '#6B7688', marginTop: 4, maxWidth: 640 }}>
+              Started trial = opened the demo after the form. Enquiries ran = each Create quotation. PDFs exported = each download. Video seen and reminders come from the outreach sheet.
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginTop: 14 }}>
               <input
@@ -12220,7 +12227,8 @@ function WsMetaAdsLeadsAdmin({ canDelete = false }) {
                   {[
                     { label: 'Video', value: video.label, color: video.color },
                     { label: 'Reminders sent', value: lead.remindersSent == null ? '—' : lead.remindersSent, color: '#C47B2B' },
-                    { label: 'Quotations made', value: lead.quotationCount == null ? '—' : lead.quotationCount, color: '#1A73E8' }
+                    { label: 'Enquiries ran', value: Number(lead.enquiriesRan) || 0, color: '#1A73E8' },
+                    { label: 'PDFs exported', value: Number(lead.pdfsExported) || 0, color: '#1F8A4C' }
                   ].map((metric) => (
                     <div key={metric.label} style={{ flex: 1, minWidth: 104, borderRadius: 12, border: '1px solid #EEF2F6', background: '#FBFCFE', padding: '10px 12px' }}>
                       <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: '#6B7688' }}>{metric.label}</div>

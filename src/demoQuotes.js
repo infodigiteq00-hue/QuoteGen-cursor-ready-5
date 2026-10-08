@@ -79,10 +79,71 @@ export async function recordDemoQuote(lead) {
     if (response.ok && Number.isFinite(Number(data.used))) {
       const used = Math.max(local, Number(data.used))
       writeDemoQuoteCount(email, used)
-      return { used, cap: DEMO_QUOTE_CAP, allowed: used < DEMO_QUOTE_CAP }
+      return {
+        used,
+        pdfsExported: Number(data.pdfsExported) || 0,
+        cap: DEMO_QUOTE_CAP,
+        allowed: used < DEMO_QUOTE_CAP
+      }
     }
   } catch { /* this phone still counts the quotation */ }
-  return { used: local, cap: DEMO_QUOTE_CAP, allowed: local < DEMO_QUOTE_CAP }
+  return { used: local, pdfsExported: 0, cap: DEMO_QUOTE_CAP, allowed: local < DEMO_QUOTE_CAP }
+}
+
+const PDF_COUNT_KEY = 'qg_demo_pdf_exports'
+
+function readPdfMap() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PDF_COUNT_KEY) || '{}')
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+export function readDemoPdfExportCount(email) {
+  const key = emailKey(email)
+  if (!key) return 0
+  const n = Number(readPdfMap()[key])
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+export function writeDemoPdfExportCount(email, count) {
+  const key = emailKey(email)
+  if (!key) return 0
+  const next = Math.max(0, Number(count) || 0)
+  const map = readPdfMap()
+  map[key] = next
+  try { localStorage.setItem(PDF_COUNT_KEY, JSON.stringify(map)) } catch { /* private mode */ }
+  return next
+}
+
+/** Count a successful demo PDF download for the Meta ads lead admin cards. */
+export async function recordDemoPdfExport(lead) {
+  const email = emailKey(lead?.email)
+  const local = readDemoPdfExportCount(email) + 1
+  writeDemoPdfExportCount(email, local)
+  if (!email) return { pdfsExported: local }
+  try {
+    const response = await fetch('/api/meta-ads-leads/demo-quote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'export',
+        email,
+        phone: lead?.phone || '',
+        localUsed: readDemoQuoteCount(email),
+        localPdfsExported: Math.max(0, local - 1)
+      })
+    })
+    const data = await response.json().catch(() => ({}))
+    if (response.ok && Number.isFinite(Number(data.pdfsExported))) {
+      const pdfsExported = Math.max(local, Number(data.pdfsExported))
+      writeDemoPdfExportCount(email, pdfsExported)
+      return { pdfsExported, used: Number(data.used) || readDemoQuoteCount(email) }
+    }
+  } catch { /* local count still stands */ }
+  return { pdfsExported: local }
 }
 
 const defaultTerms = {

@@ -10,19 +10,24 @@ export const DEMO_HOWTO_VIDEO_THUMB = `https://drive.google.com/thumbnail?id=${D
  * Floating “watch how QuoteGen works” chip for the demo preview.
  * Opens an in-app lightbox; Drive is the source of the 2-minute walkthrough.
  */
+const DISMISS_KEY = 'qg_howto_chip_dismissed'
+
 export default function DemoHowToVideo({ placement = 'top-right', appearAfterMs = 6000 }) {
   const [open, setOpen] = useState(false)
+  const [dismissed, setDismissed] = useState(() => {
+    try { return sessionStorage.getItem(DISMISS_KEY) === '1' } catch { return false }
+  })
   const [visible, setVisible] = useState(appearAfterMs <= 0)
   const [thumbFailed, setThumbFailed] = useState(false)
 
   useEffect(() => {
-    if (appearAfterMs <= 0) {
-      setVisible(true)
+    if (dismissed || appearAfterMs <= 0) {
+      if (!dismissed) setVisible(true)
       return undefined
     }
     const timer = window.setTimeout(() => setVisible(true), appearAfterMs)
     return () => window.clearTimeout(timer)
-  }, [appearAfterMs])
+  }, [appearAfterMs, dismissed])
 
   useEffect(() => {
     if (!open) return undefined
@@ -36,34 +41,52 @@ export default function DemoHowToVideo({ placement = 'top-right', appearAfterMs 
     }
   }, [open])
 
+  const dismissChip = () => {
+    try { sessionStorage.setItem(DISMISS_KEY, '1') } catch { /* private mode */ }
+    setDismissed(true)
+    setVisible(false)
+    setOpen(false)
+  }
+
   const placeClass = placement === 'bottom-right' ? 'is-bottom-right' : 'is-top-right'
-  if (!visible) return null
+  if (!visible || dismissed) return null
 
   return (
     <>
-      <button
-        type="button"
-        className={`qg-howto-chip ${placeClass}`}
-        onClick={() => setOpen(true)}
-        aria-label="Watch a 2-minute video on how to use QuoteGen"
-      >
-        <span className="qg-howto-chip-thumb" aria-hidden="true">
-          {thumbFailed ? (
-            <span className="qg-howto-chip-fallback" />
-          ) : (
-            <img
-              src={DEMO_HOWTO_VIDEO_THUMB}
-              alt=""
-              onError={() => setThumbFailed(true)}
-            />
-          )}
-          <span className="qg-howto-chip-play">▶</span>
-        </span>
-        <span className="qg-howto-chip-copy">
-          <strong>Watch how QuoteGen works</strong>
-          <em>Only takes 2 minutes</em>
-        </span>
-      </button>
+      <div className={`qg-howto-chip-wrap ${placeClass}`}>
+        <button
+          type="button"
+          className="qg-howto-chip-dismiss"
+          onClick={dismissChip}
+          aria-label="Hide how-to video"
+          title="Close"
+        >
+          ×
+        </button>
+        <button
+          type="button"
+          className="qg-howto-chip"
+          onClick={() => setOpen(true)}
+          aria-label="Watch a 2-minute video on how to use QuoteGen"
+        >
+          <span className="qg-howto-chip-thumb" aria-hidden="true">
+            {thumbFailed ? (
+              <span className="qg-howto-chip-fallback" />
+            ) : (
+              <img
+                src={DEMO_HOWTO_VIDEO_THUMB}
+                alt=""
+                onError={() => setThumbFailed(true)}
+              />
+            )}
+            <span className="qg-howto-chip-play">▶</span>
+          </span>
+          <span className="qg-howto-chip-copy">
+            <strong>Watch how QuoteGen works</strong>
+            <em>Only takes 2 minutes</em>
+          </span>
+        </button>
+      </div>
 
       {open && createPortal(
         <div
@@ -75,13 +98,13 @@ export default function DemoHowToVideo({ placement = 'top-right', appearAfterMs 
         >
           <div className="qg-howto-lightbox-card" onClick={(e) => e.stopPropagation()}>
             <div className="qg-howto-lightbox-head">
+              <button type="button" className="qg-howto-lightbox-close" onClick={() => setOpen(false)} aria-label="Close">
+                ×
+              </button>
               <div>
                 <p className="qg-howto-lightbox-kicker">2-minute walkthrough</p>
                 <h2>How to use QuoteGen</h2>
               </div>
-              <button type="button" className="qg-howto-lightbox-close" onClick={() => setOpen(false)} aria-label="Close">
-                ×
-              </button>
             </div>
             <div className="qg-howto-lightbox-frame">
               <iframe
@@ -105,13 +128,35 @@ export default function DemoHowToVideo({ placement = 'top-right', appearAfterMs 
       )}
 
       <style>{`
-        .qg-howto-chip {
+        .qg-howto-chip-wrap {
           position: fixed;
           z-index: 80;
+          max-width: min(280px, calc(100vw - 24px));
+        }
+        .qg-howto-chip-wrap.is-top-right { top: 16px; right: 16px; }
+        .qg-howto-chip-wrap.is-bottom-right { bottom: 20px; right: 16px; }
+        .qg-howto-chip-dismiss {
+          position: absolute;
+          top: -8px;
+          left: -8px;
+          z-index: 2;
+          width: 26px;
+          height: 26px;
+          border: 1px solid #D5DDE9;
+          border-radius: 999px;
+          background: #fff;
+          color: #334155;
+          font-size: 16px;
+          line-height: 1;
+          cursor: pointer;
+          box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+        }
+        .qg-howto-chip-dismiss:hover { border-color: #1A73E8; color: #1A73E8; }
+        .qg-howto-chip {
           display: flex;
           align-items: center;
           gap: 10px;
-          max-width: min(280px, calc(100vw - 24px));
+          width: 100%;
           padding: 8px 12px 8px 8px;
           border: 1px solid #D5DDE9;
           border-radius: 14px;
@@ -122,8 +167,6 @@ export default function DemoHowToVideo({ placement = 'top-right', appearAfterMs 
           font-family: Outfit, Inter, system-ui, sans-serif;
           color: #0f172a;
         }
-        .qg-howto-chip.is-top-right { top: 16px; right: 16px; }
-        .qg-howto-chip.is-bottom-right { bottom: 20px; right: 16px; }
         .qg-howto-chip:hover { border-color: #1A73E8; }
         .qg-howto-chip-thumb {
           position: relative;
@@ -191,7 +234,6 @@ export default function DemoHowToVideo({ placement = 'top-right', appearAfterMs 
         .qg-howto-lightbox-head {
           display: flex;
           align-items: flex-start;
-          justify-content: space-between;
           gap: 12px;
           padding: 18px 18px 12px;
         }
@@ -211,6 +253,7 @@ export default function DemoHowToVideo({ placement = 'top-right', appearAfterMs 
           font-family: Outfit, Inter, system-ui, sans-serif;
         }
         .qg-howto-lightbox-close {
+          flex-shrink: 0;
           width: 36px;
           height: 36px;
           border: 0;
@@ -221,6 +264,7 @@ export default function DemoHowToVideo({ placement = 'top-right', appearAfterMs 
           line-height: 1;
           cursor: pointer;
         }
+        .qg-howto-lightbox-close:hover { background: #E2E8F0; }
         .qg-howto-lightbox-frame {
           aspect-ratio: 16 / 9;
           background: #0B1220;
@@ -240,8 +284,10 @@ export default function DemoHowToVideo({ placement = 'top-right', appearAfterMs 
           text-decoration: none;
         }
         @media (max-width: 640px) {
-          .qg-howto-chip {
+          .qg-howto-chip-wrap {
             max-width: min(220px, calc(100vw - 20px));
+          }
+          .qg-howto-chip {
             padding: 6px 10px 6px 6px;
           }
           .qg-howto-chip-copy strong { font-size: 11.5px; }

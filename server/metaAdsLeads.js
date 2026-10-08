@@ -523,21 +523,39 @@ export function registerPublicMetaAdsLeadRoutes(app) {
     try {
       const { data, error } = await supabase
         .from('demo_quote_counts')
-        .select('used')
+        .select('used, pdfs_exported')
         .eq('email', email)
         .maybeSingle()
       if (error) throw error
       let used = Number(data?.used) || 0
+      let pdfsExported = Number(data?.pdfs_exported) || 0
       const localUsed = Math.min(cap, Math.max(0, Number(req.body?.localUsed) || 0))
+      const localPdfs = Math.max(0, Number(req.body?.localPdfsExported) || 0)
       if (localUsed > used) used = localUsed
+      if (localPdfs > pdfsExported) pdfsExported = localPdfs
       if (action === 'use' && used < cap) used += 1
-      if (used !== (Number(data?.used) || 0)) {
+      if (action === 'export') pdfsExported += 1
+      const changed = used !== (Number(data?.used) || 0) || pdfsExported !== (Number(data?.pdfs_exported) || 0)
+      if (changed) {
         const { error: saveError } = await supabase
           .from('demo_quote_counts')
-          .upsert({ email, used, updated_at: new Date().toISOString() }, { onConflict: 'email' })
+          .upsert({
+            email,
+            used,
+            pdfs_exported: pdfsExported,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'email' })
         if (saveError) throw saveError
       }
-      return res.json({ ok: true, used, cap, allowed: used < cap, persisted: true, requestId })
+      return res.json({
+        ok: true,
+        used,
+        pdfsExported,
+        cap,
+        allowed: used < cap,
+        persisted: true,
+        requestId
+      })
     } catch (error) {
       console.error(`[${requestId}] demo quote count failed`, error?.message)
       supabaseError(error, res, requestId)
@@ -710,6 +728,23 @@ export function registerMetaAdsLeadRoutes(app) {
       } catch (accountError) {
         console.error(`[${requestId}] lead account lookup failed`, accountError?.message)
       }
+      const demoCountsByEmail = new Map()
+      try {
+        const { data: demoRows, error: demoError } = await supabase
+          .from('demo_quote_counts')
+          .select('email, used, pdfs_exported')
+        if (demoError) throw demoError
+        for (const row of demoRows || []) {
+          const email = String(row.email || '').trim().toLowerCase()
+          if (!email) continue
+          demoCountsByEmail.set(email, {
+            enquiriesRan: Number(row.used) || 0,
+            pdfsExported: Number(row.pdfs_exported) || 0
+          })
+        }
+      } catch (demoCountError) {
+        console.error(`[${requestId}] demo quote counts lookup failed`, demoCountError?.message)
+      }
       const outreachRows = await readSheetOutreach()
       const outreachByPhone = new Map()
       const outreachByEmail = new Map()
@@ -719,12 +754,18 @@ export function registerMetaAdsLeadRoutes(app) {
       }
       const leads = (data || []).map((row) => {
         const lead = serializeLead(row)
-        const account = accounts.get(String(lead.email || '').trim().toLowerCase()) || null
+        const emailKey = String(lead.email || '').trim().toLowerCase()
+        const account = accounts.get(emailKey) || null
+        const demoCounts = demoCountsByEmail.get(emailKey) || null
         const phone = normalizeIndiaMobileDigits(lead.phone)
-        const outreach = outreachByPhone.get(phone) || outreachByEmail.get(String(lead.email || '').trim().toLowerCase()) || null
+        const outreach = outreachByPhone.get(phone) || outreachByEmail.get(emailKey) || null
         return {
           ...lead,
+          // Saved account quotations (signed-in workspace). Demo previews alone do not create these.
           quotationCount: account ? account.quotationCount : null,
+          // Demo trial: each Create quotation increments enquiriesRan; each PDF download increments pdfsExported.
+          enquiriesRan: demoCounts ? demoCounts.enquiriesRan : 0,
+          pdfsExported: demoCounts ? demoCounts.pdfsExported : 0,
           accountStatus: account?.accountStatus || '',
           joinedAt: account?.joinedAt || null,
           videoSeen: outreach?.videoSeen || '',
