@@ -171,23 +171,31 @@ export function recordMetaLeadProgress(stage, leadOverride) {
 
 export function writeMetaAdsLead(lead) {
   if (!lead || typeof lead !== 'object') return
+  // Merge with the stored lead so later partial writes (OTP / password setup)
+  // cannot wipe monthlyQuotes / industry used for checkout packing.
+  let prev = null
+  try { prev = parseLead(sessionStorage.getItem(META_ADS_LEAD_KEY)) } catch { /* private mode */ }
+  if (!prev) {
+    try { prev = parseLead(localStorage.getItem(META_TRIAL_SEED_KEY)) } catch { /* private mode */ }
+  }
+  const src = { ...(prev && typeof prev === 'object' ? prev : {}), ...lead }
   const payload = {
-    name: String(lead.name || '').trim(),
-    phone: String(lead.phone || '').replace(/\D/g, ''),
-    whatsappSame: lead.whatsappSame !== false,
-    whatsapp: String(lead.whatsapp || lead.phone || '').replace(/\D/g, ''),
-    email: String(lead.email || '').trim().toLowerCase(),
-    company: String(lead.company || '').trim(),
-    monthlyQuotes: String(lead.monthlyQuotes || '').trim(),
-    industry: String(lead.industry || '').trim(),
-    source: String(lead.source || 'meta_ads_landing').trim() || 'meta_ads_landing',
-    path: String(lead.path || '').trim(),
-    query: String(lead.query || '').trim(),
+    name: String(src.name || '').trim(),
+    phone: String(src.phone || '').replace(/\D/g, ''),
+    whatsappSame: src.whatsappSame !== false,
+    whatsapp: String(src.whatsapp || src.phone || '').replace(/\D/g, ''),
+    email: String(src.email || '').trim().toLowerCase(),
+    company: String(src.company || '').trim(),
+    monthlyQuotes: String(src.monthlyQuotes || '').trim(),
+    industry: String(src.industry || '').trim(),
+    source: String(src.source || 'meta_ads_landing').trim() || 'meta_ads_landing',
+    path: String(src.path || '').trim(),
+    query: String(src.query || '').trim(),
     submitted: true,
-    submittedAt: lead.submittedAt || new Date().toISOString(),
-    verified: Boolean(lead.verified),
-    demoCode: Number(lead.demoCode) || 0,
-    id: lead.id || null
+    submittedAt: src.submittedAt || new Date().toISOString(),
+    verified: Boolean(src.verified),
+    demoCode: Number(src.demoCode) || 0,
+    id: src.id || null
   }
   try { sessionStorage.setItem(META_ADS_LEAD_KEY, JSON.stringify(payload)) } catch { /* ignore */ }
   try { localStorage.setItem(META_TRIAL_SEED_KEY, JSON.stringify(payload)) } catch { /* ignore */ }

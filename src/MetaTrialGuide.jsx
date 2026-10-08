@@ -2247,7 +2247,13 @@ export default function MetaTrialGuide({
   const [billPeriod, setBillPeriod] = useState('year')
   const offerLeftMs = offerStartedAt ? offerStartedAt + OFFER_MS - offerNow : OFFER_MS
   const offerLive = offerLeftMs > 0
-  const leadForOffer = usefulLead(trialLead) || readMetaAdsLead() || {}
+  const storedLead = readMetaAdsLead() || {}
+  const liveLead = usefulLead(trialLead) || {}
+  const leadForOffer = {
+    ...storedLead,
+    ...liveLead,
+    monthlyQuotes: liveLead.monthlyQuotes || storedLead.monthlyQuotes || ''
+  }
   const checkoutOffer = resolveDemoCheckoutOffer(leadForOffer.monthlyQuotes, billPeriod)
   const payPrice = checkoutOffer.amount
 
@@ -2354,7 +2360,13 @@ export default function MetaTrialGuide({
 
   const openPay = async () => {
     if (payBusy) return
-    const lead = usefulLead(trialLead) || readMetaAdsLead() || {}
+    const stored = readMetaAdsLead() || {}
+    const live = usefulLead(trialLead) || {}
+    const lead = {
+      ...stored,
+      ...live,
+      monthlyQuotes: live.monthlyQuotes || stored.monthlyQuotes || ''
+    }
     const offer = resolveDemoCheckoutOffer(lead.monthlyQuotes, billPeriod)
     if (offer.kind === 'enterprise') {
       window.location.assign(`tel:${SUPPORT_PHONE_E164}`)

@@ -122,9 +122,8 @@ function PublicApp() {
         window.history.pushState({}, '', '/signin')
         setMode('login')
       }}
-      onSignUp={(value) => {
-        setEmail(value || '')
-        setMode('signup')
+      onSignUp={() => {
+        window.location.assign('/metaadslanding')
       }}
     />
   )

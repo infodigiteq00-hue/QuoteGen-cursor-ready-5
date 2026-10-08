@@ -507,7 +507,7 @@ export default function MarketingLanding({ onSignIn, onSignUp }) {
           <div className="qg-header-actions" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '14px', whiteSpace: 'nowrap' }}>
             <button type="button" onClick={openPwaInstall} className="qg-pwa-entry" style={{ background: 'none', border: 0, fontSize: '14.5px', fontWeight: 600, color: '#3B4657', cursor: 'pointer', padding: 0 }}>Get the app</button>
             <button type="button" onClick={onSignIn} style={{ background: 'none', border: 0, fontSize: '14.5px', fontWeight: 600, color: '#3B4657', cursor: 'pointer', padding: 0 }}>Sign in</button>
-            <a href="#hero" className="qg-btn-primary" style={{ fontSize: '14.5px', fontWeight: 700, padding: '10px 18px', borderRadius: '9px' }}>Start free trial</a>
+            <button type="button" onClick={handleSignUp} className="qg-btn-primary" style={{ fontSize: '14.5px', fontWeight: 700, padding: '10px 18px', borderRadius: '9px' }}>Start free trial</button>
           </div>
         </div>
       </header>

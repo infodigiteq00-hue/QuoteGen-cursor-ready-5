@@ -745,6 +745,13 @@ export default function AuthScreen({
   const [pendingEmail, setPendingEmail] = useState('')
   const [loginNotice, setLoginNotice] = useState('')
 
+  // New accounts start on the Meta ads trial form, not the legacy signup card.
+  useEffect(() => {
+    if (recovery) return
+    if ((initialMode || mode) !== 'signup') return
+    window.location.assign('/metaadslanding')
+  }, [recovery, initialMode, mode])
+
   const needsConfirmation = (email) => {
     setPendingEmail(email)
     setLoginNotice('')
@@ -813,7 +820,7 @@ export default function AuthScreen({
 
           {mode === 'login' && (
             <LoginForm
-              onSwitch={() => { setLoginNotice(''); setMode('signup') }}
+              onSwitch={() => { window.location.assign('/metaadslanding') }}
               onNeedsConfirmation={needsConfirmation}
               onForgotPassword={() => setMode('forgot')}
               onLoggedIn={onLoggedIn}

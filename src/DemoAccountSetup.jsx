@@ -43,6 +43,8 @@ export default function DemoAccountSetup({ sessionUser, initialEmail = '', initi
         phone: lead.phone,
         email: lead.email || em,
         company: lead.company,
+        monthlyQuotes: lead.monthlyQuotes,
+        industry: lead.industry,
         verified: false,
         submitted: true
       })

@@ -2213,11 +2213,10 @@ function App() {
           setMetaWelcome(false)
           setGuestAuthMode('login')
         }}
-        onSignUp={(email) => {
+        onSignUp={() => {
           clearMetaWelcome()
           setMetaWelcome(false)
-          setGuestEmail(email || '')
-          setGuestAuthMode('signup')
+          window.location.assign('/metaadslanding')
         }}
       />
     )

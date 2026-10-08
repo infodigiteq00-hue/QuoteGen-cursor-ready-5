@@ -119,6 +119,7 @@ function DemoApp() {
     if (savedAccount?.email) {
       clearTimeout(bootTimer)
       setLead({
+        ...(usefulLead(readMetaAdsLead()) || {}),
         email: savedAccount.email,
         name: savedAccount.name || '',
         phone: savedAccount.phone || '',
