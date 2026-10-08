@@ -2354,6 +2354,7 @@ function App() {
         tableColorId: 'blue',
         watermarkEnabled: true,
         headerMeta: normalizeHeaderMeta(companyProfile?.headerMeta),
+        sourceEnquiry: enquiryText,
         fields: {
           validUntil: defaultValidUntil(15),
           referenceNo: String(data.referenceNo || '').trim(),
@@ -6132,6 +6133,16 @@ function contentWidthForUnitColumn(col, items, fontPx = LAYOUT_FONT_PX) {
   return Math.min(UNIT_COL_CAP, Math.max(UNIT_COL_FLOOR, widthForUnitText(longest, fontPx)))
 }
 
+function columnsLayoutSignature(cols) {
+  return JSON.stringify((cols || []).map((c) => ({
+    id: c.id,
+    label: c.label,
+    type: c.type || 'text',
+    formula: c.formula || null,
+    mode: c.mode || null
+  })))
+}
+
 function widthForNumericText(text, fontPx = LAYOUT_FONT_PX) {
   const chars = Math.max(String(text || '').length, 4)
   return Math.ceil(chars * fontPx * 0.74 + 40)
@@ -6165,6 +6176,9 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const [dockHsnDigits, setDockHsnDigits] = useState('4')
   const [formulaColId, setFormulaColId] = useState(null)
   const [dockWantFormula, setDockWantFormula] = useState(false)
+  const [tableTipOpen, setTableTipOpen] = useState(false)
+  const [regenBusy, setRegenBusy] = useState(false)
+  const [columnsBaseline, setColumnsBaseline] = useState(() => columnsLayoutSignature(columns))
   const addColBtnRef = useRef(null)
   const autoHsnSignatureRef = useRef('')
   const revisionsPanelRef = useRef(null)
@@ -6195,6 +6209,38 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   const [logoColorNote, setLogoColorNote] = useState('')
   const logoExtractedUrl = useRef('')
   const profile = companyProfile || quote.companyProfile || null
+  const sourceEnquiry = String(quote.sourceEnquiry || '').trim()
+  const columnsDirty = Boolean(sourceEnquiry) && columnsLayoutSignature(columns) !== columnsBaseline
+  const canRegenerate = columnsDirty && !regenBusy
+  useEffect(() => {
+    setColumnsBaseline(columnsLayoutSignature(quote.columns || columns))
+  }, [quoteId, sourceEnquiry])
+  useEffect(() => {
+    if (!sourceEnquiry) return
+    try {
+      if (sessionStorage.getItem('qg_table_tip_seen') === '1') return
+    } catch { /* private mode */ }
+    setTableTipOpen(true)
+  }, [sourceEnquiry])
+  const dismissTableTip = (openAddColumn = false) => {
+    try { sessionStorage.setItem('qg_table_tip_seen', '1') } catch { /* private mode */ }
+    setTableTipOpen(false)
+    if (openAddColumn) {
+      setFormulaColId(null)
+      setDockAddColumnOpen(true)
+    }
+  }
+  const regenerateWithColumns = async () => {
+    if (!canRegenerate || !onRetry) return
+    setRegenBusy(true)
+    try {
+      const built = await onRetry({ enquiry: sourceEnquiry, columns, ceremony: true })
+      if (built?.columns) setColumnsBaseline(columnsLayoutSignature(built.columns))
+      else setColumnsBaseline(columnsLayoutSignature(columns))
+    } finally {
+      setRegenBusy(false)
+    }
+  }
   const [logoSize, setLogoSize] = useState(null)
   const logoSizeTimerRef = useRef(0)
   const [signatureSize, setSignatureSize] = useState(null)
@@ -7385,7 +7431,13 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={onUndo} disabled={!canUndo} className="rounded-lg border border-sand px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Undo</button>
           <button type="button" onClick={onRedo} disabled={!canRedo} className="rounded-lg border border-sand px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Redo</button>
-          <button type="button" onClick={onRetry} className="rounded-lg border border-sand px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50">Retry AI</button>
+          <button
+            type="button"
+            onClick={() => onRetry?.(sourceEnquiry ? { enquiry: sourceEnquiry, columns } : undefined)}
+            className="rounded-lg border border-sand px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            Retry AI
+          </button>
           <button type="button" disabled={autofilling} onClick={runAutofill} className="rounded-lg border border-sand px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">{autofilling ? 'Matching…' : 'Autofill rates'}</button>
           <button type="button" onClick={fetchHsnGstBulk} disabled={hsnBulkRunning} className="rounded-lg border border-sand px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60">
             {hsnBulkRunning ? `HSN ${hsnBulkProgress?.done ?? 0}/${hsnBulkProgress?.total ?? 0}` : 'Fetch all HSN'}
@@ -7499,7 +7551,24 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
         {(page.showHeader || page.rows.length > 0) ? (
         <>
         {page.showHeader ? (
-          <div className="no-print mb-2 flex items-center justify-end">
+          <div className="no-print mb-2 flex items-center justify-end gap-2">
+            {sourceEnquiry ? (
+              <button
+                type="button"
+                onClick={() => { void regenerateWithColumns() }}
+                disabled={!canRegenerate}
+                title={canRegenerate
+                  ? 'Re-run the enquiry into your current columns'
+                  : 'Change the columns first, then regenerate'}
+                className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold shadow-sm transition ${
+                  canRegenerate
+                    ? 'border-moss bg-moss text-white hover:bg-[#1666d0]'
+                    : 'border-sand bg-slate-50 text-slate-400 cursor-not-allowed'
+                }`}
+              >
+                {regenBusy ? 'Regenerating…' : 'Regenerate'}
+              </button>
+            ) : null}
             <div className="relative">
               <button
                 ref={addColBtnRef}
@@ -8244,6 +8313,48 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
             <button type="button" onClick={() => setInvoicePromptOpen(false)} className="rounded-xl px-4 py-2 text-sm text-slate-500">Cancel</button>
           </div>
           {invoiceNote && <p className="mt-3 text-sm text-rose-600">{invoiceNote}</p>}
+        </div>
+      </div>
+    )}
+
+    {tableTipOpen && (
+      <div
+        className="no-print fixed inset-0 z-[60] flex items-center justify-center p-4"
+        style={{ background: 'rgba(15,23,42,.42)' }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="qg-table-tip-title"
+        onClick={() => dismissTableTip(false)}
+        onKeyDown={(e) => { if (e.key === 'Escape') dismissTableTip(false) }}
+      >
+        <div
+          className="w-full max-w-md rounded-[20px] bg-white p-6 shadow-[0_24px_60px_rgba(15,23,42,.28)]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <p className="text-[12px] font-bold uppercase tracking-wide text-[#1A73E8]">Quick tip</p>
+          <h2 id="qg-table-tip-title" className="mt-1 text-xl font-bold tracking-tight text-slate-900" style={{ fontFamily: 'Outfit, Inter, system-ui, sans-serif' }}>
+            Is the table up to your liking?
+          </h2>
+          <p className="mt-2 text-sm leading-relaxed text-slate-600">
+            You can add columns with <strong>Add column</strong> on the top right of the table.
+            After you change the layout, tap <strong>Regenerate</strong> to fill those columns from the same enquiry.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => dismissTableTip(false)}
+              className="min-h-[42px] flex-1 rounded-xl border border-[#D5DDE9] bg-white px-4 text-sm font-semibold text-slate-700"
+            >
+              Got it
+            </button>
+            <button
+              type="button"
+              onClick={() => dismissTableTip(true)}
+              className="min-h-[42px] flex-1 rounded-xl bg-[#1A73E8] px-4 text-sm font-semibold text-white"
+            >
+              Add a column
+            </button>
+          </div>
         </div>
       </div>
     )}

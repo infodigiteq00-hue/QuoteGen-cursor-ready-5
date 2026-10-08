@@ -25,6 +25,7 @@ import { formatIndianAmount } from '../shared/templateMap.js'
 import { companySeedFromLead, readMetaAdsLead, usefulLead, readMetaGuideProgress, writeMetaGuideProgress } from './metaTrialLead.js'
 import { whatsAppPasteReplacement } from '../shared/enquiryText.js'
 import { trackPixel } from './metaPixel.js'
+import DemoHowToVideo from './DemoHowToVideo.jsx'
 import './metaTrialGuide.css'
 
 const ENQUIRY_FILE_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,.heic,.heif,application/pdf,image/*,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain'
@@ -2148,6 +2149,7 @@ export default function MetaTrialGuide({
   if (phase === 'reveal' && revealQuote) {
     return (
       <main className={`meta-guide meta-guide-reveal-page${revealReady ? ' is-ready' : ''}${previewReading ? ' is-reading' : ''}`}>
+        <DemoHowToVideo placement="top-right" />
         <div className="meta-guide-reveal-shell">
           <p className="meta-guide-step">Ta-da</p>
           <h1 className="meta-guide-title">
@@ -2635,6 +2637,7 @@ export default function MetaTrialGuide({
   if (phase === 'final' && revealQuote) {
     return (
       <main className="meta-guide meta-guide-reveal-page meta-guide-final-page is-ready">
+        <DemoHowToVideo placement="top-right" />
         <div className="meta-guide-reveal-shell meta-guide-final-shell">
           <p className="meta-guide-step">Final preview</p>
           <h1 className="meta-guide-title">

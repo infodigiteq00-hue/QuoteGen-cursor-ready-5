@@ -477,7 +477,8 @@ export function buildQuotationPayload(quote, { layoutRef, uploadTemplateId } = {
     tableColorId: quote.tableColorId || 'blue',
     tableAccent: quote.tableAccent || null,
     customAccent: quote.customAccent || null,
-    logoPalette: quote.logoPalette || null
+    logoPalette: quote.logoPalette || null,
+    sourceEnquiry: typeof quote.sourceEnquiry === 'string' ? quote.sourceEnquiry : undefined
   }
   return {
     number: payload.number,
@@ -559,6 +560,7 @@ export function quotationToEditorState(quotation) {
     tableAccent: data.tableAccent || null,
     customAccent: data.customAccent || null,
     logoPalette: data.logoPalette || null,
+    sourceEnquiry: typeof data.sourceEnquiry === 'string' ? data.sourceEnquiry : '',
     // Authoritative revision lives in the column, not the JSON snapshot.
     revision: quotation?.revision
   }
