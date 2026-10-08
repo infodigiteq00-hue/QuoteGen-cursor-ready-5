@@ -2149,7 +2149,7 @@ export default function MetaTrialGuide({
   if (phase === 'reveal' && revealQuote) {
     return (
       <main className={`meta-guide meta-guide-reveal-page${revealReady ? ' is-ready' : ''}${previewReading ? ' is-reading' : ''}`}>
-        <DemoHowToVideo placement="top-right" />
+        <DemoHowToVideo placement="top-right" appearAfterMs={6000} />
         <div className="meta-guide-reveal-shell">
           <p className="meta-guide-step">Ta-da</p>
           <h1 className="meta-guide-title">
@@ -2637,7 +2637,7 @@ export default function MetaTrialGuide({
   if (phase === 'final' && revealQuote) {
     return (
       <main className="meta-guide meta-guide-reveal-page meta-guide-final-page is-ready">
-        <DemoHowToVideo placement="top-right" />
+        <DemoHowToVideo placement="top-right" appearAfterMs={6000} />
         <div className="meta-guide-reveal-shell meta-guide-final-shell">
           <p className="meta-guide-step">Final preview</p>
           <h1 className="meta-guide-title">

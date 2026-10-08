@@ -10,9 +10,19 @@ export const DEMO_HOWTO_VIDEO_THUMB = `https://drive.google.com/thumbnail?id=${D
  * Floating “watch how QuoteGen works” chip for the demo preview.
  * Opens an in-app lightbox; Drive is the source of the 2-minute walkthrough.
  */
-export default function DemoHowToVideo({ placement = 'top-right' }) {
+export default function DemoHowToVideo({ placement = 'top-right', appearAfterMs = 6000 }) {
   const [open, setOpen] = useState(false)
+  const [visible, setVisible] = useState(appearAfterMs <= 0)
   const [thumbFailed, setThumbFailed] = useState(false)
+
+  useEffect(() => {
+    if (appearAfterMs <= 0) {
+      setVisible(true)
+      return undefined
+    }
+    const timer = window.setTimeout(() => setVisible(true), appearAfterMs)
+    return () => window.clearTimeout(timer)
+  }, [appearAfterMs])
 
   useEffect(() => {
     if (!open) return undefined
@@ -27,6 +37,7 @@ export default function DemoHowToVideo({ placement = 'top-right' }) {
   }, [open])
 
   const placeClass = placement === 'bottom-right' ? 'is-bottom-right' : 'is-top-right'
+  if (!visible) return null
 
   return (
     <>

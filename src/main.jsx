@@ -6215,12 +6215,14 @@ function QuoteEditor({ quote, quoteId, columns, update, updateQuote, total, tota
   useEffect(() => {
     setColumnsBaseline(columnsLayoutSignature(quote.columns || columns))
   }, [quoteId, sourceEnquiry])
+  // Wait so the user can read the quotation before any tip appears.
   useEffect(() => {
-    if (!sourceEnquiry) return
+    if (!sourceEnquiry) return undefined
     try {
-      if (sessionStorage.getItem('qg_table_tip_seen') === '1') return
+      if (sessionStorage.getItem('qg_table_tip_seen') === '1') return undefined
     } catch { /* private mode */ }
-    setTableTipOpen(true)
+    const timer = window.setTimeout(() => setTableTipOpen(true), 7000)
+    return () => window.clearTimeout(timer)
   }, [sourceEnquiry])
   const dismissTableTip = (openAddColumn = false) => {
     try { sessionStorage.setItem('qg_table_tip_seen', '1') } catch { /* private mode */ }
