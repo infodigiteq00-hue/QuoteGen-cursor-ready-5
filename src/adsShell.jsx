@@ -4,6 +4,7 @@ import './styles.css'
 import AuthScreen from './AuthScreen.jsx'
 import MetaAdsLanding from './MetaAdsLanding.jsx'
 import BrandMark from './BrandMark.jsx'
+import PwaInstallHost from './PwaInstall.jsx'
 import { getCurrentSession, installAuthFetch, onAuthChange } from './apiAuth.js'
 import { initMetaPixel, trackPixel } from './metaPixel.js'
 import {
@@ -156,25 +157,28 @@ function AdsApp() {
 
   if (metaWelcome || readMetaWelcome() || saving || metaLeadError) {
     return (
-      <MetaAdsLanding
-        celebrate
-        initialLead={readMetaAdsLead() || {}}
-        saving={saving && !metaLeadError}
-        saveError={metaLeadError}
-        onRetrySave={() => {
-          setMetaLeadError('')
-          setSaving(true)
-          saveVerifiedMetaLead(readMetaAdsLead())
-            .then(() => {
-              writeMetaWelcome('congrats')
-              setMetaWelcome(true)
-            })
-            .catch((err) => setMetaLeadError(err.message || 'Could not save your details. Please try again.'))
-            .finally(() => setSaving(false))
-        }}
-        onSignIn={openSignIn}
-        onContinueTrial={openTrialDemo}
-      />
+      <>
+        <MetaAdsLanding
+          celebrate
+          initialLead={readMetaAdsLead() || {}}
+          saving={saving && !metaLeadError}
+          saveError={metaLeadError}
+          onRetrySave={() => {
+            setMetaLeadError('')
+            setSaving(true)
+            saveVerifiedMetaLead(readMetaAdsLead())
+              .then(() => {
+                writeMetaWelcome('congrats')
+                setMetaWelcome(true)
+              })
+              .catch((err) => setMetaLeadError(err.message || 'Could not save your details. Please try again.'))
+              .finally(() => setSaving(false))
+          }}
+          onSignIn={openSignIn}
+          onContinueTrial={openTrialDemo}
+        />
+        <PwaInstallHost />
+      </>
     )
   }
 

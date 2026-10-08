@@ -5,6 +5,7 @@ import { trackPixel } from './metaPixel.js'
 import { whatsappChatsLink } from './whatsappEnquiry.js'
 import { indiaMobileInputValue, isValidIndiaMobile, normalizeIndiaMobileDigits } from '../shared/phone.js'
 import { trialWhatsappHref } from '../shared/trialWhatsapp.js'
+import { openPwaInstall } from './pwaInstall.js'
 import './metaAdsLanding.css'
 
 const CTA_STYLE = { fontFamily: 'Archivo, Inter, system-ui, sans-serif', fontWeight: 400 }
@@ -225,7 +226,8 @@ function NextChoices({ lead, onNextStep }) {
   )
 }
 
-function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn }) {
+function VerifiedArrival({ saving, saveError, onRetrySave, onContinueWebsite }) {
+  const wa = trialWhatsappHref()
   let body = null
   if (saving) {
     body = (
@@ -263,24 +265,30 @@ function VerifiedArrival({ saving, saveError, onRetrySave, onSignIn }) {
         <p className="meta-next-kicker">You’re all set</p>
         <h2>Your account has been successfully set up.</h2>
         <p className="meta-form-lead">Let’s start with your first trial now.</p>
+        <a
+          className="meta-btn meta-btn-primary meta-btn-lg meta-success-cta meta-success-wa"
+          style={CTA_STYLE}
+          href={wa}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <IconWhatsApp size={20} />
+          Start Free Trial
+        </a>
         <button
           type="button"
-          className="meta-btn meta-btn-primary meta-btn-lg meta-success-cta"
-          style={CTA_STYLE}
-          onClick={() => { window.location.assign(trialWhatsappHref()) }}
+          className="meta-success-secondary"
+          onClick={() => onContinueWebsite?.()}
         >
-          Start Free Trial
+          Continue on website
         </button>
-        <a
-          className="meta-success-signin"
-          href="/signin"
-          onClick={(e) => {
-            e.preventDefault()
-            onSignIn?.()
-          }}
+        <button
+          type="button"
+          className="meta-success-tertiary"
+          onClick={() => { void openPwaInstall() }}
         >
-          Already have a password? Sign in
-        </a>
+          Get our app
+        </button>
       </div>
     )
   }
@@ -573,7 +581,7 @@ export default function MetaAdsLanding({ onSignIn, onContinueTrial, onStartVerif
         saving={saving}
         saveError={saveError}
         onRetrySave={onRetrySave}
-        onSignIn={onSignIn}
+        onContinueWebsite={() => onContinueTrial?.('demo', readMetaAdsLead() || initialLead || {})}
       />
     )
   }
