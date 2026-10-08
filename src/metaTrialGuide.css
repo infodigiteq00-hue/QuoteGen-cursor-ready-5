@@ -2330,6 +2330,51 @@ button.meta-guide-chip.is-on {
   flex: 1 1 auto;
 }
 
+.meta-guide-slide-pdf-bar {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: stretch;
+  padding: 14px 12px 12px;
+  border-radius: 0 0 14px 14px;
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.72) 0%, rgba(15, 23, 42, 0.28) 62%, rgba(15, 23, 42, 0) 100%);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.meta-guide-slide-pdf-bar.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.meta-guide-slide-pdf-bar.is-visible .meta-guide-primary {
+  pointer-events: auto;
+}
+
+.meta-guide-slide-pdf-bar .meta-guide-primary {
+  width: 100%;
+  margin-top: 0;
+  min-height: 46px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+}
+
+.meta-guide-unlock--back-only {
+  display: flex;
+  justify-content: flex-start;
+  grid-template-columns: none;
+  width: min(794px, 100%);
+}
+
+.meta-guide-unlock--back-only .meta-guide-ghost {
+  min-width: 108px;
+}
+
 .meta-guide-format-track {
   display: flex;
   gap: 0;
@@ -2367,6 +2412,8 @@ button.meta-guide-chip.is-on {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
   outline: none;
   box-sizing: border-box;
+  padding-bottom: 72px;
+  scroll-padding-bottom: 72px;
 }
 
 .meta-guide-format-slide.is-active {

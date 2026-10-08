@@ -1955,15 +1955,35 @@ function TrialFormatCarousel({
   onRegenerate = null,
   canRegenerate = false,
   regenBusy = false,
-  studioMode = false
+  studioMode = false,
+  onDownloadPdf = null,
+  downloadBusy = false
 }) {
   const scrollerRef = useRef(null)
   const hintingRef = useRef(false)
+  const slideScrollTopRef = useRef(0)
   const [hinting, setHinting] = useState(false)
+  const [pdfBarVisible, setPdfBarVisible] = useState(false)
   const active = DEMO_PAPER_IDS.includes(themeId) ? themeId : 'formal'
   const activeIndex = Math.max(0, DEMO_PAPER_IDS.indexOf(active))
   const theme = PAPER_THEMES[active] || PAPER_THEMES.formal
   const lastIndex = DEMO_PAPER_IDS.length - 1
+
+  const onSlideScroll = (e) => {
+    const top = e.currentTarget.scrollTop || 0
+    const prev = slideScrollTopRef.current
+    const delta = top - prev
+    slideScrollTopRef.current = top
+    onReadingChange?.(top > 18)
+    if (Math.abs(delta) < 4) return
+    if (delta > 0 && top > 24) setPdfBarVisible(true)
+    else if (delta < 0) setPdfBarVisible(false)
+  }
+
+  useEffect(() => {
+    slideScrollTopRef.current = 0
+    setPdfBarVisible(false)
+  }, [themeId])
 
   const goTo = (index, behavior = 'smooth') => {
     const el = scrollerRef.current
@@ -2070,7 +2090,7 @@ function TrialFormatCarousel({
                 aria-label={PAPER_THEMES[id]?.label || id}
                 onScroll={(e) => {
                   if (id !== active) return
-                  onReadingChange?.((e.currentTarget.scrollTop || 0) > 18)
+                  onSlideScroll(e)
                 }}
               >
                 {live ? (
@@ -2130,6 +2150,19 @@ function TrialFormatCarousel({
             <span className="meta-guide-format-hint-arrow is-left"><IconChevron dir="left" /></span>
             <span className="meta-guide-format-hint-copy">Swipe</span>
             <span className="meta-guide-format-hint-arrow is-right"><IconChevron dir="right" /></span>
+          </div>
+        ) : null}
+        {onDownloadPdf ? (
+          <div className={`meta-guide-slide-pdf-bar${pdfBarVisible ? ' is-visible' : ''}`} aria-hidden={!pdfBarVisible}>
+            <button
+              type="button"
+              className="meta-guide-primary meta-guide-pdf-cta"
+              disabled={downloadBusy || !pdfBarVisible}
+              tabIndex={pdfBarVisible ? 0 : -1}
+              onClick={onDownloadPdf}
+            >
+              Download PDF
+            </button>
           </div>
         ) : null}
       </div>
@@ -3293,6 +3326,8 @@ export default function MetaTrialGuide({
               canRegenerate={canRegenerateReveal && !atDemoCap}
               regenBusy={regenBusy}
               studioMode={studioOpen}
+              onDownloadPdf={goToCheckout}
+              downloadBusy={logoBusy}
             />
           </div>
           <input
@@ -3331,17 +3366,9 @@ export default function MetaTrialGuide({
 
           {showError ? <p className="meta-guide-error">{showError}</p> : null}
 
-          <div className="meta-guide-unlock meta-guide-actions">
+          <div className="meta-guide-unlock meta-guide-actions meta-guide-unlock--back-only">
             <button type="button" className="meta-guide-ghost" onClick={backFromReveal}>
               ← Back
-            </button>
-            <button
-              type="button"
-              className="meta-guide-primary meta-guide-pdf-cta"
-              disabled={logoBusy}
-              onClick={goToCheckout}
-            >
-              Download PDF
             </button>
           </div>
         </div>
