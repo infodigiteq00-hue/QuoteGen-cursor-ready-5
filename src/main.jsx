@@ -1305,7 +1305,8 @@ function App() {
   const quoteLinkOpenedRef = useRef(false)
   const quoteLinkReadyRef = useRef(null)
   const quoteLinkPhaseRef = useRef('')
-  const [quoteLinkPhase, setQuoteLinkPhase] = useState(() => (quoteIdInUrl() ? 'welcome' : ''))
+  const quoteLinkFinishedRef = useRef(false)
+  const [quoteLinkPhase, setQuoteLinkPhase] = useState('')
   const [quoteLinkEnquiry, setQuoteLinkEnquiry] = useState('')
   const [quoteLinkColumns, setQuoteLinkColumns] = useState([])
   quoteLinkPhaseRef.current = quoteLinkPhase
@@ -1546,24 +1547,49 @@ function App() {
     await openLinkedQuotation(linkedProfile)
   }
 
+  // Quote links only play the welcome film after we know who is signed in.
+  // WhatsApp's in-app browser often has no session; starting the film first
+  // left the screen blank while waiting forever for a quotation that never loads.
+  useEffect(() => {
+    if (!authChecked || quoteLinkFinishedRef.current) return
+    const id = pendingQuoteIdFromLocation()
+    if (!id) return
+    try { sessionStorage.setItem('qg_pending_quote', id) } catch { /* private mode */ }
+    if (!authUser) {
+      quoteLinkOpenedRef.current = false
+      quoteLinkReadyRef.current = null
+      if (quoteLinkPhaseRef.current) setQuoteLinkPhase('')
+      setGuestAuthMode((mode) => mode || 'login')
+      return
+    }
+    if (quote || quoteLinkPhaseRef.current) return
+    setQuoteLinkPhase('welcome')
+  }, [authChecked, authUser, quote])
+
   useEffect(() => {
     if (quoteLinkPhase !== 'ceremony') return undefined
     const alreadyFailed = quoteLinkReadyRef.current && !quoteLinkReadyRef.current.editorQuote
     if (alreadyFailed) {
       setHistoryError(quoteLinkReadyRef.current.error || 'Could not open the quotation from this link.')
       quoteLinkOpenedRef.current = false
+      quoteLinkFinishedRef.current = true
+      clearPendingQuoteId()
       setQuoteLinkPhase('')
       return undefined
     }
     let cancelled = false
     const started = Date.now()
+    const FETCH_CAP_MS = 18000
     ;(async () => {
       const { CEREMONY_MIN_MS } = await import('./QuoteGenerateCeremony.jsx')
       const deadline = started + CEREMONY_MIN_MS
-      while (!cancelled && !quoteLinkReadyRef.current) {
+      while (!cancelled && !quoteLinkReadyRef.current && Date.now() - started < FETCH_CAP_MS) {
         await new Promise((resolve) => setTimeout(resolve, 80))
       }
       if (cancelled) return
+      if (!quoteLinkReadyRef.current) {
+        quoteLinkReadyRef.current = { error: 'Could not open the quotation from this link. Sign in with the account that owns this WhatsApp number, then open the link again.' }
+      }
       const remain = deadline - Date.now()
       if (remain > 0) await new Promise((resolve) => setTimeout(resolve, remain))
       if (cancelled) return
@@ -1571,10 +1597,13 @@ function App() {
       if (!ready?.editorQuote) {
         setHistoryError(ready?.error || 'Could not open the quotation from this link.')
         quoteLinkOpenedRef.current = false
+        quoteLinkFinishedRef.current = true
+        clearPendingQuoteId()
         setQuoteLinkPhase('')
         return
       }
       await openQuoteInEditor(ready.editorQuote, { id: ready.id, template: ready.template })
+      quoteLinkFinishedRef.current = true
       clearPendingQuoteId()
       setQuoteLinkPhase('')
     })()
@@ -2091,6 +2120,12 @@ function App() {
         <QuoteGenerateCeremony enquiry={quoteLinkEnquiry} columns={quoteLinkColumns} />
       </React.Suspense>
     )
+  }
+
+  // Keep a black hold while the signed-in quote-link film is about to start,
+  // so Home does not flash inside WhatsApp's browser.
+  if (authChecked && authUser && !quote && !quoteLinkFinishedRef.current && pendingQuoteIdFromLocation()) {
+    return <div style={{ position: 'fixed', inset: 0, background: '#000' }} />
   }
 
   if (!authChecked) {

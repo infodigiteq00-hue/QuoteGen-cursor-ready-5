@@ -64,7 +64,9 @@ function ScreenFallback() {
 
 function PublicApp() {
   rememberPendingQuote()
-  const [mode, setMode] = useState(() => (isSignInPath(pathName()) || hasAuthHash() ? 'login' : ''))
+  const [mode, setMode] = useState(() => (
+    isSignInPath(pathName()) || hasAuthHash() || quoteIdFromLocation() ? 'login' : ''
+  ))
   const [email, setEmail] = useState('')
   const [stylesReady, setStylesReady] = useState(false)
   const legalId = legalPageId(pathName())
