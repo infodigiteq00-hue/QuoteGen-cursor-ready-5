@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './styles.css'
 import AuthScreen from './AuthScreen.jsx'
 import MetaAdsLanding from './MetaAdsLanding.jsx'
+import MetaAdsLanding2 from './MetaAdsLanding2.jsx'
 import BrandMark from './BrandMark.jsx'
 import PwaInstallHost from './PwaInstall.jsx'
 import { getCurrentSession, installAuthFetch, onAuthChange } from './apiAuth.js'
@@ -120,6 +121,11 @@ function AdsApp() {
         </div>
       </main>
     )
+  }
+
+  // Pay-first page must never be replaced by page-1 “You’re all set” / session resume.
+  if (publicPath === '/metaadslanding2') {
+    return <MetaAdsLanding2 onSignIn={openSignIn} />
   }
 
   if (!authUser) {

@@ -25,7 +25,8 @@ import {
   extraLineUnit
 } from '../shared/quoteColumns.js'
 import { formatIndianAmount } from '../shared/templateMap.js'
-import { companySeedFromLead, readMetaAdsLead, usefulLead, readMetaGuideProgress, writeMetaGuideProgress } from './metaTrialLead.js'
+import { companySeedFromLead, readMetaAdsLead, usefulLead, readMetaGuideProgress, writeMetaGuideProgress, isMetaTrialPaid } from './metaTrialLead.js'
+import { downloadQuotationPdf, quotationFileName } from './pdfExport.js'
 import { whatsAppPasteReplacement } from '../shared/enquiryText.js'
 import { trackPixel } from './metaPixel.js'
 import DemoHowToVideo from './DemoHowToVideo.jsx'
@@ -2809,6 +2810,8 @@ export default function MetaTrialGuide({
     return next
   }
 
+  const [pdfBusy, setPdfBusy] = useState(false)
+
   const goToCheckout = () => {
     if (!revealQuote) return
     setLocalError('')
@@ -2816,6 +2819,26 @@ export default function MetaTrialGuide({
     commitPreferredPaperStyle(visibleId)
     setPhase('convert')
   }
+
+  const downloadPaidPdf = async () => {
+    if (!revealQuote || pdfBusy) return
+    setLocalError('')
+    const visibleId = normalizePaperStyle(visibleCarouselThemeId(paperStyle))
+    commitPreferredPaperStyle(visibleId)
+    setPdfBusy(true)
+    try {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      await downloadQuotationPdf(quotationFileName(revealQuote, 'pdf'))
+      setPhase('convert')
+    } catch (err) {
+      setLocalError(err?.message || 'Could not download the PDF. Please try again.')
+    } finally {
+      setPdfBusy(false)
+    }
+  }
+
+  const alreadyPaid = isMetaTrialPaid()
+  const onDownloadClick = alreadyPaid ? downloadPaidPdf : goToCheckout
 
   const uploadLogoFile = async (file) => {
     if (!file || !String(file.type || '').startsWith('image/')) {
@@ -3338,7 +3361,7 @@ export default function MetaTrialGuide({
               canRegenerate={canRegenerateReveal && !atDemoCap}
               regenBusy={regenBusy}
               studioMode={studioOpen}
-              onDownloadPdf={goToCheckout}
+              onDownloadPdf={onDownloadClick}
               downloadBusy={logoBusy}
             />
           </div>
@@ -3486,6 +3509,57 @@ export default function MetaTrialGuide({
   if (phase === 'convert') {
     const offer = checkoutOffer
     const isEnterprise = offer.kind === 'enterprise'
+    if (alreadyPaid) {
+      return (
+        <main className="meta-guide meta-guide-convert-page">
+          <div className="meta-guide-convert-burst" aria-hidden="true">
+            {Array.from({ length: 18 }, (_, i) => (
+              <span key={i} className={`meta-guide-confetti c${i + 1}`} />
+            ))}
+          </div>
+          <div className="meta-guide-convert-shell">
+            <div className="meta-guide-convert-done">
+              <div className="meta-guide-convert-check" aria-hidden="true">
+                <svg viewBox="0 0 72 72">
+                  <circle cx="36" cy="36" r="32" />
+                  <path d="M22 37.5 32 47.5 51 26.5" />
+                </svg>
+              </div>
+              <p className="meta-guide-step">Welcome to QuoteGen</p>
+              <h1 className="meta-guide-title">
+                Downloaded <span>successfully</span>
+              </h1>
+              <p className="meta-guide-convert-file">Your quotation PDF is in Downloads. You’re in — keep creating.</p>
+            </div>
+            <div className="meta-guide-convert-offer">
+              <p className="meta-guide-convert-hook">You’re a QuoteGen member</p>
+              <p className="meta-guide-convert-promise">
+                Paste, verify and send professional quotations whenever you need.
+                {' '}You have 20 quotations after this demo — top up anytime from Billing.
+              </p>
+              <button
+                type="button"
+                className="meta-guide-primary meta-guide-convert-cta"
+                onClick={() => {
+                  try { sessionStorage.removeItem('qg_landing2_exclusive') } catch { /* ignore */ }
+                  window.location.assign('/')
+                }}
+              >
+                Open QuoteGen workspace
+              </button>
+              <button type="button" className="meta-guide-convert-again" onClick={tryAnotherEnquiry}>
+                Create another demo quotation
+              </button>
+            </div>
+          </div>
+          {revealQuote ? (
+            <div className="meta-guide-pdf-offscreen" aria-hidden="true">
+              <TrialThemedExport key={paperStyle} quote={revealQuote} companyProfile={guideProfile} themeId={paperStyle} captureReady />
+            </div>
+          ) : null}
+        </main>
+      )
+    }
     return (
       <main className="meta-guide meta-guide-convert-page">
         <div className="meta-guide-convert-burst" aria-hidden="true">
@@ -3871,12 +3945,19 @@ export default function MetaTrialGuide({
             <button
               type="button"
               className="meta-guide-primary meta-guide-primary-inline meta-guide-pdf-cta"
-              onClick={goToCheckout}
+              onClick={onDownloadClick}
+              disabled={pdfBusy}
             >
-              Download PDF
+              {pdfBusy ? 'Downloading…' : 'Download PDF'}
             </button>
           </div>
+          {showError ? <p className="meta-guide-error">{showError}</p> : null}
         </div>
+        {alreadyPaid && revealQuote ? (
+          <div className="meta-guide-pdf-offscreen" aria-hidden="true">
+            <TrialThemedExport key={paperStyle} quote={revealQuote} companyProfile={guideProfile} themeId={paperStyle} captureReady />
+          </div>
+        ) : null}
       </main>
     )
   }

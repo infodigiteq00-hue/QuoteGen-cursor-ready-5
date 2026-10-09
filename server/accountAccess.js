@@ -144,7 +144,8 @@ async function countQuotesSince(supabase, userId, since) {
   return count || 0
 }
 
-const PAID_QUOTATION_CREDITS = 50
+/** Entry / monthly paid plan — 20 quotations, then top-up packs. */
+const PAID_QUOTATION_CREDITS = 20
 
 export async function applyPaymentCredits(supabase, { userId, email, label }) {
   if (!userId) return
@@ -165,8 +166,7 @@ export async function applyPaymentCredits(supabase, { userId, email, label }) {
     }, { onConflict: 'user_id' })
     return
   }
-  if (!/monthly/i.test(text)) return
-  if (!controls.billingPlan) return
+  if (!/monthly|entry/i.test(text)) return
   await supabase.from('user_profiles').upsert({
     user_id: userId,
     email: String(email || controls.email || '').trim().toLowerCase(),
@@ -181,6 +181,7 @@ export const NEW_ACCOUNT_CUTOFF = '2026-10-03T00:00:00.000Z'
 
 export async function assignPlanOnPassword(supabase, user) {
   const createdAt = user?.created_at || new Date().toISOString()
+  const email = String(user.email || '').trim().toLowerCase()
   const { count, error } = await supabase
     .from('quotations')
     .select('id', { count: 'exact', head: true })
@@ -188,13 +189,28 @@ export async function assignPlanOnPassword(supabase, user) {
   if (error) throw error
   const existingCustomer = createdAt < NEW_ACCOUNT_CUTOFF || (count || 0) > 0
   const now = new Date().toISOString()
+  let purchasedLead = false
+  if (email) {
+    const { data: lead } = await supabase
+      .from('meta_ads_leads')
+      .select('status, purchased_at')
+      .eq('email', email)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    purchasedLead = lead?.status === 'purchased' || Boolean(lead?.purchased_at)
+  }
   const row = {
     user_id: user.id,
-    email: String(user.email || '').trim().toLowerCase(),
+    email,
     password_set_at: now,
     updated_at: now
   }
-  if (!existingCustomer) {
+  if (purchasedLead) {
+    row.billing_plan = 'paid'
+    row.quote_credits = PAID_QUOTATION_CREDITS
+    row.subscribed_at = now
+  } else if (!existingCustomer) {
     row.billing_plan = 'demo'
     row.quote_credits = 10
   }
@@ -202,6 +218,7 @@ export async function assignPlanOnPassword(supabase, user) {
   if (saved.error && !/billing_plan|quote_credits|password_set_at|schema cache|42703/i.test(saved.error.message || '')) {
     throw saved.error
   }
+  if (purchasedLead) return 'paid'
   return existingCustomer ? 'legacy' : 'demo'
 }
 

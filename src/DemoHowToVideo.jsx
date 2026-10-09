@@ -5,6 +5,19 @@ export const DEMO_HOWTO_VIDEO_ID = '1OdToPSkPWfnWkLrLgcaM5SEP8k9cNLKL'
 export const DEMO_HOWTO_VIDEO_URL = `https://drive.google.com/file/d/${DEMO_HOWTO_VIDEO_ID}/view?usp=drive_link`
 export const DEMO_HOWTO_VIDEO_EMBED = `https://drive.google.com/file/d/${DEMO_HOWTO_VIDEO_ID}/preview`
 export const DEMO_HOWTO_VIDEO_THUMB = `https://drive.google.com/thumbnail?id=${DEMO_HOWTO_VIDEO_ID}&sz=w640`
+/** Local copy in /public (Drive download is unreliable as a <video> src). */
+export const DEMO_HOWTO_VIDEO_STREAM = '/videos/howto-demo.mp4'
+/** Opening beat: copy enquiry from WhatsApp (seconds). */
+export const DEMO_HOWTO_COPY_CLIP = { start: 0, end: 11 }
+/**
+ * How-it-works process beats from the same walkthrough video (seconds).
+ * 01 copy-paste enquiry → 02 assemble (old step-2 stream) → 03 layout
+ */
+export const DEMO_HOWTO_PROCESS_CLIPS = [
+  { start: 0, end: 14 },
+  { start: 11, end: 22 },
+  { start: 33, end: 44 }
+]
 
 /**
  * Floating “watch how QuoteGen works” chip for the demo preview.

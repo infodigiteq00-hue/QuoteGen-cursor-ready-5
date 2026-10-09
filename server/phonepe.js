@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { getSupabase, isSupabaseConfigured } from './db.js'
 import { readDemoLeadByCode } from './googleSheetLead.js'
-import { findAuthUserByEmail, markMetaAdsLeadStage } from './metaAdsLeads.js'
+import { findAuthUserByEmail, markMetaAdsLeadStage, ensureConfirmedMetaTrialUser } from './metaAdsLeads.js'
 import { applyPaymentCredits } from './accountAccess.js'
 import { sendAdminEmail } from './mail.js'
 
@@ -19,6 +19,11 @@ const PLAN_PRICES = {
   enterprise: { name: 'Enterprise', monthly: 4999, yearly: 49990 },
   scale: { name: 'Scale', monthly: 8999, yearly: 89990 }
 }
+const LANDING2_PRICES = {
+  landing2: { price: 199, label: 'QuoteGen monthly entry ₹199', message: 'QuoteGen entry ₹199' },
+  landing2_wa: { price: 248, label: 'QuoteGen monthly entry ₹199 + WhatsApp ₹49', message: 'QuoteGen entry + WhatsApp ₹248' }
+}
+
 const DEMO_PACK_PRICES = {
   demo_lite_year: { price: 999, label: 'QuoteGen Starter yearly ₹999' },
   demo_lite_month: { price: 99, label: 'QuoteGen Starter monthly ₹99' },
@@ -46,6 +51,11 @@ function resolveCharge(body) {
       && Date.now() - offerStartedAt < OFFER_MS + OFFER_GRACE_MS
     const price = offerLive ? OFFER_PRICE : REGULAR_PRICE
     return { price, label: `QuoteGen monthly ₹${price}`, message: `QuoteGen monthly plan ₹${price}` }
+  }
+  const landing2 = LANDING2_PRICES[product]
+  if (landing2) {
+    // Pay-first landing always stays at entry price (₹199 / ₹248) — list price is display-only.
+    return { price: landing2.price, label: landing2.label, message: landing2.message, landing2: true }
   }
   const demoPack = DEMO_PACK_PRICES[product]
   if (demoPack) {
@@ -303,6 +313,19 @@ export function registerPublicPhonePeRoutes(app) {
     const merchantOrderId = `QG-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`
 
     try {
+      if (charge.landing2 && isSupabaseConfigured()) {
+        const email = String(body.email || '').trim().toLowerCase()
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          await ensureConfirmedMetaTrialUser(getSupabase(), email, {
+            source: 'meta_ads_landing2',
+            full_name: clip(body.name, 120),
+            company: clip(body.company, 120),
+            phone_digits: clip(body.phone, 20)
+          }).catch((error) => {
+            console.error('[phonepe] landing2 user prep failed', error?.message)
+          })
+        }
+      }
       const token = await getToken(cfg)
       const response = await fetch(`${cfg.hosts.pg}/checkout/v2/pay`, {
         method: 'POST',
@@ -426,7 +449,7 @@ export function registerPublicPhonePeRoutes(app) {
         // A lead payment link already knows who they are. The demo ₹399 checkout
         // has no payment-request row, so use the details PhonePe stored on the order.
         if (linked.data?.lead_id) setupAccount = true
-        else if (!linked.data && email && label.startsWith('QuoteGen monthly')) {
+        else if (!linked.data && email && (/^QuoteGen monthly/i.test(label) || /entry/i.test(label))) {
           setupAccount = await accountStillNeedsPassword(email)
         }
       }

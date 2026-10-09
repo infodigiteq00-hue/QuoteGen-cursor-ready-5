@@ -277,7 +277,7 @@ export async function findAuthUserByEmail(supabase, email) {
  * (and log them straight into the app). Confirm the user first so Resend OTP
  * uses the Magic Link / 6-digit template instead.
  */
-async function ensureConfirmedMetaTrialUser(supabase, email, meta) {
+export async function ensureConfirmedMetaTrialUser(supabase, email, meta) {
   const created = await supabase.auth.admin.createUser({
     email,
     email_confirm: true,

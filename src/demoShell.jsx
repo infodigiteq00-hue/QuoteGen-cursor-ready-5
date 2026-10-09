@@ -8,7 +8,14 @@ import AuthScreen from './AuthScreen.jsx'
 import BrandMark from './BrandMark.jsx'
 import { getCurrentSession, installAuthFetch, onAuthChange, signIn } from './apiAuth.js'
 import { initMetaPixel } from './metaPixel.js'
-import { clearMetaTrialLock, readMetaAdsLead, usefulLead, writeMetaAdsLead } from './metaTrialLead.js'
+import {
+  clearMetaTrialLock,
+  markMetaTrialPaid,
+  readMetaAdsLead,
+  usefulLead,
+  writeMetaAdsLead,
+  writeMetaWelcome
+} from './metaTrialLead.js'
 import { saveCompanyProfile } from './quotePersistence.js'
 import {
   DEMO_QUOTE_CAP,
@@ -71,10 +78,13 @@ function DemoApp() {
   const openAccount = (row, session) => {
     setAccount(row)
     if (!row?.verified) return 'gate'
-    if (session && row.plan === 'demo') return 'demo'
+    let exclusive = false
+    try { exclusive = sessionStorage.getItem('qg_landing2_exclusive') === '1' } catch { /* ignore */ }
+    if (session && (row.plan === 'demo' || (row.plan === 'paid' && exclusive))) return 'demo'
     if (row.needsPassword) return 'password'
     if (!session) return 'login'
     if (row.plan === 'demo') return 'demo'
+    if (row.plan === 'paid' && exclusive) return 'demo'
     window.location.assign('/')
     return 'leave'
   }
@@ -204,9 +214,25 @@ function DemoApp() {
   if (path === '/payment-status') {
     return (
       <PaymentStatus
-        onPaid={() => { clearMetaTrialLock() }}
+        onPaid={() => {
+          markMetaTrialPaid()
+          clearMetaTrialLock()
+          try { sessionStorage.setItem('qg_landing2_exclusive', '1') } catch { /* ignore */ }
+        }}
         onAccountReady={(details) => {
           savePayAccount(details)
+          markMetaTrialPaid()
+          try { sessionStorage.setItem('qg_landing2_exclusive', '1') } catch { /* ignore */ }
+          writeMetaAdsLead({
+            ...(usefulLead(readMetaAdsLead()) || readMetaAdsLead() || {}),
+            email: details?.email || '',
+            name: details?.name || '',
+            phone: details?.phone || '',
+            company: details?.company || '',
+            verified: true,
+            landing2: true,
+            submitted: true
+          })
           window.location.assign('/set-password')
         }}
         onContinue={(state) => {
@@ -246,6 +272,15 @@ function DemoApp() {
             return
           }
           await signIn(lead.email, password)
+          let exclusive = false
+          try { exclusive = sessionStorage.getItem('qg_landing2_exclusive') === '1' } catch { /* ignore */ }
+          if (data.plan === 'paid' || exclusive || account?.plan === 'paid' || account?.accountReady) {
+            markMetaTrialPaid()
+            writeMetaWelcome('congrats')
+            setAccount({ verified: true, plan: 'paid', step: 'demo', needsPassword: false })
+            setLinkWelcomeDone(false)
+            return
+          }
           if (data.plan === 'demo') {
             setAccount({ verified: true, plan: 'demo', step: 'demo', needsPassword: false })
             return
@@ -264,13 +299,18 @@ function DemoApp() {
     )
   }
 
-  if (demoCode && account?.step === 'demo' && !linkWelcomeDone) {
+  let showExclusiveWelcome = Boolean(demoCode)
+  try { showExclusiveWelcome = showExclusiveWelcome || sessionStorage.getItem('qg_landing2_exclusive') === '1' } catch { /* ignore */ }
+  if (showExclusiveWelcome && account?.step === 'demo' && !linkWelcomeDone) {
     return (
       <MetaAdsLanding
         celebrate
         initialLead={lead}
         onSignIn={() => window.location.assign('/signin')}
-        onContinueTrial={() => setLinkWelcomeDone(true)}
+        onContinueTrial={() => {
+          try { sessionStorage.removeItem('qg_landing2_exclusive') } catch { /* ignore */ }
+          setLinkWelcomeDone(true)
+        }}
       />
     )
   }
