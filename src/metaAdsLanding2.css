@@ -1041,7 +1041,7 @@
   max-width: 28ch;
 }
 
-.meta-ads-2 .m2-demo-close span {
+.meta-ads-2 .m2-demo-close-soft {
   font-size: clamp(22px, 3vw, 32px);
   font-weight: 500;
   font-style: italic;
@@ -1058,6 +1058,15 @@
   letter-spacing: -0.045em;
   line-height: 1.05;
   color: #F8FAFC;
+}
+
+.meta-ads-2 .m2-demo-close strong .m2-gen {
+  font-size: inherit;
+  font-weight: inherit;
+  font-style: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  color: #3B8BFF;
 }
 
 .meta-ads-2 .m2-demo-close strong::after {
@@ -2573,7 +2582,7 @@
     max-width: none;
   }
 
-  .meta-ads-2 .m2-demo-close span {
+  .meta-ads-2 .m2-demo-close-soft {
     font-size: clamp(20px, 5.5vw, 26px);
   }
 

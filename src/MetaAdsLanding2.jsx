@@ -550,7 +550,7 @@ function FinaleSection({ entryForm, seats, offerLive, offerLeft }) {
       <div className="m2-demo-finale m2-shell">
         <div className="m2-demo-finale-copy">
           <p className="m2-demo-close m2-demo-close-xl">
-            <span>Just verify your pricing and send to clients.</span>
+            <span className="m2-demo-close-soft">Just verify your pricing and send to clients.</span>
             <strong>Leave the rest on Quote<span className="m2-gen">Gen</span>.</strong>
           </p>
           <p className="m2-finale-meta">
