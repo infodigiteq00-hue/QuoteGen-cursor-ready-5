@@ -63,16 +63,19 @@ const PROOF_STATS = [
 const PROOF_REVIEWS = [
   {
     quote: 'I paste the WhatsApp enquiry and the draft is ready before I finish my tea.',
+    tip: 'Draft ready before tea finishes',
     name: 'Plant owner',
     role: 'Trading firm — Pune'
   },
   {
     quote: 'Our team stopped fighting Excel formats. Clients get a clean PDF the same day.',
+    tip: 'Clean PDF same day — no Excel fight',
     name: 'Sales lead',
     role: 'Electrical supplies — Ahmedabad'
   },
   {
     quote: 'First quote took minutes with someone walking us through it on the call.',
+    tip: 'First quote in minutes on a call',
     name: 'Operations',
     role: 'Fabrication shop — Jaipur'
   }
@@ -486,6 +489,14 @@ function ReviewsSection() {
       <div className="m2-shell m2-reviews-inner">
         <h3>What early users say</h3>
         <p className="m2-proof-note m2-proof-note-inline">Sample — real stories coming soon</p>
+        <ul className="m2-review-tips" aria-label="Quick feedback">
+          {PROOF_REVIEWS.map((r) => (
+            <li key={`tip-${r.role}`}>
+              <strong>{r.tip}</strong>
+              <span>{r.role}</span>
+            </li>
+          ))}
+        </ul>
         <div className="m2-proof-review-grid">
           {PROOF_REVIEWS.map((r) => (
             <blockquote key={r.role} className="m2-proof-review">
@@ -606,21 +617,33 @@ export default function MetaAdsLanding2({ onSignIn }) {
   }, [offerStartedAt])
 
   useEffect(() => {
-    trackPixel('ViewContent', { content_name: 'QuoteGen landing2 offer' })
+    // PageView fires from initMetaPixel() in adsShell; ViewContent marks this offer page.
+    trackPixel('ViewContent', {
+      content_name: 'QuoteGen landing2',
+      content_category: 'meta_ads_landing2',
+      value: ENTRY_PRICE,
+      currency: 'INR'
+    })
   }, [])
 
   const offerLeft = offerStartedAt ? offerStartedAt + OFFER_MS - now : OFFER_MS
   const offerLive = offerLeft > 0
-  // Landing2 entry stays ₹199 — list price is only the strike / next-month anchor.
+  // Landing2 entry stays ₹199 — then recharge / pay as you go.
   const total = ENTRY_PRICE + (whatsappAddon ? WA_ADDON : 0)
   const seats = seatsLeftFrom(offerStartedAt)
 
-  const openForm = () => {
+  const fireInitiateCheckout = (value = ENTRY_PRICE, contentName = 'QuoteGen landing2 entry') => {
     trackPixel('InitiateCheckout', {
-      value: ENTRY_PRICE,
+      value,
       currency: 'INR',
-      content_name: 'QuoteGen landing2 entry'
+      content_name: contentName,
+      content_ids: ['landing2'],
+      num_items: 1
     })
+  }
+
+  const openForm = () => {
+    fireInitiateCheckout(ENTRY_PRICE, 'QuoteGen landing2 entry')
     const el = document.getElementById('entry-form')
     if (!el) return
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
@@ -644,6 +667,9 @@ export default function MetaAdsLanding2({ onSignIn }) {
     if (!quotes) return setError('Enter how many quotations you make in a month.')
     if (!trade) return setError('Enter your industry.')
     if (whatsappAddon && !isValidIndiaMobile(wa)) return setError('Enter a valid WhatsApp number for the add-on.')
+
+    const contentName = whatsappAddon ? 'QuoteGen landing2 + WhatsApp' : 'QuoteGen landing2 entry'
+    fireInitiateCheckout(total, contentName)
 
     const payload = {
       name: n,
@@ -691,11 +717,13 @@ export default function MetaAdsLanding2({ onSignIn }) {
       })
       const payData = await payRes.json().catch(() => ({}))
       if (payRes.ok && payData?.redirectUrl) {
-        trackPixel('InitiateCheckout', {
-          value: total,
-          currency: 'INR',
-          content_name: whatsappAddon ? 'QuoteGen landing2 + WhatsApp' : 'QuoteGen landing2 entry'
-        })
+        try {
+          sessionStorage.setItem('qg_pixel_purchase', JSON.stringify({
+            value: total,
+            content_name: contentName,
+            product
+          }))
+        } catch { /* private mode */ }
         window.location.assign(payData.redirectUrl)
         return
       }
@@ -733,15 +761,28 @@ export default function MetaAdsLanding2({ onSignIn }) {
         <div className="m2-shell m2-hero-inner">
           <p className="m2-hero-brand">Quote<span className="m2-gen">Gen</span></p>
           <p className="m2-hero-badge">214+ businesses already quoting faster</p>
-          <h1>
-            Turn any WhatsApp enquiry into a
-            <br />
-            <span>Professional Quotation</span>
-            {' '}in 2 minutes
+          <h1 className="m2-hero-title">
+            <span className="m2-hero-title-desk">
+              Turn any WhatsApp enquiry into a
+              <br />
+              <span>Professional Quotation</span>
+              {' '}in 2 minutes
+            </span>
+            <span className="m2-hero-title-mob">
+              WhatsApp enquiry →
+              {' '}
+              <span>Professional Quotation</span>
+              {' '}in 2 min
+            </span>
           </h1>
           <p className="m2-hero-lead">
-            Paste the enquiry. Verify the numbers. Send a clean PDF —
-            while the buyer is still waiting.
+            <span className="m2-hero-lead-desk">
+              Paste the enquiry. Verify the numbers. Send a clean PDF —
+              while the buyer is still waiting.
+            </span>
+            <span className="m2-hero-lead-mob">
+              Paste · verify · send PDF before the competitor is ready.
+            </span>
           </p>
 
           <div className="m2-hero-offer">

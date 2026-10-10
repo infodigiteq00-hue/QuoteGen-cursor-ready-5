@@ -100,7 +100,7 @@
   color: #BAE6FD;
 }
 
-.meta-ads-2 .m2-hero h1 {
+.meta-ads-2 .m2-hero-title {
   margin: 0;
   font-family: Archivo, Inter, system-ui, sans-serif;
   font-size: clamp(32px, 5.6vw, 56px);
@@ -111,7 +111,13 @@
   text-wrap: balance;
 }
 
-.meta-ads-2 .m2-hero h1 span {
+.meta-ads-2 .m2-hero-title-mob {
+  display: none;
+}
+
+.meta-ads-2 .m2-hero-title span span,
+.meta-ads-2 .m2-hero-title-desk > span,
+.meta-ads-2 .m2-hero-title-mob > span {
   background: linear-gradient(105deg, #FFFFFF 8%, #7DD3FC 50%, #3B8BFF 100%);
   -webkit-background-clip: text;
   background-clip: text;
@@ -125,6 +131,10 @@
   line-height: 1.5;
   color: var(--m2-mute);
   text-wrap: balance;
+}
+
+.meta-ads-2 .m2-hero-lead-mob {
+  display: none;
 }
 
 .meta-ads-2 .m2-hero-offer {
@@ -1768,8 +1778,8 @@
     padding: 56px 0 64px;
   }
 
-  .meta-ads-2 .m2-hero h1 {
-    font-size: clamp(36px, 11vw, 48px);
+  .meta-ads-2 .m2-hero-title {
+    font-size: clamp(30px, 8vw, 40px);
   }
 
   .meta-ads-2 .m2-hero-lead {
@@ -1909,6 +1919,14 @@
 
 .meta-ads-2 .m2-proof-note-inline {
   margin: 6px 0 0;
+}
+
+.meta-ads-2 .m2-review-tips {
+  display: none;
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  gap: 8px;
 }
 
 .meta-ads-2 .m2-proof-review-grid {
@@ -2332,34 +2350,50 @@
   }
 
   .meta-ads-2 .m2-hero-brand {
-    font-size: 22px;
-    margin-bottom: 10px;
+    font-size: 20px;
+    margin-bottom: 8px;
   }
 
   .meta-ads-2 .m2-hero-badge {
-    font-size: 12px;
-    padding: 6px 10px;
-    margin-bottom: 14px;
+    display: none;
   }
 
-  .meta-ads-2 .m2-hero h1 {
-    font-size: clamp(28px, 8.2vw, 36px);
-    line-height: 1.12;
+  .meta-ads-2 .m2-hero-title {
+    font-size: clamp(26px, 7.2vw, 32px);
+    line-height: 1.18;
     letter-spacing: -0.035em;
+    max-width: 18ch;
+  }
+
+  .meta-ads-2 .m2-hero-title-desk {
+    display: none;
+  }
+
+  .meta-ads-2 .m2-hero-title-mob {
+    display: inline;
   }
 
   .meta-ads-2 .m2-hero-lead {
-    font-size: 15px;
-    line-height: 1.5;
-    margin-top: 12px;
+    font-size: 13.5px;
+    line-height: 1.35;
+    margin-top: 10px;
+    max-width: 28ch;
+  }
+
+  .meta-ads-2 .m2-hero-lead-desk {
+    display: none;
+  }
+
+  .meta-ads-2 .m2-hero-lead-mob {
+    display: inline;
   }
 
   .meta-ads-2 .m2-hero-offer {
     width: 100%;
-    margin-top: 22px;
-    padding: 16px 14px 14px;
+    margin-top: 18px;
+    padding: 14px 14px 12px;
     border-radius: 18px;
-    gap: 12px;
+    gap: 10px;
   }
 
   .meta-ads-2 .m2-hero-offer-price strong {
@@ -2552,21 +2586,40 @@
   }
 
   .meta-ads-2 .m2-reviews {
-    padding: 48px 0 40px;
+    padding: 40px 0 36px;
   }
 
   .meta-ads-2 .m2-reviews h3 {
     font-size: clamp(22px, 6vw, 28px);
   }
 
-  .meta-ads-2 .m2-proof-review-grid {
-    grid-template-columns: 1fr;
-    gap: 22px;
-    margin-top: 16px;
+  .meta-ads-2 .m2-review-tips {
+    display: grid;
   }
 
-  .meta-ads-2 .m2-proof-review p {
-    font-size: 15px;
+  .meta-ads-2 .m2-review-tips li {
+    display: grid;
+    gap: 2px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    background: #FFFFFF;
+  }
+
+  .meta-ads-2 .m2-review-tips strong {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: #0F172A;
+  }
+
+  .meta-ads-2 .m2-review-tips span {
+    font-size: 12px;
+    color: #64748B;
+  }
+
+  .meta-ads-2 .m2-proof-review-grid {
+    display: none;
   }
 
   .meta-ads-2 .m2-finale-section {

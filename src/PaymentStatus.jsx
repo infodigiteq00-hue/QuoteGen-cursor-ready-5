@@ -50,7 +50,28 @@ export default function PaymentStatus({ onContinue, onPaid, onAccountReady, prev
               try { sessionStorage.removeItem('qg_needs_password') } catch { /* ignore */ }
             }
             onPaid?.()
-            trackPixel('Purchase', { value: data.amount || 0, currency: 'INR', content_name: 'QuoteGen monthly' }, { once: orderId })
+            let purchase = {
+              value: data.amount || 0,
+              currency: 'INR',
+              content_name: 'QuoteGen monthly'
+            }
+            try {
+              const pending = JSON.parse(sessionStorage.getItem('qg_pixel_purchase') || 'null')
+              if (pending && typeof pending === 'object') {
+                purchase = {
+                  value: Number(pending.value) || data.amount || 0,
+                  currency: 'INR',
+                  content_name: pending.content_name || purchase.content_name,
+                  content_ids: pending.product ? [pending.product] : undefined
+                }
+                sessionStorage.removeItem('qg_pixel_purchase')
+              } else if (Number(data.amount) === 199 || Number(data.amount) === 248) {
+                purchase.content_name = Number(data.amount) === 248
+                  ? 'QuoteGen landing2 + WhatsApp'
+                  : 'QuoteGen landing2 entry'
+              }
+            } catch { /* private mode */ }
+            trackPixel('Purchase', purchase, { once: orderId })
           }
           if (data.state !== 'PENDING') return
         }
