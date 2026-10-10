@@ -3,7 +3,7 @@ import logoUrl from './assets/landing/quotegen-logo.png'
 import { writeMetaAdsLead } from './metaTrialLead.js'
 import { trackPixel } from './metaPixel.js'
 import { indiaMobileInputValue, isValidIndiaMobile, normalizeIndiaMobileDigits } from '../shared/phone.js'
-import { DEMO_HOWTO_PROCESS_CLIPS, DEMO_HOWTO_VIDEO_STREAM } from './DemoHowToVideo.jsx'
+import { DEMO_HOWTO_PROCESS_CLIPS, DEMO_HOWTO_VIDEO_POSTER, DEMO_HOWTO_VIDEO_STREAM } from './DemoHowToVideo.jsx'
 import './metaAdsLanding.css'
 import './metaAdsLanding2.css'
 
@@ -302,7 +302,7 @@ function GuidedTutorial() {
     setPlaying(false)
   }
 
-  const playStep = (index, { resume = false } = {}) => {
+  const playStep = (index, { resume = false, auto = false } = {}) => {
     const next = TUTORIAL_STEPS[index]
     if (!next) return
     clearAdvance()
@@ -316,7 +316,17 @@ function GuidedTutorial() {
       if (!canResume) {
         try { video.currentTime = next.start } catch { /* ignore */ }
       }
-      video.play().then(() => setPlaying(true)).catch(() => setPlaying(false))
+      if (auto) video.muted = true
+      video.play()
+        .then(() => setPlaying(true))
+        .catch(() => {
+          if (!auto) {
+            setPlaying(false)
+            return
+          }
+          video.muted = true
+          video.play().then(() => setPlaying(true)).catch(() => setPlaying(false))
+        })
     }
     if (video.readyState >= 1) start()
     else {
@@ -343,7 +353,11 @@ function GuidedTutorial() {
         const next = stepIndexRef.current + 1
         if (next < TUTORIAL_STEPS.length) {
           clearAdvance()
-          advanceTimerRef.current = window.setTimeout(() => playStepRef.current(next), 420)
+          const keepMuted = Boolean(video.muted)
+          advanceTimerRef.current = window.setTimeout(
+            () => playStepRef.current(next, { auto: keepMuted }),
+            420
+          )
         }
       }
     }
@@ -358,6 +372,28 @@ function GuidedTutorial() {
       video.removeEventListener('play', onPlay)
       video.removeEventListener('pause', onPause)
     }
+  }, [])
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return undefined
+    let started = false
+    const tryAutoplay = () => {
+      if (started) return
+      started = true
+      playStepRef.current(0, { auto: true })
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting && e.intersectionRatio >= 0.35)) {
+          tryAutoplay()
+          io.disconnect()
+        }
+      },
+      { threshold: [0.35] }
+    )
+    io.observe(video)
+    return () => io.disconnect()
   }, [])
 
   return (
@@ -378,8 +414,9 @@ function GuidedTutorial() {
                 ref={videoRef}
                 className="m2-tutorial-video"
                 src={DEMO_HOWTO_VIDEO_STREAM}
+                poster={DEMO_HOWTO_VIDEO_POSTER}
                 playsInline
-                preload="metadata"
+                preload="auto"
                 controls={false}
                 aria-label={step.title}
               />
@@ -397,7 +434,11 @@ function GuidedTutorial() {
                 <button
                   type="button"
                   className="m2-tutorial-play"
-                  onClick={() => playStep(stepIndex, { resume: true })}
+                  onClick={() => {
+                    const video = videoRef.current
+                    if (video) video.muted = false
+                    playStep(stepIndex, { resume: true })
+                  }}
                   aria-label="Play this step"
                 >
                   <span aria-hidden="true">▶</span>
@@ -416,7 +457,11 @@ function GuidedTutorial() {
                   <button
                     type="button"
                     className={`m2-tutorial-step${i === stepIndex ? ' is-on' : ''}`}
-                    onClick={() => playStep(i)}
+                    onClick={() => {
+                      const video = videoRef.current
+                      if (video) video.muted = false
+                      playStep(i)
+                    }}
                     aria-current={i === stepIndex ? 'step' : undefined}
                   >
                     <em>{String(i + 1).padStart(2, '0')}</em>

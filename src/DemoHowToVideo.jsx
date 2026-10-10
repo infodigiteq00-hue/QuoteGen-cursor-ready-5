@@ -5,8 +5,9 @@ export const DEMO_HOWTO_VIDEO_ID = '1OdToPSkPWfnWkLrLgcaM5SEP8k9cNLKL'
 export const DEMO_HOWTO_VIDEO_URL = `https://drive.google.com/file/d/${DEMO_HOWTO_VIDEO_ID}/view?usp=drive_link`
 export const DEMO_HOWTO_VIDEO_EMBED = `https://drive.google.com/file/d/${DEMO_HOWTO_VIDEO_ID}/preview`
 export const DEMO_HOWTO_VIDEO_THUMB = `https://drive.google.com/thumbnail?id=${DEMO_HOWTO_VIDEO_ID}&sz=w640`
-/** Local copy in /public (Drive download is unreliable as a <video> src). */
+/** Local copy in /public (Drive download is unreliable as a <video> src). Web-optimized ~2MB. */
 export const DEMO_HOWTO_VIDEO_STREAM = '/videos/howto-demo.mp4'
+export const DEMO_HOWTO_VIDEO_POSTER = '/videos/howto-demo-poster.jpg'
 /** Opening beat: copy enquiry from WhatsApp (seconds). */
 export const DEMO_HOWTO_COPY_CLIP = { start: 0, end: 11 }
 /**
