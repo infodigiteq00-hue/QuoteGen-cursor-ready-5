@@ -593,7 +593,8 @@ export default function MetaAdsLanding2({ onSignIn }) {
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [company, setCompany] = useState('')
-  const [monthlyQuotes, setMonthlyQuotes] = useState('')
+  const [quoteBand, setQuoteBand] = useState('')
+  const [quoteExact, setQuoteExact] = useState('')
   const [industry, setIndustry] = useState('')
   const [whatsappAddon, setWhatsappAddon] = useState(false)
   const [waPhone, setWaPhone] = useState('')
@@ -657,14 +658,21 @@ export default function MetaAdsLanding2({ onSignIn }) {
     const n = name.trim()
     const p = normalizeIndiaMobileDigits(phone)
     const em = email.trim().toLowerCase()
-    const quotes = monthlyQuotes.trim()
+    const exact = quoteExact.trim()
+    const quotes = quoteBand === '100+' ? exact : quoteBand.trim()
     const trade = industry.trim()
     const wa = whatsappAddon ? normalizeIndiaMobileDigits(waPhone || phone) : ''
 
     if (!n) return setError('Please enter your name.')
     if (!isValidIndiaMobile(p)) return setError('Enter a valid 10-digit mobile number.')
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) return setError('Enter a valid email address.')
-    if (!quotes) return setError('Enter how many quotations you make in a month.')
+    if (!quoteBand) return setError('Select how many quotations you make in a month.')
+    if (quoteBand === '100+') {
+      const nQuotes = Number(exact)
+      if (!exact || !Number.isFinite(nQuotes) || nQuotes < 100) {
+        return setError('Enter how many quotations you make (100 or more).')
+      }
+    }
     if (!trade) return setError('Enter your industry.')
     if (whatsappAddon && !isValidIndiaMobile(wa)) return setError('Enter a valid WhatsApp number for the add-on.')
 
@@ -877,22 +885,29 @@ export default function MetaAdsLanding2({ onSignIn }) {
                     <button
                       key={option}
                       type="button"
-                      className={`m2-chip${monthlyQuotes === option ? ' is-on' : ''}`}
-                      aria-pressed={monthlyQuotes === option}
-                      onClick={() => setMonthlyQuotes(option)}
+                      className={`m2-chip${quoteBand === option ? ' is-on' : ''}`}
+                      aria-pressed={quoteBand === option}
+                      onClick={() => {
+                        setQuoteBand(option)
+                        if (option !== '100+') setQuoteExact('')
+                      }}
                     >
                       {option}
                     </button>
                   ))}
                 </div>
-                <input
-                  id="meta2-monthly"
-                  className="m2-sr-only"
-                  tabIndex={-1}
-                  aria-hidden="true"
-                  value={monthlyQuotes}
-                  onChange={(e) => setMonthlyQuotes(e.target.value)}
-                />
+                {quoteBand === '100+' ? (
+                  <input
+                    id="meta2-monthly"
+                    className="m2-quote-exact"
+                    inputMode="numeric"
+                    value={quoteExact}
+                    onChange={(e) => setQuoteExact(e.target.value.replace(/[^\d]/g, '').slice(0, 5))}
+                    placeholder="e.g. 150"
+                    aria-label="Exact quotations per month"
+                    autoFocus
+                  />
+                ) : null}
               </div>
             </div>
 
@@ -905,7 +920,7 @@ export default function MetaAdsLanding2({ onSignIn }) {
               >
                 <span>
                   <strong>WhatsApp quoting</strong>
-                  <em>Optional add-on · draft from WhatsApp (+ ₹{WA_ADDON})</em>
+                  <em>Connect QuoteGen to WhatsApp — enquiry to quote in chat. No second app. (+ ₹{WA_ADDON})</em>
                 </span>
                 <b>{whatsappAddon ? 'Added' : `+ ₹${WA_ADDON}`}</b>
               </button>
