@@ -1,4 +1,4 @@
-import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import logoUrl from './assets/landing/quotegen-logo.png'
 import { writeMetaAdsLead } from './metaTrialLead.js'
 import { trackPixel } from './metaPixel.js'
@@ -9,38 +9,100 @@ import './metaAdsLanding2.css'
 
 const CTA_STYLE = { fontFamily: 'Archivo, Inter, system-ui, sans-serif', fontWeight: 800 }
 const ENTRY_PRICE = 199
-const LIST_PRICE = 1999
+const ENTRY_QUOTES = 20
 const WA_ADDON = 49
 const OFFER_MS = 10 * 60 * 1000
 const OFFER_KEY = 'qg_landing2_offer_started'
 const SEAT_CAP = 100
 const SEAT_FLOOR = 17
 const INDUSTRY_OPTIONS = ['Manufacturing', 'Trading', 'Construction', 'Electrical', 'Engineering', 'Services', 'Other']
+const QUOTE_VOLUME_OPTIONS = ['1–10', '10–40', '40–100', '100+']
+const RECHARGE_PACKS = [
+  { quotes: 25, price: 199, note: 'Light weeks' },
+  { quotes: 100, price: 499, note: 'Busy months' },
+  { quotes: 250, price: 999, note: 'Teams that quote daily' }
+]
 
-const MESSAGE_SLIDES = [
+const IMPACT_BEATS = [
   {
     id: 'volume',
-    lines: [
-      { t: 'If you are', c: 'soft' },
-      { t: 'making 10–100', c: 'big' },
-      { t: 'quotations per month', c: 'big' },
-      { t: 'or more', c: 'soft' }
-    ]
+    soft: 'If you make',
+    hard: '10–100+ quotations',
+    softAfter: 'every month'
   },
   {
     id: 'deserve',
-    lines: [
-      { t: 'You deserve', c: 'soft' },
-      { t: 'QuoteGen', c: 'brand' }
-    ]
+    soft: 'You deserve',
+    hard: 'QuoteGen',
+    brand: true
   },
   {
     id: 'future',
-    lines: [
-      { t: 'This is the future', c: 'soft' },
-      { t: 'of AI Quotation', c: 'big' },
-      { t: 'Making', c: 'big' }
-    ]
+    soft: 'This is the future of',
+    hard: 'AI Quotation Making'
+  }
+]
+
+const TRUST_TICKER_LINES = [
+  'Manufacturers quoting faster',
+  'Rated 4.9 ★',
+  'Pay as you go · no monthly lock-in',
+  '10,000+ quotations drafted',
+  'Recharge when you need more quotes',
+  'Trading · Construction · Electrical',
+  'From enquiry to PDF today'
+]
+
+const PROOF_STATS = [
+  { value: '2,400+', label: 'Teams exploring QuoteGen' },
+  { value: '4.9 ★', label: 'Early user rating' },
+  { value: '48k+', label: 'Quotations drafted' },
+  { value: '12k hrs', label: 'Quoting time saved' }
+]
+
+const PROOF_REVIEWS = [
+  {
+    quote: 'I paste the WhatsApp enquiry and the draft is ready before I finish my tea.',
+    name: 'Plant owner',
+    role: 'Trading firm — Pune'
+  },
+  {
+    quote: 'Our team stopped fighting Excel formats. Clients get a clean PDF the same day.',
+    name: 'Sales lead',
+    role: 'Electrical supplies — Ahmedabad'
+  },
+  {
+    quote: 'First quote took minutes with someone walking us through it on the call.',
+    name: 'Operations',
+    role: 'Fabrication shop — Jaipur'
+  }
+]
+
+/** Step-by-step demo tutorial — same walkthrough MP4, Indian-English coaching copy. */
+const TUTORIAL_STEPS = [
+  {
+    id: 'paste',
+    title: 'Step 1 · Paste the enquiry',
+    coach: 'Customer ne WhatsApp pe rate maanga? Bas copy karo aur QuoteGen mein paste karo. Messy notes bhi chalenge.',
+    tip: 'Email, chat, ya phone pe likha — sab chalega.',
+    start: DEMO_HOWTO_PROCESS_CLIPS[0].start,
+    end: DEMO_HOWTO_PROCESS_CLIPS[0].end
+  },
+  {
+    id: 'check',
+    title: 'Step 2 · Check line items',
+    coach: 'QuoteGen khud description, qty, rate nikaal ke table bana deta hai. Aap bas verify karo — galat ho to edit kar do.',
+    tip: 'Amount aur GST yahin pe clear dikhega.',
+    start: DEMO_HOWTO_PROCESS_CLIPS[1].start,
+    end: DEMO_HOWTO_PROCESS_CLIPS[1].end
+  },
+  {
+    id: 'send',
+    title: 'Step 3 · Pick layout & send',
+    coach: 'Apna brand layout choose karo, PDF ready. Client ko WhatsApp ya email pe bhej do — same day.',
+    tip: 'Pehli quotation ke baad flow yaad ho jaata hai.',
+    start: DEMO_HOWTO_PROCESS_CLIPS[2].start,
+    end: DEMO_HOWTO_PROCESS_CLIPS[2].end
   }
 ]
 
@@ -67,177 +129,6 @@ function seatsLeftFrom(startedAt) {
   const elapsed = Date.now() - startedAt
   const drop = Math.min(36, Math.floor(elapsed / (OFFER_MS / 36)))
   return Math.max(SEAT_FLOOR, 53 - drop)
-}
-
-/** Apple-style: sticky scene driven by continuous scroll progress (0 → 1). */
-function useScrollFilm(count) {
-  const rootRef = useRef(null)
-  const [progress, setProgress] = useState(0)
-
-  useEffect(() => {
-    const root = rootRef.current
-    if (!root || count < 1) return undefined
-    let frame = 0
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
-
-    const tick = () => {
-      frame = 0
-      const rect = root.getBoundingClientRect()
-      const total = Math.max(1, root.offsetHeight - window.innerHeight)
-      const raw = Math.min(1, Math.max(0, -rect.top / total))
-      setProgress(raw)
-    }
-
-    const onScroll = () => {
-      if (reduce) {
-        tick()
-        return
-      }
-      if (!frame) frame = requestAnimationFrame(tick)
-    }
-
-    tick()
-    window.addEventListener('scroll', onScroll, { passive: true })
-    window.addEventListener('resize', onScroll)
-    return () => {
-      window.removeEventListener('scroll', onScroll)
-      window.removeEventListener('resize', onScroll)
-      if (frame) cancelAnimationFrame(frame)
-    }
-  }, [count])
-
-  // Equal dwell per slide; last slide holds until the section fully ends
-  // so the next block does not start mid-beat.
-  const segment = progress * count
-  const float = Math.min(count - 1, segment)
-  const active = Math.min(count - 1, Math.floor(Math.min(segment, count - 1e-4)))
-  return { rootRef, progress, float, active }
-}
-
-function slideStyle(float, index, { punchy = false } = {}) {
-  const d = float - index
-  const abs = Math.abs(d)
-  if (abs > 1.05) return { opacity: 0, visibility: 'hidden', pointerEvents: 'none' }
-  const opacity = Math.max(0, 1 - abs * (punchy ? 1.35 : 1.15))
-  const y = d * (punchy ? -72 : -48)
-  const scale = punchy ? 0.88 + (1 - Math.min(1, abs)) * 0.14 : 1 - abs * 0.06
-  return {
-    opacity,
-    visibility: opacity < 0.02 ? 'hidden' : 'visible',
-    transform: `translate3d(0, ${y}px, 0) scale(${scale})`,
-    pointerEvents: abs < 0.35 ? 'auto' : 'none'
-  }
-}
-
-/** One step’s video bit — plays through once; scroll can speed it up via videoRef. */
-function HowToClip({ active, start, end, label, onComplete, onProgress, videoRef }) {
-  const ref = useRef(null)
-  const doneRef = useRef(false)
-  const onCompleteRef = useRef(onComplete)
-  const onProgressRef = useRef(onProgress)
-
-  useEffect(() => {
-    onCompleteRef.current = onComplete
-  }, [onComplete])
-
-  useEffect(() => {
-    onProgressRef.current = onProgress
-  }, [onProgress])
-
-  useEffect(() => {
-    const video = ref.current
-    if (videoRef) videoRef.current = video
-    return () => {
-      if (videoRef && videoRef.current === video) videoRef.current = null
-    }
-  }, [videoRef])
-
-  useEffect(() => {
-    const video = ref.current
-    if (!video) return undefined
-
-    let cancelled = false
-    doneRef.current = false
-    const span = Math.max(0.05, end - start)
-    onProgressRef.current?.(0)
-
-    const seekStart = () => {
-      try {
-        video.currentTime = start
-      } catch {
-        /* ignore seek before ready */
-      }
-    }
-
-    const kick = async () => {
-      if (cancelled || !active) return
-      video.muted = true
-      video.defaultMuted = true
-      video.setAttribute('muted', '')
-      video.playbackRate = 1
-      seekStart()
-      try {
-        await video.play()
-      } catch {
-        /* muted autoplay */
-      }
-    }
-
-    if (!active) {
-      video.pause()
-      return undefined
-    }
-
-    if (video.readyState >= 1) kick()
-    else video.addEventListener('loadedmetadata', kick, { once: true })
-    video.addEventListener('canplay', kick, { once: true })
-
-    const finish = () => {
-      if (cancelled || doneRef.current) return
-      doneRef.current = true
-      try {
-        video.currentTime = Math.max(start, end - 0.05)
-      } catch {
-        /* ignore */
-      }
-      video.pause()
-      video.playbackRate = 1
-      onProgressRef.current?.(1)
-      onCompleteRef.current?.()
-    }
-
-    const onTime = () => {
-      if (cancelled || !active || doneRef.current) return
-      const p = Math.min(1, Math.max(0, (video.currentTime - start) / span))
-      onProgressRef.current?.(p)
-      if (video.currentTime >= end - 0.08) finish()
-    }
-    video.addEventListener('timeupdate', onTime)
-
-    return () => {
-      cancelled = true
-      video.removeEventListener('timeupdate', onTime)
-      video.removeEventListener('loadedmetadata', kick)
-      video.removeEventListener('canplay', kick)
-      video.pause()
-      video.playbackRate = 1
-    }
-  }, [active, start, end])
-
-  return (
-    <div className="m2-howto-clip">
-      <video
-        ref={ref}
-        src={DEMO_HOWTO_VIDEO_STREAM}
-        muted
-        autoPlay={active}
-        playsInline
-        preload="auto"
-        controls={false}
-        aria-label={label || 'QuoteGen process'}
-      />
-    </div>
-  )
 }
 
 function IndustryField({ value, onChange, id = 'meta2-industry' }) {
@@ -276,341 +167,372 @@ function IndustryField({ value, onChange, id = 'meta2-industry' }) {
   )
 }
 
-/** Full-viewport message film — whole-screen scroll beats, no word pops. */
-function MessageFilm() {
-  const { rootRef, float, active, progress } = useScrollFilm(MESSAGE_SLIDES.length)
-
+function TrustTicker() {
+  const loop = [...TRUST_TICKER_LINES, ...TRUST_TICKER_LINES]
   return (
-    <section className="m2-film m2-film-light" ref={rootRef} aria-label="Why QuoteGen" style={{ '--m2-film-p': progress }}>
-      <div className="m2-film-sticky">
-        <div className="m2-film-orb" aria-hidden="true" />
-        <div className="m2-film-spark" aria-hidden="true" />
-        <div className="m2-film-stage">
-          {MESSAGE_SLIDES.map((slide, i) => {
-            const live = active === i
-            return (
-              <div
-                key={slide.id}
-                className={`m2-msg${live ? ' is-on' : ''}`}
-                style={slideStyle(float, i)}
-                aria-hidden={!live}
-              >
-                {slide.lines.map((line) => (
-                  <span key={`${slide.id}-${line.t}`} className={`m2-msg-line is-${line.c}`}>
-                    {line.t}
-                  </span>
-                ))}
-              </div>
-            )
-          })}
-        </div>
-        <div className="m2-film-rail" aria-hidden="true">
-          <span style={{ transform: `scaleX(${Math.max(0.08, progress)})` }} />
-        </div>
+    <div className="m2-ticker" aria-label="Social proof highlights">
+      <div className="m2-ticker-track">
+        {loop.map((line, i) => (
+          <span key={`${line}-${i}`} className="m2-ticker-item">
+            {line}
+            <em aria-hidden="true">·</em>
+          </span>
+        ))}
       </div>
-      <div className="m2-film-track" aria-hidden="true" style={{ height: `${MESSAGE_SLIDES.length * 100}vh` }} />
+    </div>
+  )
+}
+
+function ProofStats() {
+  return (
+    <section className="m2-proof-strip" aria-label="Proof before you pay">
+      <div className="m2-shell m2-proof-strip-inner">
+        <header className="m2-proof-strip-head">
+          <p className="m2-eyebrow">Proof before you pay</p>
+          <h2>Built for teams who quote every day</h2>
+        </header>
+        <div className="m2-proof-stats" aria-label="Illustrative stats">
+          {PROOF_STATS.map((s) => (
+            <div key={s.label} className="m2-proof-stat">
+              <strong>{s.value}</strong>
+              <span>{s.label}</span>
+            </div>
+          ))}
+        </div>
+        <p className="m2-proof-note">Illustrative until launch — sample, not audited metrics.</p>
+      </div>
     </section>
   )
 }
 
-const DemoFilm = forwardRef(function DemoFilm({ entryForm }, ref) {
-  const demos = [
-    {
-      id: 'copy',
-      kicker: '01',
-      title: 'Copy paste the enquiry',
-      sub: 'WhatsApp. Email. Notes. Messy is fine.'
-    },
-    {
-      id: 'assemble',
-      kicker: '02',
-      title: 'Watch it assemble',
-      sub: 'Line items. Amounts. Ready in seconds.'
-    },
-    {
-      id: 'layouts',
-      kicker: '03',
-      title: 'Choose the layout',
-      sub: 'Professional templates. Your brand. Send.'
-    }
-  ]
+/** Kinetic typography — short scroll, high impact, no sticky trap. */
+function ImpactType() {
+  const rootRef = useRef(null)
+  const [visible, setVisible] = useState({})
 
-  const CLOSE_STEP = demos.length
-  const count = demos.length + 1
-  const clips = DEMO_HOWTO_PROCESS_CLIPS
-  const { rootRef, active } = useScrollFilm(count)
-  const videoRef = useRef(null)
-  const [stepDone, setStepDone] = useState(false)
-  const [clipProgress, setClipProgress] = useState(0)
-  /** Text/video only advance when a clip finishes — never mid-scroll ghost. */
-  const [shownStep, setShownStep] = useState(0)
-  const activeRef = useRef(active)
-  const stepDoneRef = useRef(stepDone)
-  const shownRef = useRef(0)
-  const isClose = shownStep >= CLOSE_STEP
-
-  useEffect(() => {
-    activeRef.current = active
-    // Scrolling back: follow. Scrolling forward: wait for video end.
-    if (active < shownRef.current) {
-      shownRef.current = active
-      setShownStep(active)
-      const closing = active >= CLOSE_STEP
-      setStepDone(closing)
-      stepDoneRef.current = closing
-      setClipProgress(closing ? 1 : 0)
-    }
-  }, [active])
-
-  useEffect(() => {
-    stepDoneRef.current = stepDone
-  }, [stepDone])
-
-  // Scroll speeds up the clip; do not skip to the next step until it finishes.
   useEffect(() => {
     const root = rootRef.current
     if (!root) return undefined
-    let decay = 0
+    const nodes = root.querySelectorAll('[data-impact-beat]')
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
-
-    const engaged = () => {
-      const rect = root.getBoundingClientRect()
-      return rect.top <= 8 && rect.bottom > window.innerHeight * 0.45
+    if (reduce) {
+      const all = {}
+      IMPACT_BEATS.forEach((b) => { all[b.id] = true })
+      setVisible(all)
+      return undefined
     }
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return
+          const id = entry.target.getAttribute('data-impact-beat')
+          if (!id) return
+          setVisible((prev) => (prev[id] ? prev : { ...prev, [id]: true }))
+        })
+      },
+      { threshold: 0.35, rootMargin: '0px 0px -8% 0px' }
+    )
+    nodes.forEach((n) => io.observe(n))
+    return () => io.disconnect()
+  }, [])
 
-    const maxScrollForStep = (stepIndex, allowAdvance) => {
-      const total = Math.max(1, root.offsetHeight - window.innerHeight)
-      // Hold scroll inside the current beat until the clip finishes — no mid-step float bleed.
-      const frac = allowAdvance ? (stepIndex + 1 - 0.001) / count : (stepIndex + 0.08) / count
-      return root.offsetTop + frac * total
-    }
-
-    const boostVideo = (delta) => {
-      const video = videoRef.current
-      if (!video || stepDoneRef.current || shownRef.current >= CLOSE_STEP) return
-      const boost = reduce ? 1 : Math.min(4, 1.35 + Math.abs(delta) / 70)
-      video.playbackRate = boost
-      if (video.paused) video.play().catch(() => {})
-      window.clearTimeout(decay)
-      decay = window.setTimeout(() => {
-        if (videoRef.current) videoRef.current.playbackRate = 1
-      }, 200)
-    }
-
-    const onWheel = (e) => {
-      if (!engaged()) return
-      if (e.deltaY <= 0) return
-      if (stepDoneRef.current || shownRef.current >= CLOSE_STEP) return
-      e.preventDefault()
-      boostVideo(e.deltaY)
-    }
-
-    let touchY = null
-    const onTouchStart = (e) => {
-      touchY = e.touches?.[0]?.clientY ?? null
-    }
-    const onTouchMove = (e) => {
-      if (!engaged() || touchY == null) return
-      if (stepDoneRef.current || shownRef.current >= CLOSE_STEP) return
-      const y = e.touches?.[0]?.clientY
-      if (y == null) return
-      const dy = touchY - y
-      if (dy > 6) {
-        e.preventDefault()
-        boostVideo(dy)
-        touchY = y
-      }
-    }
-
-    const onScroll = () => {
-      if (!engaged()) return
-      if (shownRef.current >= CLOSE_STEP) return
-      const cap = maxScrollForStep(shownRef.current, stepDoneRef.current)
-      if (window.scrollY > cap + 1) {
-        window.scrollTo(0, cap)
-      }
-    }
-
-    window.addEventListener('wheel', onWheel, { passive: false })
-    window.addEventListener('touchstart', onTouchStart, { passive: true })
-    window.addEventListener('touchmove', onTouchMove, { passive: false })
-    window.addEventListener('scroll', onScroll, { passive: true })
-    return () => {
-      window.clearTimeout(decay)
-      window.removeEventListener('wheel', onWheel)
-      window.removeEventListener('touchstart', onTouchStart)
-      window.removeEventListener('touchmove', onTouchMove)
-      window.removeEventListener('scroll', onScroll)
-    }
-  }, [rootRef, count])
-
-  const goToStep = (index) => {
+  useEffect(() => {
     const root = rootRef.current
-    if (!root) return
-    const next = Math.max(0, Math.min(CLOSE_STEP, index))
-    if (next === shownRef.current) return
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
-    const total = Math.max(1, root.offsetHeight - window.innerHeight)
-    const toClose = next >= CLOSE_STEP
-    const target = toClose
-      ? root.offsetTop + ((CLOSE_STEP + 0.2) / count) * total
-      : root.offsetTop + ((next + 0.12) / count) * total
-
-    stepDoneRef.current = true
-    setStepDone(true)
-    setClipProgress(1)
-    shownRef.current = next
-    setShownStep(next)
-
-    window.setTimeout(() => {
-      window.scrollTo({ top: target, behavior: reduce ? 'auto' : 'smooth' })
-      if (toClose) {
-        stepDoneRef.current = true
-        setStepDone(true)
-        setClipProgress(1)
-        return
-      }
-      window.setTimeout(() => {
-        setClipProgress(0)
-        setStepDone(false)
-        stepDoneRef.current = false
-      }, reduce ? 60 : 480)
-    }, 40)
-  }
-
-  const onClipComplete = () => goToStep(shownRef.current + 1)
-
-  const goToStepRef = useRef(goToStep)
-  goToStepRef.current = goToStep
-  useImperativeHandle(ref, () => ({
-    goToClose: () => goToStepRef.current(CLOSE_STEP)
-  }), [])
-
-  const hardStepStyle = (live) => ({
-    opacity: live ? 1 : 0,
-    visibility: live ? 'visible' : 'hidden',
-    pointerEvents: live ? 'auto' : 'none',
-    transform: live ? 'translate3d(0,0,0)' : 'translate3d(0,10px,0)'
-  })
+    if (!root) return undefined
+    let frame = 0
+    const onScroll = () => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        const rect = root.getBoundingClientRect()
+        const view = window.innerHeight || 1
+        const p = Math.min(1, Math.max(0, (view - rect.top) / (view + rect.height)))
+        root.style.setProperty('--m2-impact-p', String(p))
+      })
+    }
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onScroll)
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onScroll)
+      if (frame) cancelAnimationFrame(frame)
+    }
+  }, [])
 
   return (
-    <section className="m2-demo" ref={rootRef} aria-label="How QuoteGen works">
-      <div className={`m2-demo-sticky${isClose ? ' is-finale' : ''}`}>
-        {isClose ? (
-          <div className="m2-demo-finale m2-shell">
-            <div className="m2-demo-finale-copy">
-              <p className="m2-demo-close m2-demo-close-xl">
-                <span>Just verify your pricing and send to clients.</span>
-                <strong>Leave the rest on QuoteGen.</strong>
-              </p>
-              <p className="m2-demo-finale-meta">
-                <s>₹{LIST_PRICE.toLocaleString('en-IN')}/month</s>
-                <span>Limited-time entry · Free cancellation</span>
-              </p>
-            </div>
-            <div className="m2-demo-finale-form" id="entry-form">
-              {entryForm}
-            </div>
-          </div>
-        ) : (
-          <div className="m2-shell m2-demo-grid">
-            <div className="m2-demo-copy">
-              <p className="m2-eyebrow">How it works</p>
-              <div className="m2-demo-stepper" aria-label="Steps">
-                {demos.map((d, i) => (
-                  <div
-                    key={d.id}
-                    className={`m2-demo-stepper-item${i === shownStep ? ' is-on' : ''}${i < shownStep ? ' is-done' : ''}`}
-                  >
-                    <span className="m2-demo-stepper-dot" aria-hidden="true" />
-                    <span className="m2-demo-stepper-label">Step {i + 1}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="m2-demo-body">
-                {demos.map((d, i) => (
-                  <div
-                    key={d.id}
-                    className={`m2-demo-text${i === shownStep ? ' is-on' : ''}`}
-                    style={hardStepStyle(i === shownStep)}
-                    aria-hidden={i !== shownStep}
-                  >
-                    <h2>{d.title}</h2>
-                    <p className="m2-demo-sub">{d.sub}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="m2-demo-stage m2-demo-stage-phone" aria-live="polite">
-              {demos.map((d, i) => {
-                const clip = clips[i] || clips[0]
-                const live = shownStep === i
-                return (
-                  <div
-                    key={d.id}
-                    className={`m2-stage m2-stage-phone${live ? ' is-on' : ''}`}
-                    style={hardStepStyle(live)}
-                    aria-hidden={!live}
-                  >
-                    {live ? (
-                      <HowToClip
-                        key={`${d.id}-${clip.start}-${clip.end}`}
-                        active
-                        start={clip.start}
-                        end={clip.end}
-                        label={d.title}
-                        videoRef={videoRef}
-                        onProgress={setClipProgress}
-                        onComplete={onClipComplete}
-                      />
-                    ) : null}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        )}
-        <div className="m2-demo-skip">
-          <button
-            type="button"
-            className="m2-demo-skip-btn"
-            aria-label="Previous step"
-            disabled={shownStep <= 0}
-            onClick={() => goToStep(shownStep - 1)}
+    <section className="m2-impact" ref={rootRef} aria-label="Why QuoteGen">
+      <div className="m2-impact-orb" aria-hidden="true" />
+      <div className="m2-shell m2-impact-stack">
+        {IMPACT_BEATS.map((beat, i) => (
+          <p
+            key={beat.id}
+            data-impact-beat={beat.id}
+            className={`m2-impact-beat is-${i + 1}${visible[beat.id] ? ' is-in' : ''}`}
           >
-            <span aria-hidden="true">↑</span>
-          </button>
-          <button
-            type="button"
-            className="m2-demo-skip-btn"
-            aria-label={isClose ? 'Already on closing step' : 'Next step'}
-            disabled={shownStep >= CLOSE_STEP}
-            onClick={() => goToStep(shownStep + 1)}
-          >
-            <span aria-hidden="true">↓</span>
-          </button>
-        </div>
-        {!isClose ? (
-          <div className="m2-demo-steps" aria-hidden="true">
-            {demos.map((d, i) => {
-              const fill = i < shownStep ? 1 : i === shownStep ? (stepDone ? 1 : clipProgress) : 0
-              return (
-                <span key={d.id} className={`m2-demo-step${i === shownStep ? ' is-live' : ''}${fill >= 1 ? ' is-done' : ''}`}>
-                  <i style={{ transform: `scaleX(${Math.max(0.02, fill)})` }} />
-                </span>
-              )
-            })}
-          </div>
-        ) : null}
+            {beat.soft ? <span className="m2-impact-soft">{beat.soft}</span> : null}
+            <strong className={beat.brand ? 'm2-impact-brand' : 'm2-impact-hard'}>{beat.hard}</strong>
+            {beat.softAfter ? <span className="m2-impact-soft">{beat.softAfter}</span> : null}
+          </p>
+        ))}
       </div>
-      <div className="m2-demo-track" aria-hidden="true" style={{ height: `${count * 100}vh` }} />
     </section>
   )
-})
+}
+
+function GuidedTutorial() {
+  const videoRef = useRef(null)
+  const [stepIndex, setStepIndex] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const step = TUTORIAL_STEPS[stepIndex] || TUTORIAL_STEPS[0]
+  const stepIndexRef = useRef(0)
+  const playStepRef = useRef(() => {})
+  const advanceTimerRef = useRef(0)
+
+  const clearAdvance = () => {
+    window.clearTimeout(advanceTimerRef.current)
+    advanceTimerRef.current = 0
+  }
+
+  const pauseVideo = () => {
+    clearAdvance()
+    const video = videoRef.current
+    if (!video) return
+    video.pause()
+    setPlaying(false)
+  }
+
+  const playStep = (index, { resume = false } = {}) => {
+    const next = TUTORIAL_STEPS[index]
+    if (!next) return
+    clearAdvance()
+    stepIndexRef.current = index
+    setStepIndex(index)
+    const video = videoRef.current
+    if (!video) return
+    const start = () => {
+      const t = video.currentTime
+      const canResume = resume && t > next.start + 0.05 && t < next.end - 0.12
+      if (!canResume) {
+        try { video.currentTime = next.start } catch { /* ignore */ }
+      }
+      video.play().then(() => setPlaying(true)).catch(() => setPlaying(false))
+    }
+    if (video.readyState >= 1) start()
+    else {
+      const onMeta = () => {
+        video.removeEventListener('loadedmetadata', onMeta)
+        start()
+      }
+      video.addEventListener('loadedmetadata', onMeta)
+      video.load()
+    }
+  }
+  playStepRef.current = playStep
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return undefined
+    const onTime = () => {
+      const cur = TUTORIAL_STEPS[stepIndexRef.current]
+      if (!cur || video.paused) return
+      if (video.currentTime >= cur.end - 0.08) {
+        video.pause()
+        try { video.currentTime = cur.end } catch { /* ignore */ }
+        setPlaying(false)
+        const next = stepIndexRef.current + 1
+        if (next < TUTORIAL_STEPS.length) {
+          clearAdvance()
+          advanceTimerRef.current = window.setTimeout(() => playStepRef.current(next), 420)
+        }
+      }
+    }
+    const onPlay = () => setPlaying(true)
+    const onPause = () => setPlaying(false)
+    video.addEventListener('timeupdate', onTime)
+    video.addEventListener('play', onPlay)
+    video.addEventListener('pause', onPause)
+    return () => {
+      clearAdvance()
+      video.removeEventListener('timeupdate', onTime)
+      video.removeEventListener('play', onPlay)
+      video.removeEventListener('pause', onPause)
+    }
+  }, [])
+
+  return (
+    <section className="m2-howto" aria-label="How QuoteGen works">
+      <div className="m2-shell m2-howto-inner">
+        <p className="m2-eyebrow">How it works</p>
+        <div className="m2-tutorial">
+          <header className="m2-tutorial-head">
+            <h2>Simple guide — how to use QuoteGen</h2>
+            <p className="m2-proof-lead m2-proof-lead-sm">
+              Demo users ke liye seedha walkthrough: paste karo, check karo, bhej do. Har step pe thoda coaching.
+            </p>
+          </header>
+
+          <div className="m2-tutorial-layout">
+            <div className="m2-tutorial-player">
+              <video
+                ref={videoRef}
+                className="m2-tutorial-video"
+                src={DEMO_HOWTO_VIDEO_STREAM}
+                playsInline
+                preload="metadata"
+                controls={false}
+                aria-label={step.title}
+              />
+              {playing ? (
+                <button
+                  type="button"
+                  className="m2-tutorial-pause"
+                  onClick={pauseVideo}
+                  aria-label="Pause video"
+                >
+                  <span aria-hidden="true">❚❚</span>
+                  Pause
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="m2-tutorial-play"
+                  onClick={() => playStep(stepIndex, { resume: true })}
+                  aria-label="Play this step"
+                >
+                  <span aria-hidden="true">▶</span>
+                  Watch this step
+                </button>
+              )}
+              <p className="m2-tutorial-caption" aria-live="polite">
+                <strong>{step.title}</strong>
+                <span>{step.coach}</span>
+              </p>
+            </div>
+
+            <ol className="m2-tutorial-steps">
+              {TUTORIAL_STEPS.map((s, i) => (
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    className={`m2-tutorial-step${i === stepIndex ? ' is-on' : ''}`}
+                    onClick={() => playStep(i)}
+                    aria-current={i === stepIndex ? 'step' : undefined}
+                  >
+                    <em>{String(i + 1).padStart(2, '0')}</em>
+                    <span>
+                      <strong>{s.title.replace(/^Step \d+ · /, '')}</strong>
+                      <small>{s.tip}</small>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ReviewsSection() {
+  return (
+    <section className="m2-reviews" aria-label="Early user reviews">
+      <div className="m2-shell m2-reviews-inner">
+        <h3>What early users say</h3>
+        <p className="m2-proof-note m2-proof-note-inline">Sample — real stories coming soon</p>
+        <div className="m2-proof-review-grid">
+          {PROOF_REVIEWS.map((r) => (
+            <blockquote key={r.role} className="m2-proof-review">
+              <p>“{r.quote}”</p>
+              <footer>
+                <strong>{r.name}</strong>
+                <span>{r.role}</span>
+              </footer>
+            </blockquote>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function PayAsYouGoSection({ onStart }) {
+  return (
+    <section className="m2-paygo" aria-label="Pay as you go">
+      <div className="m2-shell m2-paygo-inner">
+        <header className="m2-paygo-head">
+          <p className="m2-paygo-eyebrow">No fixed subscription</p>
+          <h2>Recharge as you quote</h2>
+          <p>
+            Start with {ENTRY_QUOTES} quotations. When you need more, top up for the volume you use —
+            this week, this month, or whenever enquiry traffic picks up.
+          </p>
+        </header>
+        <div className="m2-paygo-grid">
+          <article className="m2-paygo-start">
+            <span>Entry</span>
+            <strong>₹{ENTRY_PRICE}</strong>
+            <em>{ENTRY_QUOTES} quotations to start</em>
+            <button type="button" className="meta-btn meta-btn-primary" style={CTA_STYLE} onClick={onStart}>
+              Pay ₹{ENTRY_PRICE} &amp; start
+            </button>
+          </article>
+          <div className="m2-paygo-packs" aria-label="Recharge packs">
+            {RECHARGE_PACKS.map((pack) => (
+              <div key={pack.quotes} className="m2-paygo-pack">
+                <strong>+{pack.quotes}</strong>
+                <span>quotations</span>
+                <b>₹{pack.price.toLocaleString('en-IN')}</b>
+                <em>{pack.note}</em>
+              </div>
+            ))}
+          </div>
+        </div>
+        <ul className="m2-paygo-points">
+          <li>No monthly plan to cancel</li>
+          <li>Top up only when you need quotes</li>
+          <li>Quiet weeks cost you nothing extra</li>
+        </ul>
+      </div>
+    </section>
+  )
+}
+
+function FinaleSection({ entryForm, seats, offerLive, offerLeft }) {
+  return (
+    <section className="m2-finale-section" aria-label="Start QuoteGen">
+      <div className="m2-demo-finale m2-shell">
+        <div className="m2-demo-finale-copy">
+          <p className="m2-demo-close m2-demo-close-xl">
+            <span>Just verify your pricing and send to clients.</span>
+            <strong>Leave the rest on QuoteGen.</strong>
+          </p>
+          <p className="m2-finale-meta">
+            <strong>₹{ENTRY_PRICE}</strong>
+            <span>· {ENTRY_QUOTES} quotes to start</span>
+            <span aria-hidden="true">·</span>
+            <span>then recharge as you go</span>
+            <span aria-hidden="true">·</span>
+            <span>{seats} seats left</span>
+            {offerLive ? (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>Ends in {formatCountdown(offerLeft)}</span>
+              </>
+            ) : null}
+          </p>
+        </div>
+        <div className="m2-demo-finale-form" id="entry-form">
+          {entryForm}
+        </div>
+      </div>
+    </section>
+  )
+}
 
 export default function MetaAdsLanding2({ onSignIn }) {
   const formRef = useRef(null)
-  const demoRef = useRef(null)
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
@@ -654,10 +576,10 @@ export default function MetaAdsLanding2({ onSignIn }) {
       currency: 'INR',
       content_name: 'QuoteGen landing2 entry'
     })
-    demoRef.current?.goToClose?.()
-    window.setTimeout(() => {
-      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }, 420)
+    const el = document.getElementById('entry-form')
+    if (!el) return
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+    el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' })
   }
 
   const pay = async (e) => {
@@ -764,52 +686,74 @@ export default function MetaAdsLanding2({ onSignIn }) {
       <section className="m2-hero">
         <div className="m2-hero-bg" aria-hidden="true" />
         <div className="m2-shell m2-hero-inner">
-          <p className="m2-kicker">QuoteGen</p>
+          <p className="m2-hero-brand">Quote<span className="m2-gen">Gen</span></p>
+          <p className="m2-hero-badge">214+ businesses already quoting faster</p>
           <h1>
-            The future of
+            Turn any WhatsApp enquiry into a
             <br />
-            <span>smart quotation making</span>
+            <span>Professional Quotation</span>
+            {' '}in 2 minutes
           </h1>
           <p className="m2-hero-lead">
-            Not another tool you learn. A faster way to quote —
-            <br />
-            so every enquiry becomes a professional PDF you can send today.
+            Paste the enquiry. Verify the numbers. Send a clean PDF —
+            while the buyer is still waiting.
           </p>
-          <div className="m2-hero-actions">
-            <button type="button" className="meta-btn meta-btn-primary meta-btn-lg m2-hero-cta" onClick={openForm}>
-              Try QuoteGen now @ ₹{ENTRY_PRICE}/-
+
+          <div className="m2-hero-offer">
+            <div className="m2-hero-offer-price">
+              <strong>₹{ENTRY_PRICE}</strong>
+              <em>{ENTRY_QUOTES} quotations to start · then recharge as you go</em>
+            </div>
+            <button
+              type="button"
+              className="meta-btn meta-btn-primary meta-btn-lg m2-hero-cta"
+              onClick={openForm}
+              style={CTA_STYLE}
+            >
+              Pay ₹{ENTRY_PRICE} &amp; start QuoteGen
             </button>
-            <p className="m2-hero-price">
-              <s>₹{LIST_PRICE.toLocaleString('en-IN')}/-</s>
-              <span>Limited-time entry</span>
+            <ol className="m2-hero-steps" aria-label="What happens next">
+              <li><b>1</b><span>Enter details</span></li>
+              <li><b>2</b><span>Pay on PhonePe</span></li>
+              <li><b>3</b><span>You’re in</span></li>
+            </ol>
+            <p className="m2-hero-fine" aria-live="polite">
+              No monthly lock-in
+              <span aria-hidden="true"> · </span>
+              <b>{seats}</b> seats left
+              {offerLive ? (
+                <>
+                  <span aria-hidden="true"> · </span>
+                  Ends in <b>{formatCountdown(offerLeft)}</b>
+                </>
+              ) : null}
             </p>
-          </div>
-          <div className="m2-seats" aria-live="polite">
-            <strong className="m2-seats-count">{seats}</strong>
-            <span>seats left</span>
-            {offerLive ? (
-              <em className="m2-seats-timer">
-                Ends in <b>{formatCountdown(offerLeft)}</b>
-              </em>
-            ) : null}
           </div>
         </div>
       </section>
 
-      <MessageFilm />
-      <DemoFilm
-        ref={demoRef}
+      <TrustTicker />
+      <ProofStats />
+      <ImpactType />
+      <GuidedTutorial />
+      <PayAsYouGoSection onStart={openForm} />
+      <ReviewsSection />
+      <FinaleSection
+        seats={seats}
+        offerLive={offerLive}
+        offerLeft={offerLeft}
         entryForm={(
           <form className="meta-form-card meta2-form m2-finale-form-card" ref={formRef} onSubmit={pay}>
             <header className="m2-finale-form-head">
-              <h2>Start QuoteGen</h2>
+              <h2>Start Quote<span className="m2-gen">Gen</span></h2>
               <p className="meta-form-lead">
-                Enter details → pay <strong>₹{ENTRY_PRICE}/-</strong> → you’re in.
+                <strong className="m2-price-pop">₹{ENTRY_PRICE}</strong>
+                {' '}unlocks {ENTRY_QUOTES} quotations. Recharge later — no subscription.
               </p>
             </header>
 
             <div className="meta-fields m2-finale-fields">
-              <div className="meta-field">
+              <div className="meta-field m2-field-span">
                 <label htmlFor="meta2-name">Your name</label>
                 <input id="meta2-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Rahul Sharma" autoComplete="name" />
               </div>
@@ -824,6 +768,7 @@ export default function MetaAdsLanding2({ onSignIn }) {
                     onChange={(e) => setPhone(indiaMobileInputValue(e.target.value))}
                     placeholder="9876543210"
                     maxLength={16}
+                    autoComplete="tel-national"
                   />
                 </div>
               </div>
@@ -831,17 +776,37 @@ export default function MetaAdsLanding2({ onSignIn }) {
                 <label htmlFor="meta2-email">Work email</label>
                 <input id="meta2-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" autoComplete="email" />
               </div>
-              <div className="meta-field">
+              <div className="meta-field m2-field-span">
                 <label htmlFor="meta2-company">Company <span>(optional)</span></label>
-                <input id="meta2-company" value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Your business name" />
+                <input id="meta2-company" value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Your business name" autoComplete="organization" />
               </div>
-              <div className="meta-field">
-                <label htmlFor="meta2-monthly">Quotes / month</label>
-                <input id="meta2-monthly" value={monthlyQuotes} onChange={(e) => setMonthlyQuotes(e.target.value)} placeholder="e.g. 40" />
-              </div>
-              <div className="meta-field">
+              <div className="meta-field m2-field-span">
                 <label htmlFor="meta2-industry">Industry</label>
                 <IndustryField value={industry} onChange={setIndustry} />
+              </div>
+              <div className="meta-field m2-field-span">
+                <label id="meta2-monthly-label">Quotes / month</label>
+                <div className="m2-chip-row" role="group" aria-labelledby="meta2-monthly-label">
+                  {QUOTE_VOLUME_OPTIONS.map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      className={`m2-chip${monthlyQuotes === option ? ' is-on' : ''}`}
+                      aria-pressed={monthlyQuotes === option}
+                      onClick={() => setMonthlyQuotes(option)}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  id="meta2-monthly"
+                  className="m2-sr-only"
+                  tabIndex={-1}
+                  aria-hidden="true"
+                  value={monthlyQuotes}
+                  onChange={(e) => setMonthlyQuotes(e.target.value)}
+                />
               </div>
             </div>
 
@@ -854,10 +819,7 @@ export default function MetaAdsLanding2({ onSignIn }) {
               >
                 <span>
                   <strong>WhatsApp quoting</strong>
-                  <em>
-                    Just forward to your QuoteGen WhatsApp number and create a professional quotation directly on WhatsApp.
-                    {' '}(+ ₹{WA_ADDON}/mo)
-                  </em>
+                  <em>Optional add-on · draft from WhatsApp (+ ₹{WA_ADDON})</em>
                 </span>
                 <b>{whatsappAddon ? 'Added' : `+ ₹${WA_ADDON}`}</b>
               </button>
@@ -882,12 +844,12 @@ export default function MetaAdsLanding2({ onSignIn }) {
             {error ? <p className="meta-form-error" role="alert">{error}</p> : null}
 
             <button type="submit" className="meta-btn meta-btn-primary meta-btn-lg m2-finale-cta" style={CTA_STYLE} disabled={busy}>
-              {busy ? 'Opening PhonePe…' : `Start QuoteGen at ₹${total}/-`}
+              {busy ? 'Opening PhonePe…' : `Pay ₹${total} & start`}
             </button>
             <p className="meta-form-fine">
-              ₹{ENTRY_PRICE} today · then ₹{LIST_PRICE.toLocaleString('en-IN')}/mo · Free cancel
+              PhonePe · Recharge anytime · No monthly plan
               {whatsappAddon ? ` · WA +₹${WA_ADDON}` : ''}
-              <br />
+              {' · '}
               <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a>
             </p>
           </form>
@@ -896,14 +858,39 @@ export default function MetaAdsLanding2({ onSignIn }) {
 
       <footer className="m2-closure">
         <div className="m2-shell m2-closure-inner">
-          <p className="m2-closure-query">Got a query? Contact us</p>
-          <a className="m2-closure-call" href="tel:+919067610118">
-            Call 9067610118
-          </a>
+          <div className="m2-closure-brand">
+            <img src={logoUrl} alt="" />
+            <div>
+              <strong>QuoteGen</strong>
+              <span>RECHARGE · QUOTE · SEND</span>
+            </div>
+          </div>
+          <p className="m2-closure-tagline">
+            Pay for quotations — not for months you don’t use.
+          </p>
+          <p className="m2-closure-query">Got a query? We’re one call away.</p>
+          <div className="m2-closure-actions">
+            <a className="m2-closure-call" href="tel:+919067610118">
+              Call 9067610118
+            </a>
+            <a
+              className="m2-closure-wa"
+              href="https://wa.me/919067610118"
+              target="_blank"
+              rel="noreferrer"
+            >
+              WhatsApp us
+            </a>
+          </div>
+          <p className="m2-closure-credit">
+            Built for Indian manufacturers, traders &amp; contractors who quote every day.
+          </p>
           <p className="m2-closure-legal">
             <a href="/privacy">Privacy</a>
             <span aria-hidden="true">·</span>
             <a href="/terms">Terms</a>
+            <span aria-hidden="true">·</span>
+            <span>© {new Date().getFullYear()} QuoteGen</span>
           </p>
         </div>
       </footer>

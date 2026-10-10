@@ -15,7 +15,7 @@ export const DEMO_HOWTO_COPY_CLIP = { start: 0, end: 11 }
  */
 export const DEMO_HOWTO_PROCESS_CLIPS = [
   { start: 0, end: 14 },
-  { start: 11, end: 22 },
+  { start: 11, end: 23.5 },
   { start: 33, end: 44 }
 ]
 
