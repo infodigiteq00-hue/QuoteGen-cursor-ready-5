@@ -2276,6 +2276,372 @@
   color: #1A73E8;
 }
 
+/* ── Mobile — must sit AFTER desktop component rules (cascade) ── */
+@media (max-width: 900px) {
+  .meta-ads-2 .m2-shell {
+    width: min(1120px, calc(100% - 40px));
+  }
+
+  .meta-ads-2 .m2-tutorial-layout,
+  .meta-ads-2 .m2-proof-review-grid,
+  .meta-ads-2 .m2-demo-finale,
+  .meta-ads-2 .m2-paygo-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .meta-ads-2 .m2-proof-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 16px;
+  }
+
+  .meta-ads-2 .m2-paygo-packs {
+    grid-template-columns: 1fr;
+  }
+
+  .meta-ads-2 .m2-finale-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .meta-ads-2 .m2-tutorial-play {
+    top: 28%;
+  }
+}
+
+@media (max-width: 640px) {
+  .meta-ads-2 .m2-shell {
+    width: min(1120px, calc(100% - 32px));
+  }
+
+  .meta-ads-2 .m2-header .meta-header-inner {
+    width: min(1180px, calc(100% - 24px));
+  }
+
+  .meta-ads-2 .m2-hero {
+    min-height: 0;
+    padding: 40px 0 48px;
+    align-items: start;
+  }
+
+  .meta-ads-2 .m2-hero-brand {
+    font-size: 22px;
+    margin-bottom: 10px;
+  }
+
+  .meta-ads-2 .m2-hero-badge {
+    font-size: 12px;
+    padding: 6px 10px;
+    margin-bottom: 14px;
+  }
+
+  .meta-ads-2 .m2-hero h1 {
+    font-size: clamp(28px, 8.2vw, 36px);
+    line-height: 1.12;
+    letter-spacing: -0.035em;
+  }
+
+  .meta-ads-2 .m2-hero-lead {
+    font-size: 15px;
+    line-height: 1.5;
+    margin-top: 12px;
+  }
+
+  .meta-ads-2 .m2-hero-offer {
+    width: 100%;
+    margin-top: 22px;
+    padding: 16px 14px 14px;
+    border-radius: 18px;
+    gap: 12px;
+  }
+
+  .meta-ads-2 .m2-hero-offer-price strong {
+    font-size: clamp(40px, 12vw, 52px);
+  }
+
+  .meta-ads-2 .m2-hero-offer-price em {
+    font-size: 12.5px;
+    line-height: 1.4;
+    max-width: 28ch;
+  }
+
+  .meta-ads-2 .m2-hero-cta {
+    min-height: 50px;
+    font-size: 15.5px !important;
+    padding: 14px 14px !important;
+  }
+
+  .meta-ads-2 .m2-hero-steps {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .meta-ads-2 .m2-hero-steps li {
+    grid-template-columns: 22px 1fr;
+    justify-items: start;
+    text-align: left;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .meta-ads-2 .m2-hero-fine {
+    font-size: 12px;
+  }
+
+  .meta-ads-2 .m2-proof-strip {
+    padding: 40px 0 36px;
+  }
+
+  .meta-ads-2 .m2-proof-strip-head h2 {
+    font-size: clamp(22px, 6vw, 28px);
+  }
+
+  .meta-ads-2 .m2-proof-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px 14px;
+  }
+
+  .meta-ads-2 .m2-proof-stat strong {
+    font-size: clamp(24px, 7vw, 30px);
+  }
+
+  .meta-ads-2 .m2-proof-stat span {
+    font-size: 12.5px;
+  }
+
+  .meta-ads-2 .m2-impact {
+    padding: 48px 0 56px;
+  }
+
+  .meta-ads-2 .m2-impact-stack {
+    gap: clamp(32px, 8vw, 48px);
+  }
+
+  .meta-ads-2 .m2-impact-hard {
+    font-size: clamp(28px, 8.5vw, 40px);
+  }
+
+  .meta-ads-2 .m2-impact-brand {
+    font-size: clamp(40px, 11vw, 56px);
+  }
+
+  .meta-ads-2 .m2-impact-soft {
+    font-size: clamp(18px, 4.5vw, 24px);
+  }
+
+  .meta-ads-2 .m2-howto {
+    padding: 48px 0 40px;
+  }
+
+  .meta-ads-2 .m2-tutorial-head h2 {
+    font-size: clamp(24px, 6.5vw, 32px);
+  }
+
+  .meta-ads-2 .m2-tutorial-layout {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .meta-ads-2 .m2-tutorial-player {
+    border-radius: 18px;
+  }
+
+  .meta-ads-2 .m2-tutorial-video {
+    aspect-ratio: 16 / 11;
+  }
+
+  .meta-ads-2 .m2-tutorial-play {
+    top: 22%;
+    min-height: 42px;
+    padding: 0 14px;
+    font-size: 13.5px;
+  }
+
+  .meta-ads-2 .m2-tutorial-caption {
+    padding: 14px 14px 16px;
+  }
+
+  .meta-ads-2 .m2-tutorial-caption strong {
+    font-size: 14.5px;
+  }
+
+  .meta-ads-2 .m2-tutorial-caption span {
+    font-size: 13.5px;
+  }
+
+  .meta-ads-2 .m2-tutorial-steps {
+    gap: 8px;
+  }
+
+  .meta-ads-2 .m2-tutorial-step {
+    grid-template-columns: 36px 1fr;
+    padding: 12px;
+  }
+
+  .meta-ads-2 .m2-paygo {
+    padding: 48px 0 28px;
+  }
+
+  .meta-ads-2 .m2-paygo-head h2 {
+    font-size: clamp(26px, 7vw, 34px);
+  }
+
+  .meta-ads-2 .m2-paygo-head p {
+    font-size: 14.5px;
+  }
+
+  .meta-ads-2 .m2-paygo-grid,
+  .meta-ads-2 .m2-paygo-packs {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .meta-ads-2 .m2-paygo-start {
+    padding: 18px 16px;
+  }
+
+  .meta-ads-2 .m2-paygo-start strong {
+    font-size: 40px;
+  }
+
+  .meta-ads-2 .m2-paygo-pack {
+    grid-template-columns: auto 1fr auto;
+    grid-template-rows: auto auto;
+    column-gap: 10px;
+    align-items: baseline;
+    padding: 14px 14px;
+  }
+
+  .meta-ads-2 .m2-paygo-pack strong {
+    font-size: 22px;
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .meta-ads-2 .m2-paygo-pack > span {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: end;
+    padding-bottom: 2px;
+  }
+
+  .meta-ads-2 .m2-paygo-pack b {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    align-self: center;
+    margin-top: 0;
+    font-size: 18px;
+  }
+
+  .meta-ads-2 .m2-paygo-pack em {
+    grid-column: 1 / 3;
+    grid-row: 2;
+  }
+
+  .meta-ads-2 .m2-paygo-points {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .meta-ads-2 .m2-reviews {
+    padding: 48px 0 40px;
+  }
+
+  .meta-ads-2 .m2-reviews h3 {
+    font-size: clamp(22px, 6vw, 28px);
+  }
+
+  .meta-ads-2 .m2-proof-review-grid {
+    grid-template-columns: 1fr;
+    gap: 22px;
+    margin-top: 16px;
+  }
+
+  .meta-ads-2 .m2-proof-review p {
+    font-size: 15px;
+  }
+
+  .meta-ads-2 .m2-finale-section {
+    padding: 36px 0 48px;
+  }
+
+  .meta-ads-2 .m2-demo-finale {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .meta-ads-2 .m2-demo-close-xl {
+    max-width: none;
+  }
+
+  .meta-ads-2 .m2-demo-close span {
+    font-size: clamp(20px, 5.5vw, 26px);
+  }
+
+  .meta-ads-2 .m2-demo-close strong {
+    font-size: clamp(28px, 7.5vw, 38px);
+  }
+
+  .meta-ads-2 .m2-finale-meta {
+    font-size: 13px;
+    gap: 4px 6px;
+  }
+
+  .meta-ads-2 .m2-finale-form-card {
+    padding: 20px 16px 18px;
+    border-radius: 18px;
+  }
+
+  .meta-ads-2 .m2-finale-form-head h2 {
+    font-size: 22px;
+  }
+
+  .meta-ads-2 .m2-finale-form-card .m2-price-pop {
+    font-size: 24px;
+  }
+
+  .meta-ads-2 .m2-finale-fields {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .meta-ads-2 .m2-chip-row {
+    gap: 8px;
+  }
+
+  .meta-ads-2 .m2-chip {
+    flex: 1 1 calc(50% - 8px);
+    text-align: center;
+    min-height: 40px;
+  }
+
+  .meta-ads-2 .meta2-addon-toggle {
+    align-items: flex-start;
+  }
+
+  .meta-ads-2 .m2-finale-cta {
+    min-height: 50px;
+  }
+
+  .meta-ads-2 .m2-closure {
+    padding: 48px 0 max(40px, calc(28px + env(safe-area-inset-bottom)));
+  }
+
+  .meta-ads-2 .m2-closure-tagline {
+    font-size: clamp(20px, 5.5vw, 26px);
+  }
+
+  .meta-ads-2 .m2-closure-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .meta-ads-2 .m2-closure-call,
+  .meta-ads-2 .m2-closure-wa {
+    width: 100%;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .meta-ads-2 .m2-hero-bg,
   .meta-ads-2 .m2-clock,
